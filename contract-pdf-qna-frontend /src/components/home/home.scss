@@ -1,0 +1,49 @@
+.home_container {
+  height: 100vh;
+  width: 100vw;
+  display: flex;
+  .sidebar_container {
+    width: 20%;
+  }
+  .main_container {
+    display: flex;
+    flex-direction: column;
+    width: 80%;
+    .chat_section_wrapper {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      flex-direction: column;
+      .chat_section {
+        width: 926px;
+        max-width: 926px;
+
+        .chat_container {
+          margin-top: 48px;
+          height: calc(100vh - 244px);
+          overflow: auto;
+          &::-webkit-scrollbar {
+            display: none;
+          }
+          &.setHeight {
+            margin-top: 28px;
+          }
+        }
+      }
+      .inpufield_wrapper {
+        width: 926px;
+        height: 140px;
+        position: absolute;
+        bottom: 0;
+        background: linear-gradient(
+          to bottom,
+          rgba(255, 255, 255, 0.3) 0%,
+          rgba(255, 255, 255, 0.5) 10%,
+          rgba(255, 255, 255, 0.7) 20%,
+          rgba(255, 255, 255, 0.9) 30%,
+          rgb(255, 255, 255) 40%
+        );
+      }
+    }
+  }
+}

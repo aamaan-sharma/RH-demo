@@ -1,0 +1,91 @@
+.input-container {
+  width: 926px;
+  box-sizing: border-box;
+  display: flex;
+  position: absolute;
+  bottom: 32px;
+  height: fit-content;
+  align-items: end;
+  box-shadow: 0px 4px 12px 0px rgba(0, 0, 0, 0.0509803922);
+  border: 1px solid #e0e0e0;
+  border-radius: 32px;
+  justify-content: flex-start;
+  z-index: 10;
+  padding: 16px;
+  min-height: 52px;
+  // margin-top: 20px;
+
+  .text-input-container {
+    width: 100%;
+    display: flex;
+    textarea {
+      width: 100%;
+      margin-right: 12px;
+      border: none;
+      color: rgb(51, 51, 51);
+      height: 20px;
+      resize: none;
+      padding: 0;
+      font-size: 16px;
+      font-weight: 400;
+      line-height: 20px;
+      letter-spacing: 0em;
+      text-align: left;
+      &:focus-visible {
+        outline: none;
+      }
+      &::placeholder {
+        color: #828282;
+      }
+    }
+  }
+  .camera-button {
+    display: flex;
+    padding: 4px;
+    width: 32px;
+    height: 32px;
+    border-radius: 100px;
+    box-sizing: border-box;
+  }
+  .upload-image-input {
+    display: none;
+  }
+  .image-input-container {
+    margin-top: 8px;
+    width: fit-content;
+    position: relative;
+    .image-close-button {
+      position: absolute;
+      right: 4px;
+      top: 4px;
+      width: 24px;
+      height: 24px;
+      border: none;
+      border-radius: 24px;
+      display: flex;
+      padding: 0;
+      align-items: center;
+      justify-content: center;
+      &:hover {
+        background: #00000030;
+      }
+    }
+    img {
+      max-height: 128px;
+      max-width: 100%;
+      height: 64px;
+      /* width: 64px; */
+      min-width: 64px;
+      object-fit: cover;
+    }
+  }
+  .microphone-button {
+    display: flex;
+    width: 20px;
+    height: 20px;
+    border-radius: 100px;
+    box-sizing: border-box;
+    z-index: 1;
+    cursor: pointer;
+  }
+}

@@ -1,0 +1,52 @@
+.card_container {
+  flex: 1;
+  min-width: 250px;
+  height: 245px;
+  padding: 12px;
+  border: 1px solid #e0e0e0;
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  background-color: #FCFCFC;
+  cursor: pointer;
+  &.selected {
+    border: 1px solid #5e7bc6;
+    background-color: #edf2ff;
+  }
+  .topic {
+    font-size: 16px;
+    font-style: italic;
+    font-weight: 500;
+    line-height: 24px;
+    text-align: left;
+    color: #828282;
+  }
+  .prompt_info {
+    font-size: 16px;
+    font-weight: 500;
+    line-height: 24px;
+    text-align: left;
+    color: #333333;
+    margin-top: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    height: 100%;
+  }
+  .icon_section {
+    width: 32px;
+    height: 32px;
+    gap: 0px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 12px;
+    margin-left: auto;
+    background-color: #ffffff;
+    img {
+      height: 20px;
+      width: 20px;
+    }
+  }
+}
