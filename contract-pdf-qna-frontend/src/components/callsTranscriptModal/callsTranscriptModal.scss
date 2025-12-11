@@ -1,0 +1,135 @@
+.calls_modal_backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.calls_modal {
+  width: 720px;
+  max-height: 80vh;
+  background: #ffffff;
+  border-radius: 16px;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.08);
+}
+
+.calls_modal_header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+
+  .title {
+    font-size: 18px;
+    font-weight: 600;
+    color: #333333;
+  }
+
+  .close_button {
+    border: none;
+    background: transparent;
+    font-size: 18px;
+    cursor: pointer;
+    color: #828282;
+  }
+}
+
+.calls_modal_controls {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+
+  .search_input {
+    flex: 1;
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid #e0e0e0;
+    font-size: 14px;
+  }
+
+  .status_select {
+    width: 160px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid #e0e0e0;
+    font-size: 14px;
+    background-color: #fafbfc;
+  }
+}
+
+.calls_modal_body {
+  flex: 1;
+  overflow: auto;
+
+  .loading,
+  .empty_state {
+    text-align: center;
+    color: #828282;
+    font-size: 14px;
+    padding: 24px 0;
+  }
+
+  .transcript_grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 12px;
+  }
+
+  .transcript_card {
+    border-radius: 12px;
+    border: 1px solid #e0e0e0;
+    padding: 12px;
+    background: #f9fafb;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    cursor: pointer;
+    text-align: left;
+
+    .name {
+      font-size: 14px;
+      font-weight: 600;
+      color: #333333;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+
+      span {
+        font-size: 12px;
+        color: #4f4f4f;
+        padding: 2px 6px;
+        border-radius: 10px;
+        background: #eef1ff;
+      }
+    }
+
+    .status {
+      margin-top: 4px;
+      font-size: 11px;
+      text-transform: capitalize;
+      padding: 2px 8px;
+      border-radius: 10px;
+
+      &.active {
+        background: #e8fff3;
+        color: #219653;
+      }
+
+      &.archived {
+        background: #f2f2f2;
+        color: #828282;
+      }
+    }
+  }
+}
+

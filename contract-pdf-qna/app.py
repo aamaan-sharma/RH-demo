@@ -63,8 +63,11 @@ MONGO_URI = (
 
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-mongo_client = MongoClient(MONGO_URI, unicode_decode_error_handler='ignore')
+mongo_client = MongoClient(MONGO_URI, unicode_decode_error_handler="ignore")
 db = mongo_client["FrontDoorDB"]
+
+calls_transcripts_collection = db["calls_transcripts"]
+calls_conversations_collection = db["calls_conversations"]
 
 model_name = "text-embedding-ada-002"
 embed = OpenAIEmbeddings(model=model_name, openai_api_key=OPENAI_API_KEY)
@@ -398,6 +401,72 @@ def feedback():
         return {}
 
 
+@app.route("/calls/transcripts", methods=["GET"])
+def calls_transcripts():
+    authorization_header = request.headers.get("Authorization")
+
+    if authorization_header is None:
+        return jsonify({"message": "Token is missing"}), 401
+
+    if authorization_header:
+        token_data = token_process(authorization_header)
+
+        if token_data[1] == 401 or token_data[1] == 403:
+            return (token_data[0].get_json()), token_data[1]
+
+    q = request.args.get("q", "").strip()
+    status = request.args.get("status", "active").lower()
+    page = int(request.args.get("page", 1) or 1)
+    page_size = int(request.args.get("pageSize", 20) or 20)
+
+    query = {}
+    if status and status != "all":
+        query["status"] = status
+    if q:
+        query["name"] = {"$regex": q, "$options": "i"}
+
+    skip = (page - 1) * page_size
+
+    total = calls_transcripts_collection.count_documents(query)
+    cursor = (
+        calls_transcripts_collection.find(query)
+        .sort("created_at", -1)
+        .skip(skip)
+        .limit(page_size)
+    )
+
+    items = []
+    for doc in cursor:
+        items.append(
+            {
+                "id": str(doc["_id"]),
+                "name": doc.get("name"),
+                "stateName": doc.get("state_name"),
+                "contractType": doc.get("contract_type"),
+                "planName": doc.get("plan_name"),
+                "status": doc.get("status", "active"),
+                "createdAt": doc.get("created_at").isoformat()
+                if doc.get("created_at")
+                else None,
+                "updatedAt": doc.get("updated_at").isoformat()
+                if doc.get("updated_at")
+                else None,
+            }
+        )
+
+    return jsonify(
+        {
+            "items": items,
+            "pagination": {
+                "page": page,
+                "pageSize": page_size,
+                "total": total,
+                "totalPages": (total + page_size - 1) // page_size,
+            },
+        }
+    )
+
+
 @app.route("/start", methods=["POST"])
 def start():
     try:
@@ -718,6 +787,99 @@ def start():
         return jsonify({"error": "An error occurred while processing your request", "details": str(e)}), 500
 
 
+@app.route("/calls/start", methods=["POST"])
+def calls_start():
+    try:
+        authorization_header = request.headers.get("Authorization")
+
+        if authorization_header is None:
+            return jsonify({"message": "Token is missing"}), 401
+
+        if authorization_header:
+            token_data = token_process(authorization_header)
+
+            if token_data[1] == 401 or token_data[1] == 403:
+                return (token_data[0].get_json()), token_data[1]
+
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Request body is missing or invalid"}), 400
+
+        contract_type = data.get("contractType")
+        selected_plan = data.get("selectedPlan")
+        selected_state = data.get("selectedState")
+        entered_query = data.get("enteredQuery")
+
+        if not all([contract_type, selected_plan, selected_state, entered_query]):
+            return jsonify(
+                {
+                    "error": "Missing required fields: contractType, selectedPlan, selectedState, enteredQuery"
+                }
+            ), 400
+
+        user_email = token_data[0]["email"]
+        conversation_id = request.args.get("conversation-id")
+
+        if conversation_id is None or conversation_id == "":
+            return jsonify({"error": "Calls conversationId is required"}), 400
+
+        try:
+            calls_conversation = calls_conversations_collection.find_one(
+                {"_id": ObjectId(conversation_id), "user_email": user_email}
+            )
+        except Exception:
+            calls_conversation = None
+
+        if not calls_conversation:
+            return jsonify({"error": "Calls conversation not found"}), 404
+
+        query_time = datetime.now()
+
+        chat = {
+            "chat_id": str(uuid.uuid4()),
+            "entered_query": entered_query,
+            "response": f"You are in Calls mode. This is a placeholder response for: {entered_query}",
+            "gpt_model": "Calls",
+            "chat_timestamp": query_time,
+        }
+
+        calls_conversations_collection.update_one(
+            {"_id": ObjectId(conversation_id)},
+            {
+                "$push": {"chats": chat},
+                "$set": {
+                    "contract_type": contract_type,
+                    "selected_plan": selected_plan,
+                    "selected_state": selected_state,
+                    "updated_at": query_time,
+                },
+            },
+        )
+
+        output_json = {
+            "aiResponse": chat["response"],
+            "conversationId": str(conversation_id),
+            "chatId": chat.get("chat_id"),
+        }
+
+        return make_response(jsonify(output_json), 200)
+    except Exception as e:
+        import traceback
+
+        error_trace = traceback.format_exc()
+        print(f"Error in /calls/start endpoint: {str(e)}")
+        print(f"Traceback: {error_trace}")
+        return (
+            jsonify(
+                {
+                    "error": "An error occurred while processing your request",
+                    "details": str(e),
+                }
+            ),
+            500,
+        )
+
+
 @app.route("/history", methods=["GET"])
 def chat_history():
     with tracer.start_span('api/history'):
@@ -736,6 +898,27 @@ def chat_history():
         user_email = token_data[0]["email"]
 
         docs = read_qna(email_id=user_email, conversation_id=conversation_id)
+
+        # If not found in primary chats collection, try Calls-specific collection
+        if not docs:
+            try:
+                calls_doc = calls_conversations_collection.find_one(
+                    {"_id": ObjectId(conversation_id), "user_email": user_email}
+                )
+            except Exception:
+                calls_doc = None
+
+            if calls_doc:
+                chats = calls_doc.get("chats", [])
+                output_json = {
+                    "conversationName": calls_doc.get("conversation_name"),
+                    "contractType": calls_doc.get("contract_type"),
+                    "selectedPlan": calls_doc.get("selected_plan"),
+                    "selectedState": calls_doc.get("selected_state"),
+                    "chats": chats,
+                    "gptModel": "Calls",
+                }
+                return make_response(jsonify(output_json), 200)
 
         feedback_collection_user = f"feedbacks_{user_email}"
         feedback_collection = db[feedback_collection_user]
@@ -792,13 +975,26 @@ def sidebar_history():
         # projection means setting the key name to 1, i.e we want all ids and names from given collection
         result = qna_collection.find({}, {"_id": 1, "conversation_name": 1})
 
-        output_json = [
-                        {
-                            "conversationId": str(doc["_id"]),
-                            "conversationName": doc["conversation_name"],
-                        }
-                        for doc in result
-                    ][::-1]
+        search_infer_list = [
+            {
+                "conversationId": str(doc["_id"]),
+                "conversationName": doc["conversation_name"],
+            }
+            for doc in result
+        ]
+
+        calls_result = calls_conversations_collection.find(
+            {"user_email": user_email}, {"_id": 1, "conversation_name": 1}
+        )
+        calls_list = [
+            {
+                "conversationId": str(doc["_id"]),
+                "conversationName": doc.get("conversation_name"),
+            }
+            for doc in calls_result
+        ]
+
+        output_json = (search_infer_list + calls_list)[::-1]
 
         if output_json:
             return make_response(jsonify(output_json), 200)

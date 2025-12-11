@@ -10,7 +10,6 @@ import settingIcon from "../../assets/setting.svg";
 import analyzeLiveIcon from "../../assets/analyze_live.svg";
 import bulbIcon from "../../assets/bulb.svg";
 import loginIcon from "../../assets/login.svg";
-import { mockHistoryList } from "../../constant.js";
 import { API_BASE_URL } from "../../config";
 
 const tokenUrl = "https://oauth2.googleapis.com/token";
@@ -68,8 +67,8 @@ const SideBar = (props) => {
     redirect_uri: window.location.origin,
     access_type: "online",
     client_id:
-      "377021984310-166sdarmb3mjie71219kgeu21d1pg461.apps.googleusercontent.com",
-    client_secret: "",
+      " ",
+    client_secret: " ",
     scope:
       "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile",
   });
@@ -101,8 +100,8 @@ const SideBar = (props) => {
       const params = {
         code: urlCode,
         client_id:
-          "377021984310-166sdarmb3mjie71219kgeu21d1pg461.apps.googleusercontent.com",
-        client_secret: "",
+          " ",
+        client_secret: " ",
         redirect_uri: window.location.origin,
         grant_type: "authorization_code",
       };
@@ -163,8 +162,8 @@ const SideBar = (props) => {
   const refreshIdToken = () => {
     const params = {
       client_id:
-        "377021984310-166sdarmb3mjie71219kgeu21d1pg461.apps.googleusercontent.com",
-      client_secret: "",
+        " ",
+      client_secret: " ",
       grant_type: "refresh_token",
       refreshToken: sessionStorage.getItem("refreshToken"),
     };
