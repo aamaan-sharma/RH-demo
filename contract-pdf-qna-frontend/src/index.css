@@ -20,13 +20,3 @@
   box-sizing: border-box;
   font-family: "metropolis-medium", sans-serif;
 }
-
-body {
-  background-color: #ffffff;
-  color: #000000;
-}
-
-#root {
-  background-color: #ffffff;
-  min-height: 100vh;
-}

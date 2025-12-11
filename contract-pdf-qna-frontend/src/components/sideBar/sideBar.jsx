@@ -10,16 +10,13 @@ import settingIcon from "../../assets/setting.svg";
 import analyzeLiveIcon from "../../assets/analyze_live.svg";
 import bulbIcon from "../../assets/bulb.svg";
 import loginIcon from "../../assets/login.svg";
-import { transcripts as dummyTranscripts } from "../../data/dummyData.js";
-import { API_BASE_URL } from "../../config.js";
+import { mockHistoryList } from "../../constant.js";
+import { API_BASE_URL } from "../../config";
 
 const tokenUrl = "https://oauth2.googleapis.com/token";
 
 const SideBar = (props) => {
   const [sidebarHistory, setSidebarHistory] = useState([]);
-  const [transcriptList, setTranscriptList] = useState([]);
-  const [isTranscriptOpen, setIsTranscriptOpen] = useState(false);
-  const [selectedTranscriptId, setSelectedTranscriptId] = useState(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [userName, setUserName] = useState("");
   const [isActive, setIsActive] = useState(null);
@@ -33,45 +30,6 @@ const SideBar = (props) => {
     props.setGptModel("Search");
     navigate(path);
   };
-
-  const login = useGoogleLogin({
-    onSuccess: (codeResponse) => {
-      setIsLoggedIn(true);
-    },
-    flow: "auth-code",
-    ux_mode: "redirect",
-    redirect_uri: window.location.origin,
-    access_type: "online",
-    client_id:
-      "377021984310-166sdarmb3mjie71219kgeu21d1pg461.apps.googleusercontent.com",
-    client_secret: "",
-    scope:
-      "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile",
-  });
-
-  const logout = useCallback(() => {
-    props.setSelectedContract("Contract Type");
-    props.setSelectedPlan("Plan");
-    props.setSelectedState("State");
-    setIsLoggedIn(false);
-    props.setError("");
-    props.setUserImage("");
-    setUserName("");
-    setSidebarHistory([]);
-    sessionStorage.removeItem("payloadObject");
-    sessionStorage.removeItem("idToken");
-    sessionStorage.removeItem("refreshToken");
-    sessionStorage.removeItem("timeoutId");
-
-    googleLogout();
-    let path = `/#`;
-    navigate(path);
-  }, [navigate, props]);
-
-  useEffect(() => {
-    // Populate transcript list from dummy data for the dropdown.
-    setTranscriptList(dummyTranscripts);
-  }, []);
 
   const getSidebarHistory = (token) => {
     const apiUrl = `${API_BASE_URL}/sidebar`;
@@ -96,17 +54,105 @@ const SideBar = (props) => {
         }
       })
       .catch((error) => {
+        // Handle errors
         console.error("Error:", error);
       });
   };
 
-  useEffect(() => {
-    const storedToken = sessionStorage.getItem("idToken");
-    if (storedToken) {
+  const login = useGoogleLogin({
+    onSuccess: (codeResponse) => {
       setIsLoggedIn(true);
-      getSidebarHistory(storedToken);
+    },
+    flow: "auth-code",
+    ux_mode: "redirect",
+    redirect_uri: window.location.origin,
+    access_type: "online",
+    client_id:
+      "377021984310-166sdarmb3mjie71219kgeu21d1pg461.apps.googleusercontent.com",
+    client_secret: "",
+    scope:
+      "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile",
+  });
+
+  const logout = useCallback(() => {
+    props.setSelectedContract("Contract Type");
+    props.setSelectedPlan("Plan");
+    props.setSelectedState("State");
+    setIsLoggedIn(false);
+    props.setError("");
+    props.setUserImage("");
+    setSidebarHistory([]);
+    setUserName("");
+    sessionStorage.removeItem("payloadObject");
+    sessionStorage.removeItem("idToken");
+    sessionStorage.removeItem("refreshToken");
+    sessionStorage.removeItem("timeoutId");
+
+    googleLogout();
+    let path = `/#`;
+    navigate(path);
+  }, [navigate, props]);
+
+  useEffect(() => {
+    const queryParams = new URLSearchParams(window.location.search);
+    let urlCode = queryParams.get("code");
+
+    if (urlCode && !props.bearerToken) {
+      const params = {
+        code: urlCode,
+        client_id:
+          "377021984310-166sdarmb3mjie71219kgeu21d1pg461.apps.googleusercontent.com",
+        client_secret: "",
+        redirect_uri: window.location.origin,
+        grant_type: "authorization_code",
+      };
+
+      axios
+        .post(tokenUrl, null, {
+          params: params,
+        })
+        .then((response) => {
+          const idToken = response.data.id_token;
+          // const accessToken = response.data.access_token;
+          const refreshToken = response.data.refresh_token;
+
+          props.setBearerToken(idToken);
+          props.setRefreshToken(refreshToken);
+          sessionStorage.setItem("idToken", idToken);
+          sessionStorage.setItem("refreshToken", refreshToken);
+          const parts = idToken.split(".");
+          const decodedPayload = atob(parts[1]);
+          const payloadObject = JSON.parse(decodedPayload);
+
+          setUserName(payloadObject.name);
+
+          props.setUserImage(payloadObject.picture);
+          props.setUserEmail(payloadObject.email);
+          setIsLoggedIn(true);
+
+          getSidebarHistory(idToken);
+          sessionStorage.setItem(
+            "payloadObject",
+            JSON.stringify(payloadObject)
+          );
+        })
+        .catch((error) => {
+          console.error("Error exchanging code for tokens:", error);
+        });
     }
-  }, []);
+    var payloadObject = JSON.parse(
+      JSON.parse(JSON.stringify(sessionStorage.getItem("payloadObject")))
+    );
+    if (payloadObject && !userName) {
+      setUserName(payloadObject.name);
+      props.setUserImage(payloadObject.picture);
+      props.setUserEmail(payloadObject.email);
+      setIsLoggedIn(true);
+      getSidebarHistory(sessionStorage.getItem("idToken"));
+      props.setBearerToken(sessionStorage.getItem("idToken"));
+      props.setRefreshToken(sessionStorage.getItem("refreshToken"));
+    }
+  }, [userName]);
 
   useEffect(() => {
     if (isLoggedIn) getSidebarHistory(sessionStorage.getItem("idToken"));
@@ -173,15 +219,6 @@ const SideBar = (props) => {
     logout();
   }, []);
 
-  const onTranscriptSelect = (item) => {
-    setSelectedTranscriptId(item.id);
-    setIsTranscriptOpen(false);
-    props.setError("");
-    if (props.onTranscriptSelect) {
-      props.onTranscriptSelect(item);
-    }
-  };
-
   return (
     <div className="sidebar_wrapper">
       <div className="promo_section">Powered by Enzyme</div>
@@ -190,60 +227,24 @@ const SideBar = (props) => {
         <div className="button_name">New Chat</div>
       </div>
 
-      <div className="list_section">
-        <div className="list_scroll">
-          <div className="transcript_dropdown">
-            <div
-              className="dropdown_toggle"
-              onClick={() => setIsTranscriptOpen((prev) => !prev)}
-            >
-              <span>
-                {selectedTranscriptId
-                  ? transcriptList.find((t) => t.id === selectedTranscriptId)?.name
-                  : "Select transcript"}
-              </span>
-              <span className="chevron">{isTranscriptOpen ? "▲" : "▼"}</span>
-            </div>
-            {isTranscriptOpen && (
-              <div className="dropdown_menu">
-                {transcriptList.map((item) => (
-                  <div
-                    key={item.id}
-                    className={`dropdown_item ${
-                      selectedTranscriptId === item.id ? "active" : ""
-                    }`}
-                    onClick={() => onTranscriptSelect(item)}
-                  >
-                    <div className="item_name">{item.name}</div>
-                    <div className="item_meta">
-                      {new Date(item.updatedAt).toLocaleString()}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+      <div className="dashed_line"></div>
 
-          <div className="dashed_line"></div>
+      <div className="title">Recent</div>
 
-          <div className="title">Recent</div>
-
-          <div className="scrollable_section">
-            <div className="history_section">
-              {sidebarHistory.map((chat, index) => (
-                <HistoryButton
-                  key={index}
-                  setError={props.setError}
-                  name={chat.conversationName}
-                  conversationId={chat.conversationId}
-                  isActive={isActive}
-                  setIsActive={setIsActive}
-                  bearerToken={props.bearerToken}
-                  getSidebarHistory={getSidebarHistory}
-                />
-              ))}
-            </div>
-          </div>
+      <div className="scrollable_section">
+        <div className="history_section">
+          {sidebarHistory.map((chat, index) => (
+            <HistoryButton
+              key={index}
+              setError={props.setError}
+              name={chat.conversationName}
+              conversationId={chat.conversationId}
+              isActive={isActive}
+              setIsActive={setIsActive}
+              bearerToken={props.bearerToken}
+              getSidebarHistory={getSidebarHistory}
+            />
+          ))}
         </div>
         <div className="gredient"></div>
       </div>

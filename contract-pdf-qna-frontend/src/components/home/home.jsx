@@ -11,7 +11,6 @@ import Header from "../header/header";
 import InputField from "../inputField/inputfield";
 import SamplePrompt from "../samplePrompt/samplePrompt";
 import SideBar from "../sideBar/sideBar";
-import { qaByTranscript } from "../../data/dummyData";
 import { setHeaders } from "../utils/apiUtils";
 import { API_BASE_URL } from "../../config";
 import "./home.scss";
@@ -36,17 +35,12 @@ const Home = ({ bearerToken, setBearerToken }) => {
   const [input, setInput] = useState("");
   const [userImage, setUserImage] = useState("");
   const [isScrollable, setIsScrollable] = useState(false);
-  const [selectedTranscript, setSelectedTranscript] = useState(null);
-  const [qaResult, setQaResult] = useState(null);
-  const [isLoadingQA, setIsLoadingQA] = useState(false);
 
   axios.interceptors.request.use(setHeaders, (error) => {
     Promise.reject(error);
   });
 
   useEffect(() => {
-    // Disable backend history when transcript mode is used.
-    if (selectedTranscript) return;
     if (conversationId !== "") {
       const apiUrl = `${API_BASE_URL}/history?conversation-id=${conversationId}`;
       axios
@@ -76,7 +70,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
       setSelectedPlan("Plan");
       setGptModel("Search");
     }
-  }, [conversationId, selectedTranscript]);
+  }, [conversationId]);
 
   useEffect(() => {
     const chatContainer = chatRef.current;
@@ -266,29 +260,6 @@ const Home = ({ bearerToken, setBearerToken }) => {
     return null;
   }
 
-  const handleTranscriptSelect = (item) => {
-    setSelectedTranscript(item);
-    setQaResult(null);
-    setIsLoadingQA(true);
-    setChats([]);
-    setInput("");
-    setError("");
-
-    // Simulate network fetch using dummy data
-    setTimeout(() => {
-      const qa = qaByTranscript[item.id];
-      if (qa) {
-        setQaResult(qa);
-      } else {
-        setQaResult({
-          questions: [],
-          finalAnswer: "No data available for this transcript.",
-        });
-      }
-      setIsLoadingQA(false);
-    }, 1500); // simulate real-time feel
-  };
-
   return (
     <div className="home_container">
       <div className="sidebar_container">
@@ -306,7 +277,6 @@ const Home = ({ bearerToken, setBearerToken }) => {
           setSelectedPlan={setSelectedPlan}
           setSelectedState={setSelectedState}
           setUserImage={setUserImage}
-          onTranscriptSelect={handleTranscriptSelect}
         />
       </div>
       <div className="main_container">
@@ -327,21 +297,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
               userEmail={userEmail}
             />
 
-            {qaResult || isLoadingQA ? (
-              <div
-                className={`chat_container  ${isScrollable ? "setHeight" : ""}`}
-                ref={chatRef}
-              >
-                <ChatList
-                  chats={[]}
-                  setChats={setChats}
-                  conversationId={conversationId}
-                  qaResult={qaResult}
-                  isLoadingQA={isLoadingQA}
-                  selectedTranscript={selectedTranscript}
-                />
-              </div>
-            ) : chats.length === 0 ? (
+            {chats.length === 0 ? (
               <SamplePrompt
                 gptModel={gptModel}
                 input={input}
