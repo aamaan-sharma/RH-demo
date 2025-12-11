@@ -1,0 +1,150 @@
+.chatList_wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  width: 100%;
+  background-color: #ffffff;
+  color: #000000;
+  box-sizing: border-box;
+}
+
+.loader_card {
+  background: #ffffff;
+  border: 1px solid #e0e0e0;
+  border-radius: 12px;
+  padding: 16px;
+
+  .loader_title {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 6px;
+    color: #1f2933;
+  }
+
+  .loader_subtitle {
+    font-size: 14px;
+    color: #4f4f4f;
+  }
+
+  .ellipsis {
+    margin-left: 4px;
+  }
+}
+
+.transcript_header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 0;
+
+  .transcript_name {
+    font-size: 18px;
+    font-weight: 700;
+    color: #1f2933;
+  }
+
+  .transcript_meta {
+    font-size: 12px;
+    color: #777676;
+  }
+}
+
+.qa_list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.qa_card {
+  background: #ffffff;
+  border: 1px solid #e6e8eb;
+  border-radius: 12px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.qa_question {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: #1f2933;
+
+  .doc_icon {
+    font-size: 16px;
+  }
+}
+
+.qa_chunks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.qa_chunk {
+  padding: 10px;
+  background: #f7f9fc;
+  border: 1px solid #e6e8eb;
+  border-radius: 10px;
+  font-size: 14px;
+  color: #1f2933;
+  cursor: pointer;
+  position: relative;
+  width: calc(50% - 6px);
+
+  @media (max-width: 768px) {
+    width: 100%;
+  }
+
+  .qa_chunk_toggle {
+    margin-top: 6px;
+    font-size: 12px;
+    color: #3b82f6;
+    font-weight: 600;
+  }
+
+  &.expanded {
+    background: #eef4ff;
+    border-color: #d3e3ff;
+  }
+}
+
+.qa_answer {
+  padding: 10px;
+  background: #e9f1ff;
+  border: 1px solid #d3e3ff;
+  border-radius: 10px;
+  font-size: 15px;
+  color: #1f2933;
+  font-weight: 600;
+}
+
+.summary_card {
+  background: #ffffff;
+  border: 1px solid #e6e8eb;
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+
+  .summary_title {
+    font-size: 16px;
+    font-weight: 700;
+    border-left: 3px solid #3b82f6;
+    padding-left: 10px;
+    color: #1f2933;
+  }
+
+  .summary_body {
+    font-size: 14px;
+    color: #1f2933;
+    line-height: 1.5;
+  }
+}
+
