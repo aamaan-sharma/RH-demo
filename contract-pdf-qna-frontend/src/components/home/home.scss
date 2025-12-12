@@ -43,6 +43,22 @@
           rgba(255, 255, 255, 0.9) 30%,
           rgb(255, 255, 255) 40%
         );
+
+        .add_transcript_button {
+          margin-top: 40px;
+          width: 220px;
+          padding: 12px 18px;
+          border-radius: 24px;
+          border: none;
+          background-color: #5e7bc6;
+          color: #ffffff;
+          font-size: 16px;
+          font-weight: 500;
+          cursor: pointer;
+          display: block;
+          margin-left: auto;
+          margin-right: auto;
+        }
       }
     }
   }

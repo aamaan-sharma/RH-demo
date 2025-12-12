@@ -102,22 +102,5 @@ export const inferPrompts = [
   },
 ];
 
-export const mockHistoryList = [
-  {
-    conversationName: "What is the benifits of nutrilite liver powder",
-    conversationId: "11122222",
-  },
-  {
-    conversationName: "Give me template",
-    conversationId: "11122222",
-  },
-];
-
-export const mockChatList = [
-  {
-    entered_query:
-      "My refrigerator is leaking. I need to get it fixed. The leak has damaged the ceiling fan directly below it. I need to get the ceiling fan fixed too.",
-    response:
-      "The repair for your leaking refrigerator is covered by the plan, provided the leak is not caused by hazardous materials, misuse, known pre-existing issues, or cosmetic damage. However, the secondary damage to the ceiling fan caused by the refrigerator leak is not covered under the plan",
-  },
-];
+// NOTE: Previously contained mock history and chat data for development.
+// All dummy data has been removed so the UI only reflects real API-driven content.

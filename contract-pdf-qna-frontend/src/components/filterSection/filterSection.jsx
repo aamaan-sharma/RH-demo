@@ -24,6 +24,7 @@ const planList = {
   RE: ["ShieldEssential", "ShieldPlus", "ShieldComplete"],
   DTC: ["ShieldSilver", "ShieldGold", "ShieldPlatinum"],
 };
+const callsStatusOptions = ["Active", "Archived"];
 
 const FilterSection = ({
   error,
@@ -36,7 +37,9 @@ const FilterSection = ({
   setSelectedState,
   setGptModel,
   selectedModel,
-  userEmail,
+  isCallsMode,
+  transcriptStatusFilter,
+  onTranscriptStatusChange,
 }) => {
   const handleStateChange = (state) => {
     setSelectedState(state);
@@ -74,8 +77,6 @@ const FilterSection = ({
         <ToggleSwitch
           setGptModel={setGptModel}
           selectedModel={selectedModel}
-          userEmail={userEmail}
-          isfixed={false}
         />
       </div>
       <div className="dropdown_part">
@@ -100,6 +101,22 @@ const FilterSection = ({
           highlightInput={error?.includes("plan") ? true : false}
           onhandleClick={handlePlanChange}
         />
+        {isCallsMode && (
+          <Dropdown
+            dropdownName="Status"
+            selectedValue={
+              transcriptStatusFilter
+                ? transcriptStatusFilter.charAt(0).toUpperCase() +
+                  transcriptStatusFilter.slice(1)
+                : "Active"
+            }
+            optionsList={callsStatusOptions}
+            highlightInput={false}
+            onhandleClick={(status) =>
+              onTranscriptStatusChange(status.toLowerCase())
+            }
+          />
+        )}
       </div>
     </div>
   );
