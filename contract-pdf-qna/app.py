@@ -1063,27 +1063,30 @@ def extract_relevant_customer_questions(transcript_content: str, llm) -> List[Di
     """
     extraction_prompt = ChatPromptTemplate.from_template(
         """
-        You are an expert at analyzing customer service transcripts and extracting relevant customer questions.
+        You are an expert at analyzing customer service transcripts and extracting relevant customer questions to achieve complete customer satisfaction.
         
-        Analyze the following transcript and extract ONLY atomic questions that were asked by the CUSTOMER (not the customer service representative).
+        Take the customer's perspective: infer what the CUSTOMER needs to fully resolve their issue. If the transcript has no explicit questions (or is spoken by a technician/representative), infer and create the questions needed for resolution.
         
         Focus ONLY on questions related to:
         1. Coverage lookup (e.g., "Is X covered?", "What's covered?", "Does my plan cover Y?", "Is this covered under my contract?")
         2. Damage/repair issues (e.g., "Will you repair X?", "Is this damage covered?", "My appliance is broken", "The tank is leaking")
         3. Coverage limits and policies (e.g., "What's the limit?", "How much coverage?", "What does my plan include?")
         4. Customer problems they're facing (e.g., "My water heater is leaking", "The refrigerator stopped working", "There's damage to my floor")
+        5. Clarifying sub-questions that help resolve the customer’s problem end-to-end (e.g., specifics about item, location of damage, circumstances, causes, limits, costs, approvals) when implied by the situation.
         
         EXCLUDE:
-        - Customer service representative questions (e.g., "Can I have your name?", "What's your position?", "May I know...", "How can I help you?")
-        - Administrative questions
+        - Customer service representative administrative questions (e.g., "Can I have your name?", "What's your position?", "May I know...", "How can I help you?")
+        - Pure admin questions
         - Questions not related to coverage/repair/damage/contract/policy
         - Greetings or pleasantries
         
-        Identify questions by understanding the context and speaker intent. Customer questions typically:
+        Identify questions by understanding the context and speaker intent (customer or tech/rep describing the customer’s issue). Act as if you are the customer articulating their needs:
         - Express concerns about their property/appliances
         - Ask about coverage, repair, or policy details
         - Describe problems they're experiencing
         - Ask about what's included in their contract/plan
+        - Ask clarifiers needed to resolve their issue end-to-end
+        - If no explicit questions exist, infer and produce questions (at least one per distinct issue)
         
         Transcript:
         {transcript}
@@ -1145,14 +1148,12 @@ def extract_questions_with_agent(transcript_content: str, llm) -> List[Dict]:
     """
     # Optimized extraction prompt with 3-step process: Understand Intent → Frame Question → Extract
     extraction_prompt_template = """
-        You are an expert at analyzing customer service transcripts and extracting relevant customer questions through a structured 3-step process.
+        You are an expert at analyzing customer service transcripts. Take the customer's perspective to understand what they need, then break that need into clear questions required to fully resolve it. Use a structured 3-step process, and infer questions even when none are explicitly asked (including when described by a technician/representative).
 
         STEP 1: UNDERSTAND USER INTENT
-        First, analyze the transcript to identify what the CUSTOMER (not the representative) is trying to understand or find out. Look for:
-        - Customer concerns about their property/appliances
-        - Problems they're experiencing (leaks, breakdowns, damage)
-        - Questions about coverage, repair, or policy details
-        - Uncertainty about what's included in their contract/plan
+        - Put yourself in the customer’s shoes; aim for complete customer satisfaction.
+        - Accept signals from any speaker (customer, technician, representative) describing the customer’s issue.
+        - Include implicit clarifications needed to resolve the situation end-to-end (item, location, cause, limits, costs, approvals).
 
         Focus on customer statements that express:
         - Intent to understand coverage (e.g., "I want to know if...", "Is this covered?", "Will you repair...")
@@ -1167,15 +1168,17 @@ def extract_questions_with_agent(transcript_content: str, llm) -> List[Dict]:
 
         STEP 2: FRAME THE QUESTIONS
         For each identified customer intent, frame it as a clear, atomic question that can be answered independently. Frame questions in a way that:
-        - Captures the customer's actual concern or problem
+        - Captures the customer's actual concern or problem (in their voice)
         - Is specific and answerable from contract knowledge base
-        - Focuses on coverage, damage, repair, or policy aspects
+        - Focuses on coverage, damage, repair, policy, and any clarifiers needed to resolve the issue
+        - If no explicit questions are present, infer and create them. Ensure at least one question per described issue.
 
         Question types to frame:
         1. Coverage questions: "Is [specific item/issue] covered under my plan?"
         2. Damage/repair questions: "Will you repair [specific problem]?" or "Is [specific damage] covered?"
         3. Policy/limit questions: "What is the [specific limit/policy] for [item]?"
         4. Problem statements: Convert customer problems into questions like "Is [problem description] covered?"
+        5. Clarifying questions that help resolve the customer’s need (e.g., specifics about the item, location, cause, or limits that determine coverage)
 
         STEP 3: EXTRACT AND RETRIEVE
         Extract the framed questions with proper context and question type classification.
@@ -1201,6 +1204,12 @@ def extract_questions_with_agent(transcript_content: str, llm) -> List[Dict]:
                 "context": "Customer asked about homeowner's financial responsibility when repair is not covered",
                 "questionType": "coverage",
                 "userIntent": "Customer wants to understand their financial responsibility for uncovered repairs"
+            }},
+            {{
+                "question": "Do you cover leak detection for a backyard copper line leak?",
+                "context": "Customer/tech described backyard leak with unknown exact source and recommended leak detection",
+                "questionType": "coverage",
+                "userIntent": "Customer wants to know if leak detection for this scenario is covered"
             }}
         ]
 
@@ -2966,6 +2975,7 @@ def process_transcript():
     try:
         with tracer.start_span('api/transcripts/process') as parent0:
             start_time = time()
+            extraction_warning = None
             
             # Authorization
             with tracer.start_span('authorization', child_of=parent0):
@@ -3205,11 +3215,17 @@ def process_transcript():
                         print(f"ERROR: No questions extracted from transcript '{transcript_file_name}'")
                         print(f"ERROR: Transcript length: {len(transcript_text)} characters")
                         print(f"ERROR: First 500 chars of transcript: {transcript_text[:500]}")
-                        return jsonify({
-                            "error": "No questions could be extracted from transcript",
-                            "transcriptId": transcript_file_name.replace(".json", "").replace(".txt", ""),
-                            "details": "The transcript may not contain relevant customer questions, or the extraction process encountered an issue. Check server logs for more details."
-                        }), 400
+                        extraction_warning = (
+                            "No questions could be extracted from transcript; inferring from context."
+                        )
+                        inferred_question = {
+                            "question": f"Is this issue covered: {transcript_text[:120]}",
+                            "context": transcript_text[:400],
+                            "questionType": "coverage",
+                            "userIntent": "Customer wants to know if the described issue is covered",
+                            "questionId": "q1",
+                        }
+                        questions = [inferred_question]
             else:
                 questions = provided_questions
                 if not questions:
@@ -3341,6 +3357,8 @@ def process_transcript():
                     "totalLatency": round(total_latency, 2)
                 }
             }
+            if extraction_warning:
+                response["warning"] = extraction_warning
 
             # Build a final answer: combined summary of answers across ALL extracted questions.
             # We intentionally include every Q/A we produced (even if confidence is low),
@@ -3512,4 +3530,4 @@ def process_transcript():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8000, debug=True)
+    app.run(host="0.0.0.0", port=8001, debug=True)

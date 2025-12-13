@@ -219,6 +219,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
         const conversationIdFromApi = response?.data?.conversationId || "";
         const questions = response?.data?.questions || [];
         const apiFinalSummary = response?.data?.finalSummary || "";
+        const extractionWarning = response?.data?.warning;
         setFinalSummary(apiFinalSummary);
         setConversationStatus((response?.data?.status || "active").toLowerCase());
         setCallsGenerationStage("done");
@@ -253,7 +254,9 @@ const Home = ({ bearerToken, setBearerToken }) => {
                 {
                   entered_query: "",
                   response:
-                    "No questions could be extracted or answered for this transcript.",
+                    extractionWarning ||
+                    "No questions were extracted for this transcript.",
+                  source: "transcript_extracted",
                 },
               ];
 
