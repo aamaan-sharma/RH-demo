@@ -83,6 +83,25 @@
     gap: 8px;
   }
 
+  .history_loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 16px 0;
+    color: #828282;
+    font-size: 14px;
+
+    .spinner {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      border: 2px solid #e0e0e0;
+      border-top-color: #5e7bc6;
+      animation: sidebar_spinner 0.8s linear infinite;
+    }
+  }
+
   .gredient {
     position: absolute;
     bottom: 0;
@@ -130,5 +149,14 @@
         margin-right: 12px;
       }
     }
+  }
+}
+
+@keyframes sidebar_spinner {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
   }
 }

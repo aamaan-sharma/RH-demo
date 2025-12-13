@@ -70,6 +70,50 @@
     padding-left: 24px;
   }
 
+  .chunks_wrapper {
+    padding-left: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+
+    .chunks_title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #333333;
+    }
+
+    .chunks_list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .chunk_item {
+      border: 1px solid #e6e6e6;
+      border-radius: 10px;
+      background: #fafafa;
+      padding: 10px 12px;
+
+      .chunk_summary {
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 600;
+        color: #333333;
+      }
+
+      .chunk_content {
+        margin-top: 10px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 13px;
+        line-height: 18px;
+        color: #333333;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+          "Liberation Mono", "Courier New", monospace;
+      }
+    }
+  }
+
   .icon_wrapper {
     display: flex;
     gap: 16px;
@@ -93,4 +137,11 @@
       }
     }
   }
+}
+
+.response_wrapper.final_answer {
+  border: 1px solid #e6e6e6;
+  border-radius: 14px;
+  padding: 14px 14px 10px 14px;
+  background: #fcfcff;
 }

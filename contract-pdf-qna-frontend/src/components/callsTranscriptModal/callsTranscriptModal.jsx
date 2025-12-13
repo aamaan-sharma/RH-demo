@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import "./callsTranscriptModal.scss";
 
 const CallsTranscriptModal = ({
@@ -10,9 +10,47 @@ const CallsTranscriptModal = ({
   statusFilter,
   onStatusFilterChange,
   onSelectTranscript,
+  onToggleStatus,
   isLoading,
+  isLoadingMore,
+  hasMore,
+  onLoadMore,
 }) => {
   if (!isOpen) return null;
+
+  const bodyRef = useRef(null);
+  const loadMoreLockRef = useRef(false);
+
+  useEffect(() => {
+    // Release lock after the "load more" request finishes so scrolling can trigger again.
+    if (!isLoadingMore) {
+      loadMoreLockRef.current = false;
+    }
+  }, [isLoadingMore]);
+
+  useEffect(() => {
+    // If the modal body isn't scrollable yet (first page fits), auto-load more pages until it is.
+    // This makes the "scroll to load next 10" UX reachable without requiring a huge first page.
+    if (!hasMore || isLoading || isLoadingMore || !onLoadMore) return;
+    const el = bodyRef.current;
+    if (!el) return;
+
+    const notScrollableYet = el.scrollHeight <= el.clientHeight + 20;
+    if (notScrollableYet && !loadMoreLockRef.current) {
+      loadMoreLockRef.current = true;
+      onLoadMore();
+    }
+  }, [transcripts?.length, hasMore, isLoading, isLoadingMore, onLoadMore]);
+
+  const handleScroll = (e) => {
+    if (!hasMore || isLoading || isLoadingMore) return;
+    const el = e.currentTarget;
+    const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 40;
+    if (nearBottom && onLoadMore && !loadMoreLockRef.current) {
+      loadMoreLockRef.current = true;
+      onLoadMore();
+    }
+  };
 
   return (
     <div className="calls_modal_backdrop">
@@ -32,30 +70,53 @@ const CallsTranscriptModal = ({
             onChange={(e) => onSearchTermChange(e.target.value)}
           />
         </div>
-        <div className="calls_modal_body">
+        <div className="calls_modal_body" ref={bodyRef} onScroll={handleScroll}>
           {isLoading ? (
-            <div className="loading">Loading transcripts...</div>
+            <div className="loading">
+              <div className="spinner" aria-hidden="true" />
+              <div className="loading_text">Loading transcripts...</div>
+            </div>
           ) : transcripts.length === 0 ? (
             <div className="empty_state">No transcripts found.</div>
           ) : (
-            <div className="transcript_grid">
-              {transcripts.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className="transcript_card"
-                  onClick={() => onSelectTranscript(item)}
-                >
-                  <div className="name">{item.name}</div>
-                  <div className="meta">
-                    <span>{item.stateName}</span>
-                    <span>{item.contractType}</span>
-                    <span>{item.planName}</span>
-                  </div>
-                  <div className={`status ${item.status}`}>{item.status}</div>
-                </button>
-              ))}
-            </div>
+            <>
+              <div className="transcript_grid">
+                {transcripts.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className="transcript_card"
+                    onClick={() => onSelectTranscript(item)}
+                  >
+                    <div className="name">{item.name}</div>
+                    <div className="meta">
+                      <span>{item.stateName}</span>
+                      <span>{item.contractType}</span>
+                      <span>{item.planName}</span>
+                    </div>
+                    {item.status === "inactive" ? (
+                      <div
+                        className="status archived"
+                        title="Click to toggle status"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          onToggleStatus && onToggleStatus(item);
+                        }}
+                      >
+                        Archived
+                      </div>
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+              {isLoadingMore ? (
+                <div className="loading_more">
+                  <div className="spinner" aria-hidden="true" />
+                  <div className="loading_text">Loading more…</div>
+                </div>
+              ) : null}
+            </>
           )}
         </div>
       </div>
