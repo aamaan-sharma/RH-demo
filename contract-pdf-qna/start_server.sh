@@ -4,11 +4,23 @@
 
 cd "$(dirname "$0")"
 
+# Prefer the local venv if present (this repo vendors `venv/`).
+if [ -f "venv/bin/activate" ]; then
+  # shellcheck disable=SC1091
+  source "venv/bin/activate"
+fi
+
+# Choose python from the (possibly activated) environment.
+PYTHON_BIN="${PYTHON_BIN:-python}"
+
 # Set SSL certificate environment variables
 # CRITICAL: These must be set BEFORE Python imports fsspec/gcsfs
-export SSL_CERT_FILE=$(python3 -m certifi)
-export REQUESTS_CA_BUNDLE=$(python3 -m certifi)
-export AIOHTTP_CA_BUNDLE=$(python3 -m certifi)
+CERT_PATH="$($PYTHON_BIN -m certifi 2>/dev/null)"
+if [ -n "$CERT_PATH" ]; then
+  export SSL_CERT_FILE="$CERT_PATH"
+  export REQUESTS_CA_BUNDLE="$CERT_PATH"
+  export AIOHTTP_CA_BUNDLE="$CERT_PATH"
+fi
 
 echo "=========================================="
 echo "Starting Flask backend server..."
@@ -26,5 +38,5 @@ sleep 2
 
 # Start the server
 echo "Starting server..."
-python3 app.py
+$PYTHON_BIN app.py
 

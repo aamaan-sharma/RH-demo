@@ -12,6 +12,8 @@ const HistoryButton = ({
   setError,
   name,
   conversationId,
+  conversationMode,
+  setGptModel,
   isActive = false,
   setIsActive,
   getSidebarHistory,
@@ -22,6 +24,10 @@ const HistoryButton = ({
   const [isEditActive, setIsEditActive] = useState(false);
 
   const setChatUrl = () => {
+    // Sync the UI toggle with the backend’s conversation mode (Search/Infer/Calls)
+    if (typeof setGptModel === "function" && conversationMode) {
+      setGptModel(conversationMode);
+    }
     let path = `/conversation/${conversationId}`;
     navigate(path);
     setError("");

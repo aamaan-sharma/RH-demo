@@ -10,7 +10,8 @@
 
 .calls_modal {
   width: 720px;
-  max-height: 80vh;
+  height: 70vh;
+  max-height: 70vh;
   background: #ffffff;
   border-radius: 16px;
   padding: 20px 24px;
@@ -66,6 +67,7 @@
 .calls_modal_body {
   flex: 1;
   overflow: auto;
+  min-height: 0; // allow the body to shrink within the flex column and become scrollable
 
   .loading,
   .empty_state {
@@ -73,6 +75,40 @@
     color: #828282;
     font-size: 14px;
     padding: 24px 0;
+  }
+
+  .loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+
+    .spinner {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      border: 2px solid #e0e0e0;
+      border-top-color: #5e7bc6;
+      animation: calls_spinner 0.8s linear infinite;
+    }
+
+    .loading_text {
+      color: #828282;
+      font-size: 14px;
+    }
+  }
+
+  .loading_more {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 16px 0 6px 0;
+
+    .loading_text {
+      color: #828282;
+      font-size: 14px;
+    }
   }
 
   .transcript_grid {
@@ -132,4 +168,14 @@
     }
   }
 }
+
+@keyframes calls_spinner {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 

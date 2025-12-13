@@ -29,6 +29,61 @@
             margin-top: 28px;
           }
         }
+
+        .calls_summary {
+          margin-top: 24px;
+          padding: 16px 18px;
+          border: 1px solid #e6e6e6;
+          border-radius: 12px;
+          background: #fafafa;
+
+          .title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #333333;
+            margin-bottom: 8px;
+          }
+
+          .text {
+            font-size: 14px;
+            font-weight: 500;
+            line-height: 20px;
+            color: #333333;
+            white-space: pre-wrap;
+          }
+        }
+
+        .calls_transcript_header {
+          margin-top: 12px;
+          margin-bottom: 18px;
+          padding: 12px 14px;
+          border: 1px solid #ededed;
+          border-radius: 12px;
+          background: #fbfbfb;
+
+          .title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #333333;
+
+            .file {
+              font-weight: 600;
+              color: #5e7bc6;
+            }
+          }
+
+          .subtle_status {
+            margin-top: 6px;
+            font-size: 12px;
+            color: #7b7b7b;
+          }
+
+          .subtle_hint {
+            margin-top: 2px;
+            font-size: 11px;
+            color: #9a9a9a;
+          }
+        }
       }
       .inpufield_wrapper {
         width: 926px;
@@ -61,5 +116,150 @@
         }
       }
     }
+  }
+}
+
+.blocking_overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+
+  .blocking_card,
+  .choice_card {
+    width: 520px;
+    max-width: calc(100vw - 48px);
+    background: #ffffff;
+    border-radius: 16px;
+    padding: 18px 20px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.12);
+  }
+
+  .blocking_card {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+
+    .spinner {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      border: 2px solid #e0e0e0;
+      border-top-color: #5e7bc6;
+      animation: blocking_spinner 0.8s linear infinite;
+    }
+
+    .text {
+      color: #4f4f4f;
+      font-size: 14px;
+      font-weight: 500;
+    }
+  }
+
+  .choice_card {
+    .title {
+      font-size: 16px;
+      font-weight: 700;
+      color: #333333;
+      margin-bottom: 6px;
+    }
+
+    .subtitle {
+      font-size: 13px;
+      color: #6b6b6b;
+      margin-bottom: 14px;
+
+      .file {
+        color: #5e7bc6;
+        font-weight: 600;
+      }
+    }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+
+      button {
+        border-radius: 10px;
+        padding: 10px 12px;
+        font-size: 13px;
+        font-weight: 600;
+        border: none;
+        cursor: pointer;
+      }
+
+      .primary {
+        background: #5e7bc6;
+        color: #ffffff;
+      }
+      .secondary {
+        background: #eef1ff;
+        color: #2f3a57;
+      }
+      .ghost {
+        background: transparent;
+        color: #666666;
+        border: 1px solid #e0e0e0;
+      }
+    }
+
+    .existing_list {
+      max-height: 220px;
+      overflow: auto;
+      border: 1px solid #ededed;
+      border-radius: 12px;
+      padding: 8px;
+      margin-bottom: 14px;
+      background: #fbfbfb;
+    }
+
+    .existing_item {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      padding: 10px 10px;
+      border-radius: 10px;
+      cursor: pointer;
+
+      &:hover {
+        background: #f2f4ff;
+      }
+
+      input {
+        margin-top: 3px;
+      }
+
+      .existing_text {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+
+      .existing_name {
+        font-size: 13px;
+        font-weight: 700;
+        color: #333333;
+      }
+
+      .existing_meta {
+        font-size: 11px;
+        color: #8a8a8a;
+      }
+    }
+  }
+}
+
+@keyframes blocking_spinner {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
   }
 }

@@ -16,6 +16,7 @@ const tokenUrl = "https://oauth2.googleapis.com/token";
 
 const SideBar = (props) => {
   const [sidebarHistory, setSidebarHistory] = useState([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [userName, setUserName] = useState("");
   const [isActive, setIsActive] = useState(null);
@@ -26,35 +27,37 @@ const SideBar = (props) => {
   const setChatUrl = () => {
     props.setError("");
     let path = `/#`;
-    props.setGptModel("Search");
+    // Keep New Chat in the same mode the user is currently in.
+    props.setGptModel(props.selectedModel || "Search");
     navigate(path);
   };
 
-  const getSidebarHistory = (token) => {
+  const getSidebarHistory = (token, mode = "Search") => {
     const apiUrl = `${API_BASE_URL}/sidebar`;
     const config = {
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
+      params: {
+        mode: mode || "Search",
+      },
     };
+    setIsLoadingHistory(true);
     axios
       .get(apiUrl, config)
       .then((response) => {
-        if (
-          response.data.message !== "No data found" &&
-          response.data.message !== "Token is missing" &&
-          response.data.message !== "Token is invalid" &&
-          response.data.message !== "Token has expired"
-        ) {
-          setSidebarHistory(response.data);
-        } else if (response.data.message === "No data found") {
-          setSidebarHistory([]);
-        }
+        // Backend returns an array; keep this resilient.
+        const data = response?.data;
+        setSidebarHistory(Array.isArray(data) ? data : []);
       })
       .catch((error) => {
         // Handle errors
         console.error("Error:", error);
+        setSidebarHistory([]);
+      })
+      .finally(() => {
+        setIsLoadingHistory(false);
       });
   };
 
@@ -127,7 +130,7 @@ const SideBar = (props) => {
           props.setUserEmail(payloadObject.email);
           setIsLoggedIn(true);
 
-          getSidebarHistory(idToken);
+          getSidebarHistory(idToken, props.selectedModel || "Search");
           sessionStorage.setItem(
             "payloadObject",
             JSON.stringify(payloadObject)
@@ -145,16 +148,24 @@ const SideBar = (props) => {
       props.setUserImage(payloadObject.picture);
       props.setUserEmail(payloadObject.email);
       setIsLoggedIn(true);
-      getSidebarHistory(sessionStorage.getItem("idToken"));
+      getSidebarHistory(
+        sessionStorage.getItem("idToken"),
+        props.selectedModel || "Search"
+      );
       props.setBearerToken(sessionStorage.getItem("idToken"));
       props.setRefreshToken(sessionStorage.getItem("refreshToken"));
     }
   }, [userName]);
 
   useEffect(() => {
-    if (isLoggedIn) getSidebarHistory(sessionStorage.getItem("idToken"));
     setIsActive(location.pathname.split("/")[2]);
   }, [isLoggedIn, location.pathname]);
+
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    const mode = props.selectedModel || "Search";
+    getSidebarHistory(sessionStorage.getItem("idToken"), mode);
+  }, [isLoggedIn, props.selectedModel, props.sidebarRefreshTick]);
 
   // Refresh Id token
   const refreshIdToken = () => {
@@ -229,18 +240,29 @@ const SideBar = (props) => {
 
       <div className="scrollable_section">
         <div className="history_section">
-          {sidebarHistory.map((chat, index) => (
-            <HistoryButton
-              key={index}
-              setError={props.setError}
-              name={chat.conversationName}
-              conversationId={chat.conversationId}
-              isActive={isActive}
-              setIsActive={setIsActive}
-              bearerToken={props.bearerToken}
-              getSidebarHistory={getSidebarHistory}
-            />
-          ))}
+          {isLoadingHistory ? (
+            <div className="history_loading">
+              <div className="spinner" aria-hidden="true" />
+              <div className="text">Loading history…</div>
+            </div>
+          ) : (
+            sidebarHistory.map((chat, index) => (
+              <HistoryButton
+                key={index}
+                setError={props.setError}
+                name={chat.conversationName}
+                conversationId={chat.conversationId}
+                conversationMode={chat.conversationMode}
+                setGptModel={props.setGptModel}
+                isActive={isActive}
+                setIsActive={setIsActive}
+                bearerToken={props.bearerToken}
+                getSidebarHistory={(token) =>
+                  getSidebarHistory(token, props.selectedModel || "Search")
+                }
+              />
+            ))
+          )}
         </div>
         <div className="gredient"></div>
       </div>

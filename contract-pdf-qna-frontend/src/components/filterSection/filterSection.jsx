@@ -38,8 +38,13 @@ const FilterSection = ({
   setGptModel,
   selectedModel,
   isCallsMode,
+  // Transcript list filter (used when picking a transcript)
   transcriptStatusFilter,
   onTranscriptStatusChange,
+  // Conversation status (used when viewing an existing Calls conversation)
+  conversationStatus,
+  onConversationStatusChange,
+  isConversationActive,
 }) => {
   const handleStateChange = (state) => {
     setSelectedState(state);
@@ -101,19 +106,36 @@ const FilterSection = ({
           highlightInput={error?.includes("plan") ? true : false}
           onhandleClick={handlePlanChange}
         />
-        {isCallsMode && (
+        {isCallsMode && !isConversationActive && (
           <Dropdown
             dropdownName="Status"
             selectedValue={
-              transcriptStatusFilter
-                ? transcriptStatusFilter.charAt(0).toUpperCase() +
-                  transcriptStatusFilter.slice(1)
+              transcriptStatusFilter === "inactive"
+                ? "Archived"
                 : "Active"
             }
             optionsList={callsStatusOptions}
             highlightInput={false}
             onhandleClick={(status) =>
-              onTranscriptStatusChange(status.toLowerCase())
+              onTranscriptStatusChange(
+                status.toLowerCase() === "archived" ? "inactive" : "active"
+              )
+            }
+          />
+        )}
+
+        {isCallsMode && isConversationActive && (
+          <Dropdown
+            dropdownName="Conversation"
+            selectedValue={
+              conversationStatus === "inactive" ? "Archived" : "Active"
+            }
+            optionsList={callsStatusOptions}
+            highlightInput={false}
+            onhandleClick={(status) =>
+              onConversationStatusChange(
+                status.toLowerCase() === "archived" ? "inactive" : "active"
+              )
             }
           />
         )}
