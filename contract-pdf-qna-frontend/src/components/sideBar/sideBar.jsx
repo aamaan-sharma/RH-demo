@@ -10,7 +10,7 @@ import settingIcon from "../../assets/setting.svg";
 import analyzeLiveIcon from "../../assets/analyze_live.svg";
 import bulbIcon from "../../assets/bulb.svg";
 import loginIcon from "../../assets/login.svg";
-import { API_BASE_URL } from "../../config";
+import { API_BASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET } from "../../config";
 
 const tokenUrl = "https://oauth2.googleapis.com/token";
 
@@ -69,9 +69,8 @@ const SideBar = (props) => {
     ux_mode: "redirect",
     redirect_uri: window.location.origin,
     access_type: "online",
-    client_id:
-      " ",
-    client_secret: " ",
+    client_id: GOOGLE_CLIENT_ID,
+    client_secret: GOOGLE_CLIENT_SECRET,
     scope:
       "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile",
   });
@@ -102,9 +101,8 @@ const SideBar = (props) => {
     if (urlCode && !props.bearerToken) {
       const params = {
         code: urlCode,
-        client_id:
-          " ",
-        client_secret: " ",
+        client_id: GOOGLE_CLIENT_ID,
+        client_secret: GOOGLE_CLIENT_SECRET,
         redirect_uri: window.location.origin,
         grant_type: "authorization_code",
       };
@@ -172,9 +170,8 @@ const SideBar = (props) => {
   // Refresh Id token
   const refreshIdToken = () => {
     const params = {
-      client_id:
-        " ",
-      client_secret: " ",
+      client_id: GOOGLE_CLIENT_ID,
+      client_secret: GOOGLE_CLIENT_SECRET,
       grant_type: "refresh_token",
       refreshToken: sessionStorage.getItem("refreshToken"),
     };
