@@ -13,6 +13,8 @@ const InputField = ({
   handleInputEnter,
   onMicrophoneClick,
   handleEnter,
+  disabled = false,
+  placeholder,
 }) => {
   const cursorPositionRef = useRef(null);
 
@@ -36,7 +38,7 @@ const InputField = ({
     cursorPositionRef.current = cursorPosition;
   };
   return (
-    <div className="input-container">
+    <div className={`input-container ${disabled ? "disabled" : ""}`}>
       <div className="text-input-container">
         <textarea
           ref={textareaRef}
@@ -47,13 +49,15 @@ const InputField = ({
           }}
           rows={1}
           placeholder={
-            listening ? "Listening..." : "Looking for something specific?"
+            placeholder ||
+            (listening ? "Listening..." : "Looking for something specific?")
           }
-          onKeyDown={handleEnter}
+          onKeyDown={disabled ? undefined : handleEnter}
+          disabled={disabled}
         />
       </div>
       <div className={`microphone-button ${listening ? "activate" : ""}`}>
-        {description.length && !listening ? (
+        {disabled ? null : description.length && !listening ? (
           <img
             src={SendIcon}
             className="record-ellipse"
@@ -61,12 +65,14 @@ const InputField = ({
             onClick={handleInputEnter}
           />
         ) : (
+          disabled ? null : (
           <img
             src={listening ? recordIcon : MicrophoneIcon}
             className="record-ellipse"
             alt="Ellipse Icon"
             onClick={onMicrophoneClick}
           />
+          )
         )}
       </div>
     </div>

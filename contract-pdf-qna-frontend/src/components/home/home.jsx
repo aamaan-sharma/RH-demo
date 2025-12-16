@@ -16,6 +16,8 @@ import { API_BASE_URL, TRANSCRIPTS_API_BASE_URL } from "../../config";
 import "./home.scss";
 import ChatList from "../chatList/chatList";
 import CallsTranscriptModal from "../callsTranscriptModal/callsTranscriptModal";
+import CaseReviewApprovePopup from "../caseReviewApprovePopup/caseReviewApprovePopup";
+import { formatTranscriptDisplayName } from "../utils/transcriptName";
 
 const TRANSCRIPTS_PAGE_SIZE = 9;
 
@@ -49,10 +51,14 @@ const Home = ({ bearerToken, setBearerToken }) => {
   const [transcriptsOffset, setTranscriptsOffset] = useState(0);
   const [transcriptsHasMore, setTranscriptsHasMore] = useState(true);
   const [finalSummary, setFinalSummary] = useState("");
+  const [authorizedFinalAnswer, setAuthorizedFinalAnswer] = useState("");
+  const [authorizedApprovedAt, setAuthorizedApprovedAt] = useState(null);
   const [conversationStatus, setConversationStatus] = useState("active");
   const [callsTranscriptName, setCallsTranscriptName] = useState("");
   const [callsGenerationStage, setCallsGenerationStage] = useState("idle"); // idle | generating | done
   const [callsProgressText, setCallsProgressText] = useState("");
+  const [callsActiveStep, setCallsActiveStep] = useState("extract"); // extract | answer | final
+  const [callsGeneratedAt, setCallsGeneratedAt] = useState(null); // ISO string
   const [callsTotalQuestions, setCallsTotalQuestions] = useState(0);
   const [callsAnsweredCount, setCallsAnsweredCount] = useState(0);
   const [callsClaimDecision, setCallsClaimDecision] = useState(null);
@@ -60,9 +66,24 @@ const Home = ({ bearerToken, setBearerToken }) => {
   const [isCheckingExistingTranscriptConversation, setIsCheckingExistingTranscriptConversation] =
     useState(false);
   const [existingTranscriptConversations, setExistingTranscriptConversations] = useState([]);
-  const [isTranscriptChoiceOpen, setIsTranscriptChoiceOpen] = useState(false);
-  const [pendingTranscript, setPendingTranscript] = useState(null);
-  const [selectedExistingConversationId, setSelectedExistingConversationId] = useState("");
+  const [loggedInUserName, setLoggedInUserName] = useState("");
+  const [isReviewApproveOpen, setIsReviewApproveOpen] = useState(false);
+  const [isApprovingCase, setIsApprovingCase] = useState(false);
+  const [justApproved, setJustApproved] = useState(false);
+  const [recentlyClosedConversationId, setRecentlyClosedConversationId] = useState("");
+
+  useEffect(() => {
+    // Pull display name from the Google login payload stored by SideBar.
+    try {
+      const raw = sessionStorage.getItem("payloadObject");
+      if (!raw) return;
+      const obj = JSON.parse(raw);
+      const name = obj?.name || "";
+      if (name) setLoggedInUserName(name);
+    } catch (e) {
+      // ignore
+    }
+  }, []);
 
   const hasFinalAnswerChat = chats?.some(
     (c) => c?.entered_query === "Final Answer for transcript"
@@ -73,12 +94,28 @@ const Home = ({ bearerToken, setBearerToken }) => {
   });
 
   const handleSetGptModel = (model) => {
-    // Keep Calls mode in sync with selected model
-    if (model === "Calls") {
-      setIsCallsMode(true);
-    } else {
-      setIsCallsMode(false);
+    // If leaving Claims (Calls) while a case is open, reset to "new chat" UI for the selected mode.
+    // This ensures switching to Search/Infer doesn't keep showing the Claims case conversation.
+    const isLeavingCalls = isCallsMode && model !== "Calls";
+    if (isLeavingCalls) {
+      setIsTranscriptModalOpen(false);
+      setIsCheckingExistingTranscriptConversation(false);
+      setCallsGenerationStage("idle");
+      setCallsProgressText("");
+      setCallsTranscriptName("");
+      setCallsClaimDecision(null);
+      setFinalSummary("");
+      setAuthorizedFinalAnswer("");
+      setAuthorizedApprovedAt(null);
+      setConversationStatus("active");
+      setChats([]);
+      setInput("");
+      // Exit the conversation route so `conversationId` becomes empty.
+      navigate("/#");
     }
+
+    // Keep Calls/Claims mode in sync with selected model
+    setIsCallsMode(model === "Calls");
     setGptModelState(model);
   };
 
@@ -215,6 +252,8 @@ const Home = ({ bearerToken, setBearerToken }) => {
     // Show a transcript header + generation stage while processing
     setCallsTranscriptName(transcript.name || transcript.id);
     setCallsGenerationStage("generating");
+    setCallsActiveStep("extract");
+    setCallsGeneratedAt(null);
     setCallsProgressText("Starting transcript processing…");
     setCallsTotalQuestions(0);
     setCallsAnsweredCount(0);
@@ -226,6 +265,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
     setTimeout(() => setSidebarRefreshTick((t) => t + 1), 600);
 
     const runNonStreamingFallback = () => {
+      setCallsActiveStep("answer");
       setCallsProgressText("Generating answers…");
       axios
         .post(`${TRANSCRIPTS_API_BASE_URL}/transcripts/process`, requestBody)
@@ -236,9 +276,13 @@ const Home = ({ bearerToken, setBearerToken }) => {
           const extractionWarning = response?.data?.warning;
           setFinalSummary(apiFinalSummary);
           setCallsClaimDecision(response?.data?.claimDecision || null);
-          setConversationStatus((response?.data?.status || "active").toLowerCase());
+          setAuthorizedFinalAnswer(apiFinalSummary);
+        setAuthorizedApprovedAt(null);
+        setConversationStatus((response?.data?.status || "active").toLowerCase());
           setCallsGenerationStage("done");
+          setCallsActiveStep("final");
           setCallsProgressText("");
+          setCallsGeneratedAt(new Date().toISOString());
           setCallsTranscriptName(
             response?.data?.transcriptMetadata?.fileName ||
               response?.data?.transcriptId ||
@@ -378,11 +422,13 @@ const Home = ({ bearerToken, setBearerToken }) => {
             if (eventType === "status") {
               const stage = payload?.stage;
               if (stage === "started") {
+                setCallsActiveStep("extract");
                 setCallsProgressText("Starting transcript processing…");
               }
               if (stage === "conversation_created") {
                 conversationIdFromStream = payload?.conversationId || "";
                 setConversationStatus((payload?.status || "active").toLowerCase());
+                setCallsActiveStep("extract");
                 setCallsProgressText("Preparing workspace…");
               }
               if (stage === "cached") {
@@ -390,23 +436,28 @@ const Home = ({ bearerToken, setBearerToken }) => {
                 const convId = payload?.conversationId || "";
                 if (convId) conversationIdFromStream = convId;
                 setConversationStatus((payload?.status || "active").toLowerCase());
+                setCallsActiveStep("answer");
                 setCallsProgressText("Loading cached results…");
               }
               if (stage === "transcript_loading") {
+                setCallsActiveStep("extract");
                 setCallsProgressText("Loading transcript from GCS…");
               }
               if (stage === "transcript_loaded") {
                 const fn = payload?.transcriptMetadata?.fileName;
                 if (fn) setCallsTranscriptName(fn);
+                setCallsActiveStep("extract");
                 setCallsProgressText("Transcript loaded. Analyzing…");
               }
               if (stage === "extracting_questions") {
+                setCallsActiveStep("extract");
                 setCallsProgressText("Extracting relevant customer questions…");
               }
               if (stage === "questions_ready") {
                 const total = Number(payload?.totalQuestions || 0);
                 setCallsTotalQuestions(total);
                 setCallsAnsweredCount(0);
+                setCallsActiveStep("answer");
                 if (payload?.warning) {
                   setCallsProgressText(`${payload.warning} Generating answer…`);
                 } else {
@@ -416,15 +467,18 @@ const Home = ({ bearerToken, setBearerToken }) => {
                 }
               }
               if (stage === "initializing_retriever") {
+                setCallsActiveStep("answer");
                 setCallsProgressText("Loading knowledge base (Milvus)…");
               }
               if (stage === "answering") {
+                setCallsActiveStep("answer");
                 setCallsProgressText("Generating answers…");
               }
               if (stage === "answering_question") {
                 const idx = Number(payload?.index || 0);
                 const total = Number(callsTotalQuestions || payload?.totalQuestions || 0);
                 const label = total > 0 ? `Generating answer ${idx} of ${total}…` : `Generating answer ${idx}…`;
+                setCallsActiveStep("answer");
                 setCallsProgressText(label);
               }
             } else if (eventType === "answer") {
@@ -434,23 +488,29 @@ const Home = ({ bearerToken, setBearerToken }) => {
                 const total = callsTotalQuestions || 0;
                 if (total > 0) {
                   if (next < total) {
+                    setCallsActiveStep("answer");
                     setCallsProgressText(`Received answer ${next} of ${total}. Generating next…`);
                   } else {
+                    setCallsActiveStep("final");
                     setCallsProgressText("Generating final summary…");
                   }
                 } else {
+                  setCallsActiveStep("final");
                   setCallsProgressText("Generating final summary…");
                 }
                 return next;
               });
             } else if (eventType === "final") {
               setFinalSummary(payload?.finalSummary || "");
+              setCallsActiveStep("final");
               setCallsProgressText("Final summary ready. Finishing…");
             } else if (eventType === "claimDecision") {
               setCallsClaimDecision(payload || null);
             } else if (eventType === "done") {
               setCallsGenerationStage("done");
+              setCallsActiveStep("final");
               setCallsProgressText("");
+              setCallsGeneratedAt(new Date().toISOString());
               setSidebarRefreshTick((t) => t + 1);
               if (conversationIdFromStream) {
                 navigate(`/conversation/${conversationIdFromStream}`);
@@ -474,7 +534,6 @@ const Home = ({ bearerToken, setBearerToken }) => {
     if (!transcript) return;
     // Close the picker and check Mongo for existing conversations (blocking)
     setIsTranscriptModalOpen(false);
-    setPendingTranscript(transcript);
     setIsCheckingExistingTranscriptConversation(true);
 
     axios
@@ -484,13 +543,17 @@ const Home = ({ bearerToken, setBearerToken }) => {
       .then((resp) => {
         const convs = resp?.data?.conversations || [];
         if (Array.isArray(convs) && convs.length > 0) {
-          setExistingTranscriptConversations(convs);
-          setSelectedExistingConversationId(convs?.[0]?.conversationId || "");
-          setIsTranscriptChoiceOpen(true);
-        } else {
-          // No existing -> normal flow
-          startNewCallsConversation(transcript, { newConversation: false });
+          // Requirement: always open the existing conversation if found.
+          const convId = convs?.[0]?.conversationId || "";
+          if (convId) {
+            setIsCallsMode(true);
+            setGptModelState("Calls");
+            navigate(`/conversation/${convId}`);
+            return;
+          }
         }
+        // No existing -> normal flow (create / reuse backend behavior)
+        startNewCallsConversation(transcript, { newConversation: false });
       })
       .catch((err) => {
         console.error("Error checking transcript conversations:", err);
@@ -521,7 +584,12 @@ const Home = ({ bearerToken, setBearerToken }) => {
           setSelectedPlan(response.data.selectedPlan);
           setFinalSummary(response.data.finalSummary || "");
           setCallsClaimDecision(response?.data?.claimDecision || null);
+          setAuthorizedFinalAnswer(
+            response.data.authorizedFinalAnswer || response.data.finalSummary || ""
+          );
+          setAuthorizedApprovedAt(response.data.authorizedApprovedAt || null);
           setConversationStatus((response.data.status || "active").toLowerCase());
+          setCallsGeneratedAt(response.data.updatedAt || response.data.createdAt || null);
 
           const transcriptNameFromApi =
             response?.data?.transcriptMetadata?.fileName ||
@@ -530,6 +598,10 @@ const Home = ({ bearerToken, setBearerToken }) => {
           if (transcriptNameFromApi) {
             setCallsTranscriptName(transcriptNameFromApi);
             setCallsGenerationStage("done");
+            // If backend doesn't supply timestamps, fall back to "now" so the UI can still show something.
+            if (!response.data.updatedAt && !response.data.createdAt) {
+              setCallsGeneratedAt(new Date().toISOString());
+            }
           } else {
             setCallsTranscriptName("");
             setCallsGenerationStage("idle");
@@ -550,12 +622,60 @@ const Home = ({ bearerToken, setBearerToken }) => {
       // Keep "New Chat" in the current mode (Search/Infer/Calls)
       setIsCallsMode(gptModel === "Calls");
       setFinalSummary("");
+      setAuthorizedFinalAnswer("");
+      setAuthorizedApprovedAt(null);
       setConversationStatus("active");
       setCallsTranscriptName("");
       setCallsGenerationStage("idle");
       setCallsClaimDecision(null);
+      setCallsGeneratedAt(null);
     }
   }, [conversationId]);
+
+  const extractedQuestionsForReview = (chats || [])
+    .filter((c) => {
+      const id = c?.questionId || c?.chat_id;
+      if (id === "final_answer") return false;
+      if (c?.source === "transcript_extracted") return true;
+      return typeof id === "string" && /^q\d+$/i.test(id);
+    })
+    .map((c) => {
+      const evidence = c?.relevantChunks || c?.relevant_chunks || [];
+      return {
+        id: c?.chat_id || c?.questionId,
+        question: c?.entered_query || "",
+        answer: c?.response || "",
+        evidenceCount: Array.isArray(evidence) ? evidence.length : 0,
+      };
+    });
+
+  const handleApproveCase = () => {
+    if (!conversationId) return;
+    if (!authorizedFinalAnswer?.trim()) return;
+    setIsApprovingCase(true);
+    axios
+      .patch(`${API_BASE_URL}/conversation/authorize?conversation-id=${conversationId}`, {
+        authorizedFinalAnswer: authorizedFinalAnswer,
+        status: "inactive",
+      })
+      .then((resp) => {
+        setConversationStatus("inactive");
+        setAuthorizedApprovedAt(resp?.data?.authorizedApprovedAt || new Date().toISOString());
+        setIsReviewApproveOpen(false);
+        setJustApproved(true);
+        // Signal sidebar to immediately move this case into "Closed" (optimistic UX).
+        setRecentlyClosedConversationId(conversationId);
+        setSidebarRefreshTick((t) => t + 1);
+        setTimeout(() => setJustApproved(false), 2500);
+        setTimeout(() => setRecentlyClosedConversationId(""), 3500);
+      })
+      .catch((err) => {
+        console.error("Error approving case:", err);
+      })
+      .finally(() => {
+        setIsApprovingCase(false);
+      });
+  };
 
   useEffect(() => {
     const chatContainer = chatRef.current;
@@ -573,6 +693,11 @@ const Home = ({ bearerToken, setBearerToken }) => {
     }
 
     if (input === "") return;
+
+    // Do not allow chatting on a closed case.
+    if (isCallsMode && conversationId && conversationStatus === "inactive") {
+      return;
+    }
 
     if (
       chats.length > 0 &&
@@ -818,6 +943,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
           setGptModel={handleSetGptModel}
           selectedModel={gptModel}
           sidebarRefreshTick={sidebarRefreshTick}
+          recentlyClosedConversationId={recentlyClosedConversationId}
           setSelectedContract={setSelectedContract}
           setSelectedPlan={setSelectedPlan}
           setSelectedState={setSelectedState}
@@ -841,6 +967,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
               selectedModel={gptModel}
               userEmail={userEmail}
               isCallsMode={isCallsMode}
+              isCallsGenerating={isCallsMode && callsGenerationStage === "generating"}
               transcriptStatusFilter={transcriptStatusFilter}
               onTranscriptStatusChange={handleTranscriptStatusChange}
               conversationStatus={conversationStatus}
@@ -873,35 +1000,32 @@ const Home = ({ bearerToken, setBearerToken }) => {
               !callsTranscriptName ? (
               <div className="calls_intro">
                 <div className="calls_intro_card">
-                  <div className="calls_intro_badge">Calls</div>
+                  <div className="calls_intro_badge">Claims</div>
                   <div className="calls_intro_title">
-                    Upload a transcript to get coverage-focused answers
+                    Upload a transcript to generate coverage-focused answers
                   </div>
                   <div className="calls_intro_subtitle">
-                    In Calls mode, you can pick a call transcript and we will extract the
-                    customer’s key coverage / repair questions, answer them, and include the
-                    supporting chunks used to generate each answer.
+                    Select a claim transcript to automatically extract key coverage / repair questions,
+                    generate answers, and attach the supporting evidence used for each response.
                   </div>
 
                   <div className="calls_intro_steps">
                     <div className="calls_intro_step">
                       <div className="label">1. Add transcript</div>
                       <div className="text">
-                        Choose a transcript file from the list (searchable + paginated).
+                        Choose a transcript from the searchable, paginated list.
                       </div>
                     </div>
                     <div className="calls_intro_step">
-                      <div className="label">2. We process & extract</div>
+                      <div className="label">2. Process & extract</div>
                       <div className="text">
-                        We identify atomic, relevant customer questions (coverage, damage,
-                        repair) from the call.
+                        Relevant customer questions are extracted into clear, reviewable prompts.
                       </div>
                     </div>
                     <div className="calls_intro_step">
                       <div className="label">3. Answers + referenced chunks</div>
                       <div className="text">
-                        Each answer includes the most relevant chunks so you can validate the
-                        result.
+                        Answers are generated with the most relevant policy chunks so validation is fast.
                       </div>
                     </div>
                   </div>
@@ -915,23 +1039,131 @@ const Home = ({ bearerToken, setBearerToken }) => {
                 <>
                   {isCallsMode && callsTranscriptName ? (
                     <div className="calls_transcript_header">
-                      <div className="title">
-                        You uploaded: <span className="file">{callsTranscriptName}</span>
+                      <div className="header_row">
+                        <div className="title">
+                          Case transcript:{" "}
+                          {(() => {
+                            const display = formatTranscriptDisplayName(callsTranscriptName);
+                            return (
+                              <span className="file" title={display.raw || callsTranscriptName}>
+                                {display.primary || callsTranscriptName}
+                              </span>
+                            );
+                          })()}
+                        </div>
+                        {conversationId ? (
+                          <div className="header_actions">
+                            <div
+                              className={`status_badge ${
+                                conversationStatus === "inactive" ? "closed" : "open"
+                              }`}
+                              title={
+                                conversationStatus === "inactive"
+                                  ? "Closed"
+                                  : "Open"
+                              }
+                            >
+                              {conversationStatus === "inactive" ? "Closed" : "Open"}
+                            </div>
+                            <button
+                              type="button"
+                              className="review_approve_button"
+                              onClick={() => setIsReviewApproveOpen(true)}
+                              disabled={conversationStatus === "inactive"}
+                              title={
+                                conversationStatus === "inactive"
+                                  ? "Case is closed."
+                                  : "Review the final output and proceed."
+                              }
+                            >
+                              Review &amp; Proceed
+                            </button>
+                          </div>
+                        ) : null}
                       </div>
                       {callsGenerationStage === "generating" ? (
-                        <div className="subtle_status">Generating…</div>
-                      ) : callsGenerationStage === "done" ? (
-                        <>
-                          <div className="subtle_status">Generated response</div>
-                          <div className="subtle_hint">Here are your details</div>
-                        </>
+                        <div className="calls_stepper" aria-label="Processing steps">
+                          <div className={`step ${callsActiveStep === "extract" ? "active" : ""} ${callsActiveStep !== "extract" ? "done" : ""}`}>
+                            {callsActiveStep === "extract" ? (
+                              <span className="mini_spinner" aria-hidden="true" />
+                            ) : (
+                              <span className="mini_check" aria-hidden="true">✓</span>
+                            )}
+                            Extract questions
+                          </div>
+                          <div className={`step ${callsActiveStep === "answer" ? "active" : ""} ${callsActiveStep === "final" ? "done" : ""}`}>
+                            {callsActiveStep === "answer" ? (
+                              <span className="mini_spinner" aria-hidden="true" />
+                            ) : callsActiveStep === "final" ? (
+                              <span className="mini_check" aria-hidden="true">✓</span>
+                            ) : null}
+                            Generate answers
+                          </div>
+                          <div className={`step ${callsActiveStep === "final" ? "active" : ""}`}>
+                            {callsActiveStep === "final" ? <span className="mini_spinner" aria-hidden="true" /> : null}
+                            Build final draft
+                          </div>
+                        </div>
+                      ) : (callsGenerationStage === "done" || conversationStatus === "inactive") ? (
+                        <div className="subtle_hint">
+                          {(() => {
+                            const ts = authorizedApprovedAt || callsGeneratedAt;
+                            if (!ts) return null;
+                            const label =
+                              conversationStatus === "inactive" ? "Closed" : "Generated";
+                            return (
+                              <span className="approved_at">
+                                {label}:{" "}
+                                {new Date(ts).toLocaleString(undefined, {
+                                  year: "numeric",
+                                  month: "short",
+                                  day: "2-digit",
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                })}
+                              </span>
+                            );
+                          })()}
+                        </div>
                       ) : null}
                     </div>
                   ) : null}
                   {isCallsMode && callsClaimDecision ? (
-                    <div className={`calls_decision calls_decision_${(callsClaimDecision.decision || '').toLowerCase()}`}>
+                    <div
+                      className={`calls_decision ${(() => {
+                        const raw = String(callsClaimDecision?.decision || "");
+                        const slug = raw
+                          .toLowerCase()
+                          .replace(/[^a-z0-9]+/g, "_")
+                          .replace(/^_+|_+$/g, "");
+
+                        const positive = ["approve", "approved", "accept", "accepted", "yes", "covered"];
+                        const negative = ["deny", "denied", "reject", "rejected", "no", "not_covered"];
+                        const review = [
+                          "cannot_determine",
+                          "cant_determine",
+                          "unknown",
+                          "indeterminate",
+                          "needs_review",
+                          "review",
+                          "partial",
+                          "maybe",
+                        ];
+
+                        const tone = positive.includes(slug)
+                          ? "positive"
+                          : negative.includes(slug)
+                            ? "negative"
+                            : review.includes(slug)
+                              ? "review"
+                              : "neutral";
+
+                        return `calls_decision_${slug || "unknown"} calls_decision_tone_${tone}`;
+                      })()}`}
+                    >
                       <div className="headline">
-                        Decision: <span className="value">{callsClaimDecision.decision}</span>
+                        <span className="label">Decision:</span>{" "}
+                        <span className="value">{callsClaimDecision.decision || "—"}</span>
                       </div>
                       {callsClaimDecision.shortAnswer ? (
                         <div className="short">{callsClaimDecision.shortAnswer}</div>
@@ -950,20 +1182,18 @@ const Home = ({ bearerToken, setBearerToken }) => {
                       ) : null}
                     </div>
                   ) : null}
-                  {isCallsMode && callsGenerationStage === "generating" ? (
-                    <div className="calls_progress calls_progress_sticky" aria-live="polite">
-                      <div className="spinner" aria-hidden="true" />
-                      <div className="text">
-                        {callsProgressText || "Generating…"}
-                      </div>
-                    </div>
-                  ) : null}
                   <ChatList
                     chats={chats}
                     setChats={setChats}
                     conversationId={conversationId}
                     isCallsMode={isCallsMode}
                   />
+                  {isCallsMode && callsGenerationStage === "generating" ? (
+                    <div className="calls_progress" aria-live="polite">
+                      <span className="mini_spinner" aria-hidden="true" />
+                      <div className="text">{callsProgressText || "Generating…"}</div>
+                    </div>
+                  ) : null}
                   {isCallsMode && finalSummary && !hasFinalAnswerChat ? (
                     <div className="calls_summary">
                       <div className="title">Final Summary</div>
@@ -974,7 +1204,11 @@ const Home = ({ bearerToken, setBearerToken }) => {
               </div>
             ) : null}
           </div>
-          <div className="inpufield_wrapper">
+          <div
+            className={`inpufield_wrapper ${
+              isCallsMode && conversationId && conversationStatus === "inactive" ? "disabled" : ""
+            }`}
+          >
             {isCallsMode && conversationId === "" ? (
               <button
                 type="button"
@@ -984,19 +1218,34 @@ const Home = ({ bearerToken, setBearerToken }) => {
               >
                 Add Transcript
               </button>
+            ) : isCallsMode && conversationId && conversationStatus === "inactive" ? (
+              <div className="chat_disabled_banner" role="status" aria-live="polite">
+                Chat disabled — this case is closed.
+              </div>
             ) : (
-              <InputField
-                listening={listening}
-                transcript={transcript}
-                handleInputEnter={() => {
-                  handleInputSubmit();
-                }}
-                handleEnter={handleEnter}
-                description={input}
-                setDescription={setInput}
-                textareaRef={textareaRef}
-                onMicrophoneClick={onMicrophoneClick}
-              />
+              <>
+                {isCallsMode && conversationId ? (
+                  null
+                ) : null}
+                <InputField
+                  listening={listening}
+                  transcript={transcript}
+                  handleInputEnter={() => {
+                    handleInputSubmit();
+                  }}
+                  handleEnter={handleEnter}
+                  description={input}
+                  setDescription={setInput}
+                  textareaRef={textareaRef}
+                  onMicrophoneClick={onMicrophoneClick}
+                  disabled={isCallsMode && conversationId && conversationStatus === "inactive"}
+                  placeholder={
+                    isCallsMode && conversationId && conversationStatus === "inactive"
+                      ? "Case is closed. Chat is disabled."
+                      : undefined
+                  }
+                />
+              </>
             )}
           </div>
         </div>
@@ -1045,88 +1294,31 @@ const Home = ({ bearerToken, setBearerToken }) => {
           </div>
         ) : null}
 
-        {isTranscriptChoiceOpen && pendingTranscript ? (
-          <div className="blocking_overlay" role="dialog" aria-modal="true">
-            <div className="choice_card">
-              <div className="title">Conversation already exists</div>
-              <div className="subtitle">
-                We found an existing conversation for{" "}
-                <span className="file">{pendingTranscript.name || pendingTranscript.id}</span>.
-              </div>
-              <div className="existing_list">
-                {(existingTranscriptConversations || []).map((c) => {
-                  const id = c?.conversationId;
-                  const name = c?.conversationName || id;
-                  const ts = c?.updatedAt || c?.createdAt;
-                  let tsLabel = "";
-                  try {
-                    tsLabel = ts ? new Date(ts).toLocaleString() : "";
-                  } catch (e) {
-                    tsLabel = "";
-                  }
-                  return (
-                    <label className="existing_item" key={id}>
-                      <input
-                        type="radio"
-                        name="existing_conversation"
-                        checked={selectedExistingConversationId === id}
-                        onChange={() => setSelectedExistingConversationId(id)}
-                      />
-                      <div className="existing_text">
-                        <div className="existing_name">{name}</div>
-                        {tsLabel ? <div className="existing_meta">Last updated: {tsLabel}</div> : null}
-                      </div>
-                    </label>
-                  );
-                })}
-              </div>
-              <div className="actions">
-                <button
-                  type="button"
-                  className="primary"
-                  onClick={() => {
-                    setIsTranscriptChoiceOpen(false);
-                    setExistingTranscriptConversations([]);
-                    const convId = selectedExistingConversationId;
-                    setSelectedExistingConversationId("");
-                    setPendingTranscript(null);
-                    if (convId) {
-                      setIsCallsMode(true);
-                      setGptModelState("Calls");
-                      navigate(`/conversation/${convId}`);
-                    }
-                  }}
-                >
-                  Open selected
-                </button>
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => {
-                    const t = pendingTranscript;
-                    setIsTranscriptChoiceOpen(false);
-                    setExistingTranscriptConversations([]);
-                    setSelectedExistingConversationId("");
-                    setPendingTranscript(null);
-                    startNewCallsConversation(t, { newConversation: true });
-                  }}
-                >
-                  Start new conversation
-                </button>
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={() => {
-                    setIsTranscriptChoiceOpen(false);
-                    setExistingTranscriptConversations([]);
-                    setSelectedExistingConversationId("");
-                    setPendingTranscript(null);
-                  }}
-                >
-                  Exit
-                </button>
-              </div>
-            </div>
+        <CaseReviewApprovePopup
+          isOpen={isReviewApproveOpen}
+          onClose={() => setIsReviewApproveOpen(false)}
+          onApprove={handleApproveCase}
+          caseId={conversationId}
+          transcriptName={callsTranscriptName}
+          // Case ID in the popup should match exactly what comes from GCS (raw filename).
+          caseName={callsTranscriptName || conversationId}
+          metadata={{
+            state: selectedState,
+            contractType: selectedContract,
+            plan: selectedPlan,
+          }}
+          decision={callsClaimDecision}
+          aiFinalDraft={finalSummary}
+          authorizedAnswer={authorizedFinalAnswer}
+          setAuthorizedAnswer={setAuthorizedFinalAnswer}
+          isApproving={isApprovingCase}
+          isClosed={conversationStatus === "inactive"}
+          userName={loggedInUserName}
+        />
+
+        {justApproved ? (
+          <div className="case_thankyou_toast" role="status" aria-live="polite">
+            Thank you, case forwarded.
           </div>
         ) : null}
       </div>

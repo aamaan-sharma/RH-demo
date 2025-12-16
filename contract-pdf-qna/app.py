@@ -2391,15 +2391,119 @@ def chat_history():
             "selectedState": docs.get("selected_state"),
             "status": docs.get("status", "active"),
             "chats": chats,
+            "createdAt": (
+                (docs.get("created_at").isoformat() + "Z")
+                if docs.get("created_at")
+                else None
+            ),
+            "updatedAt": (
+                (docs.get("updated_at").isoformat() + "Z")
+                if docs.get("updated_at")
+                else None
+            ),
             # For transcript conversations we store a conversation-level mode (e.g. "Calls")
             # while still keeping the underlying model per chat for backend execution.
             "gptModel": docs.get("conversation_mode") or (chats[0].get("gpt_model") if chats else None),
             "finalSummary": docs.get("final_summary"),
             "claimDecision": docs.get("claim_decision"),
+            "authorizedFinalAnswer": docs.get("authorized_final_answer"),
+            "authorizedApprovedAt": (
+                (docs.get("authorized_approved_at").isoformat() + "Z")
+                if docs.get("authorized_approved_at")
+                else None
+            ),
             "transcriptId": docs.get("transcript_id"),
             "transcriptMetadata": docs.get("transcript_metadata"),
         }
         return make_response(jsonify(output_json), 200)
+
+
+@app.route("/conversation/authorize", methods=["PATCH"])
+def authorize_conversation_answer():
+    """Store an agent-authorized final answer for a conversation and (optionally) close it.
+
+    Query params:
+      - conversation-id (str)
+
+    Body:
+      - authorizedFinalAnswer (str, required)
+      - status (optional): 'inactive' | 'active' (defaults to 'inactive')
+    """
+    try:
+        with tracer.start_span("api/conversation/authorize"):
+            authorization_header = request.headers.get("Authorization")
+
+            if authorization_header is None:
+                return jsonify({"message": "Token is missing"}), 401
+
+            if authorization_header:
+                token_data = token_process(authorization_header)
+                if token_data[1] == 401 or token_data[1] == 403:
+                    return (token_data[0].get_json()), token_data[1]
+
+            conversation_id = request.args.get("conversation-id")
+            if not conversation_id:
+                return jsonify({"error": "conversation-id is required"}), 400
+
+            data = request.get_json() or {}
+            authorized_final_answer = (data.get("authorizedFinalAnswer") or "").strip()
+            if not authorized_final_answer:
+                return jsonify({"error": "authorizedFinalAnswer is required"}), 400
+
+            status = (data.get("status") or "inactive").strip().lower()
+            if status not in ("active", "inactive"):
+                return jsonify({"error": "status must be 'active' or 'inactive'"}), 400
+
+            user_email = token_data[0]["email"]
+            qna_collection_user = f"chats_{user_email}"
+            qna_collection = db[qna_collection_user]
+
+            now_ts = datetime.utcnow()
+            now_iso = now_ts.isoformat() + "Z"
+            updated = qna_collection.find_one_and_update(
+                {"_id": ObjectId(conversation_id)},
+                {
+                    "$set": {
+                        "authorized_final_answer": authorized_final_answer,
+                        "authorized_approved_at": now_ts,
+                        "status": status,
+                        "updated_at": now_ts,
+                    }
+                },
+                return_document=ReturnDocument.AFTER,
+            )
+            if not updated:
+                return jsonify({"error": "Conversation not found"}), 404
+
+            # Keep cached payload consistent for transcript conversations (if present).
+            try:
+                if updated.get("response_payload"):
+                    qna_collection.update_one(
+                        {"_id": ObjectId(conversation_id)},
+                        {
+                            "$set": {
+                                "response_payload.status": status,
+                                "response_payload.authorizedFinalAnswer": authorized_final_answer,
+                                "response_payload.authorizedApprovedAt": now_iso,
+                            }
+                        },
+                    )
+            except Exception:
+                pass
+
+            return (
+                jsonify(
+                    {
+                        "conversationId": conversation_id,
+                        "status": status,
+                        "authorizedFinalAnswer": authorized_final_answer,
+                        "authorizedApprovedAt": now_iso,
+                    }
+                ),
+                200,
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/conversation/status", methods=["PATCH"])
@@ -2487,7 +2591,15 @@ def sidebar_history():
         # Also include conversation_mode (and a lightweight fallback to chats.gpt_model for older docs).
         result = qna_collection.find(
             {"doc_type": {"$ne": "transcript_status"}},
-            {"_id": 1, "conversation_name": 1, "conversation_mode": 1, "chats.gpt_model": 1},
+            {
+                "_id": 1,
+                "conversation_name": 1,
+                "conversation_mode": 1,
+                "chats.gpt_model": 1,
+                "status": 1,
+                "updated_at": 1,
+                "transcript_id": 1,
+            },
         )
 
         output_json = []
@@ -2509,6 +2621,9 @@ def sidebar_history():
                     "conversationId": str(doc["_id"]),
                     "conversationName": doc.get("conversation_name", ""),
                     "conversationMode": conv_mode,
+                    "status": (doc.get("status") or "active"),
+                    "updatedAt": (doc.get("updated_at").isoformat() + "Z") if doc.get("updated_at") else None,
+                    "transcriptId": doc.get("transcript_id"),
                 }
             )
 

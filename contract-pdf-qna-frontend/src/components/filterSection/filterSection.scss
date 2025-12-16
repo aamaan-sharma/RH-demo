@@ -17,4 +17,56 @@
     align-items: center;
     gap: 12px;
   }
+
+  .locked_pills {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 10px;
+    border: 1px solid #ededed;
+    border-radius: 12px;
+    background: #fbfbfb;
+
+    .pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid #e6e6e6;
+      background: #ffffff;
+      color: #4f4f4f;
+      font-size: 12px;
+      line-height: 12px;
+
+      .label {
+        color: #7b7b7b;
+        font-weight: 600;
+      }
+
+      .value {
+        font-weight: 700;
+        color: #333333;
+      }
+
+      &.status {
+        border-color: #dfe6ff;
+        background: #f6f8ff;
+
+        &.open {
+          .value {
+            color: #2f3a57;
+          }
+        }
+
+        &.closed {
+          border-color: #ededed;
+          background: #fafafa;
+          .value {
+            color: #6b6b6b;
+          }
+        }
+      }
+    }
+  }
 }

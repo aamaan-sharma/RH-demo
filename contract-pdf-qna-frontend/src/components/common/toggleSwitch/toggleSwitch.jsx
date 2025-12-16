@@ -35,7 +35,7 @@ const ToggleSwitch = ({ setGptModel, selectedModel }) => {
         }`}
         onClick={() => toggleSwitch("Calls")}
       >
-        Calls
+        Claims
       </div>
     </div>
   );

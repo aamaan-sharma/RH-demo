@@ -88,4 +88,15 @@
     z-index: 1;
     cursor: pointer;
   }
+
+  &.disabled {
+    opacity: 0.7;
+    box-shadow: none;
+    background: #fafafa;
+
+    textarea {
+      background: transparent;
+      cursor: not-allowed;
+    }
+  }
 }

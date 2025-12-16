@@ -28,6 +28,24 @@
     filter: brightness(0) invert(1);
   }
 
+  .status_dot {
+    width: 10px;
+    height: 10px;
+    min-width: 10px;
+    min-height: 10px;
+    border-radius: 50%;
+    margin-right: 8px;
+    border: 2px solid #ffffff;
+    box-shadow: 0 0 0 1px #e6e6e6;
+
+    &.open {
+      background: #4cc38a;
+    }
+    &.closed {
+      background: #bdbdbd;
+    }
+  }
+
   .input_text {
     width: 100%;
     border: none;
