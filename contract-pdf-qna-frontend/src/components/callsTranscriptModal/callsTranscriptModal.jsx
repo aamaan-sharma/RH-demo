@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from "react";
 import "./callsTranscriptModal.scss";
+import { formatTranscriptDisplayName } from "../utils/transcriptName";
 
 const CallsTranscriptModal = ({
   isOpen,
@@ -81,34 +82,42 @@ const CallsTranscriptModal = ({
           ) : (
             <>
               <div className="transcript_grid">
-                {transcripts.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    className="transcript_card"
-                    onClick={() => onSelectTranscript(item)}
-                  >
-                    <div className="name">{item.name}</div>
-                    <div className="meta">
-                      <span>{item.stateName}</span>
-                      <span>{item.contractType}</span>
-                      <span>{item.planName}</span>
-                    </div>
-                    {item.status === "inactive" ? (
-                      <div
-                        className="status archived"
-                        title="Click to toggle status"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          onToggleStatus && onToggleStatus(item);
-                        }}
-                      >
-                        Archived
+                {transcripts.map((item) => {
+                  const display = formatTranscriptDisplayName(item?.name);
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className="transcript_card"
+                      onClick={() => onSelectTranscript(item)}
+                    >
+                      <div className="name" title={display.raw || item.name}>
+                        <div className="primary">{display.primary || item.name}</div>
+                        {display.secondary ? (
+                          <div className="secondary">{display.secondary}</div>
+                        ) : null}
                       </div>
-                    ) : null}
-                  </button>
-                ))}
+                      <div className="meta">
+                        <span>{item.stateName}</span>
+                        <span>{item.contractType}</span>
+                        <span>{item.planName}</span>
+                      </div>
+                      {item.status === "inactive" ? (
+                        <div
+                          className="status archived"
+                          title="Click to toggle status"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onToggleStatus && onToggleStatus(item);
+                          }}
+                        >
+                          Archived
+                        </div>
+                      ) : null}
+                    </button>
+                  );
+                })}
               </div>
               {isLoadingMore ? (
                 <div className="loading_more">

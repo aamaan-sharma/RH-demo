@@ -167,6 +167,24 @@ const SideBar = (props) => {
     getSidebarHistory(sessionStorage.getItem("idToken"), mode);
   }, [isLoggedIn, props.selectedModel, props.sidebarRefreshTick]);
 
+  // Optimistically move a case into "Closed" immediately after approval.
+  useEffect(() => {
+    const closedId = props.recentlyClosedConversationId;
+    if (!closedId) return;
+    setSidebarHistory((prev) => {
+      const arr = Array.isArray(prev) ? prev : [];
+      return arr.map((c) =>
+        String(c?.conversationId || "") === String(closedId)
+          ? {
+              ...c,
+              status: "inactive",
+              updatedAt: new Date().toISOString(),
+            }
+          : c
+      );
+    });
+  }, [props.recentlyClosedConversationId]);
+
   // Refresh Id token
   const refreshIdToken = () => {
     const params = {
@@ -231,12 +249,16 @@ const SideBar = (props) => {
       <div className="promo_section">Powered by Enzyme</div>
       <div className="new_chat_button" onClick={() => setChatUrl()}>
         <img src={plusIcon} alt="plus icon" />
-        <div className="button_name">New Chat</div>
+        <div className="button_name">
+          {(props.selectedModel || "Search") === "Calls" ? "New Case" : "New Chat"}
+        </div>
       </div>
 
       <div className="dashed_line"></div>
 
-      <div className="title">Recent</div>
+      <div className="title">
+        {(props.selectedModel || "Search") === "Calls" ? "Claims" : "Recent"}
+      </div>
 
       <div className="scrollable_section">
         <div className="history_section">
@@ -246,22 +268,86 @@ const SideBar = (props) => {
               <div className="text">Loading history…</div>
             </div>
           ) : (
-            sidebarHistory.map((chat, index) => (
-              <HistoryButton
-                key={index}
-                setError={props.setError}
-                name={chat.conversationName}
-                conversationId={chat.conversationId}
-                conversationMode={chat.conversationMode}
-                setGptModel={props.setGptModel}
-                isActive={isActive}
-                setIsActive={setIsActive}
-                bearerToken={props.bearerToken}
-                getSidebarHistory={(token) =>
-                  getSidebarHistory(token, props.selectedModel || "Search")
-                }
-              />
-            ))
+            (props.selectedModel || "Search") === "Calls" ? (
+              (() => {
+                const sortedHistory = (sidebarHistory || []).slice().sort((a, b) => {
+                  const at = Date.parse(a?.updatedAt || "") || 0;
+                  const bt = Date.parse(b?.updatedAt || "") || 0;
+                  return bt - at;
+                });
+                const openCases = sortedHistory.filter(
+                  (c) => (c?.status || "active").toLowerCase() !== "inactive"
+                );
+                const closedCases = sortedHistory.filter(
+                  (c) => (c?.status || "active").toLowerCase() === "inactive"
+                );
+                const shouldOpenClosed = Boolean(props.recentlyClosedConversationId);
+
+                const renderCaseRow = (chat, index) => (
+                  <HistoryButton
+                    key={chat?.conversationId || index}
+                    setError={props.setError}
+                    name={chat.conversationName}
+                    conversationId={chat.conversationId}
+                    conversationMode={chat.conversationMode}
+                    status={chat.status}
+                    setGptModel={props.setGptModel}
+                    isActive={isActive}
+                    setIsActive={setIsActive}
+                    bearerToken={props.bearerToken}
+                    getSidebarHistory={(token) =>
+                      getSidebarHistory(token, props.selectedModel || "Search")
+                    }
+                  />
+                );
+
+                return (
+                  <div className="cases_wrapper">
+                    <details className="case_group" open>
+                      <summary className="case_group_summary">
+                        Open <span className="count">{openCases.length}</span>
+                      </summary>
+                      <div className="case_group_list">
+                        {openCases.length > 0 ? (
+                          openCases.map(renderCaseRow)
+                        ) : (
+                          <div className="empty_state">No open cases.</div>
+                        )}
+                      </div>
+                    </details>
+                    <details className="case_group" open={shouldOpenClosed ? true : undefined}>
+                      <summary className="case_group_summary">
+                        Closed <span className="count">{closedCases.length}</span>
+                      </summary>
+                      <div className="case_group_list">
+                        {closedCases.length > 0 ? (
+                          closedCases.map(renderCaseRow)
+                        ) : (
+                          <div className="empty_state">No closed cases.</div>
+                        )}
+                      </div>
+                    </details>
+                  </div>
+                );
+              })()
+            ) : (
+              sidebarHistory.map((chat, index) => (
+                <HistoryButton
+                  key={index}
+                  setError={props.setError}
+                  name={chat.conversationName}
+                  conversationId={chat.conversationId}
+                  conversationMode={chat.conversationMode}
+                  setGptModel={props.setGptModel}
+                  isActive={isActive}
+                  setIsActive={setIsActive}
+                  bearerToken={props.bearerToken}
+                  getSidebarHistory={(token) =>
+                    getSidebarHistory(token, props.selectedModel || "Search")
+                  }
+                />
+              ))
+            )
           )}
         </div>
         <div className="gredient"></div>

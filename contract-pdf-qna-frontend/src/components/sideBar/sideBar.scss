@@ -83,6 +83,61 @@
     gap: 8px;
   }
 
+  .cases_wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .case_group {
+    border: 1px solid #ededed;
+    border-radius: 12px;
+    background: #fbfbfb;
+    padding: 8px;
+
+    .case_group_summary {
+      cursor: pointer;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 800;
+      color: #333333;
+      padding: 6px 6px;
+      border-radius: 10px;
+
+      &::-webkit-details-marker {
+        display: none;
+      }
+
+      .count {
+        padding: 4px 8px;
+        border-radius: 999px;
+        border: 1px solid #dfe6ff;
+        background: #f6f8ff;
+        color: #2f3a57;
+        font-size: 12px;
+        font-weight: 800;
+      }
+    }
+
+    .case_group_list {
+      margin-top: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .empty_state {
+      color: #828282;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 8px 8px;
+    }
+  }
+
   .history_loading {
     display: flex;
     align-items: center;

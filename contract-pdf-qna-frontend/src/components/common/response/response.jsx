@@ -1,13 +1,101 @@
-import React, { useState, useRef, useEffect } from "react";
-import documentsIcon from "../../../assets/documents.svg";
-import menuIcon from "../../../assets/menu.svg";
+import React from "react";
 import responseIcon from "../../../assets/response.svg";
-import shareIcon from "../../../assets/share.svg";
-import thumbsDownIcon from "../../../assets/thumbs_down.svg";
-import axios from "axios";
-import { API_BASE_URL } from "../../../config";
+import responseBlueIcon from "../../../assets/response_blue.svg";
 import "./response.scss";
-import Popup from "../popup/popup";
+
+const renderInlineBold = (text) => {
+  const s = String(text ?? "");
+  if (!s.includes("**")) return s;
+
+  // Split on **...** pairs and render <strong> for bold segments.
+  const parts = s.split("**");
+  const out = [];
+  for (let i = 0; i < parts.length; i++) {
+    const chunk = parts[i];
+    if (!chunk) continue;
+    if (i % 2 === 1) {
+      out.push(
+        <strong key={`b-${i}`} className="inline_bold">
+          {chunk}
+        </strong>
+      );
+    } else {
+      out.push(<React.Fragment key={`t-${i}`}>{chunk}</React.Fragment>);
+    }
+  }
+  return out;
+};
+
+const renderResponseContent = (response) => {
+  const raw = String(response ?? "");
+  if (!raw) return null;
+
+  const lines = raw.replace(/\r\n/g, "\n").split("\n");
+
+  const blocks = [];
+  let paraLines = [];
+  let listItems = [];
+
+  const flushPara = () => {
+    if (paraLines.length === 0) return;
+    const text = paraLines.join("\n").trimEnd();
+    if (text) {
+      blocks.push(
+        <div key={`p-${blocks.length}`} className="resp_paragraph">
+          {text.split("\n").map((ln, idx) => (
+            <React.Fragment key={idx}>
+              {idx > 0 ? <br /> : null}
+              {renderInlineBold(ln)}
+            </React.Fragment>
+          ))}
+        </div>
+      );
+    }
+    paraLines = [];
+  };
+
+  const flushList = () => {
+    if (listItems.length === 0) return;
+    blocks.push(
+      <ul key={`ul-${blocks.length}`} className="resp_bullets">
+        {listItems.map((li, idx) => (
+          <li key={idx}>{renderInlineBold(li)}</li>
+        ))}
+      </ul>
+    );
+    listItems = [];
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const isBullet = /^-\s+/.test(trimmed);
+
+    if (isBullet) {
+      // Switch from paragraph to list mode.
+      flushPara();
+      listItems.push(trimmed.replace(/^-\s+/, ""));
+      continue;
+    }
+
+    if (trimmed === "") {
+      // Blank line breaks blocks.
+      flushPara();
+      flushList();
+      continue;
+    }
+
+    // Normal paragraph line.
+    flushList();
+    paraLines.push(line);
+  }
+
+  flushPara();
+  flushList();
+
+  // If nothing special, fall back to raw
+  if (blocks.length === 0) return raw;
+  return blocks;
+};
 
 const Response = ({
   response,
@@ -17,94 +105,51 @@ const Response = ({
   setChats,
   relevantChunks = [],
   variant = "default",
+  headerLabel,
+  tone = "default", // default | blue
 }) => {
-  const [isPopupOpen, setIsPopupOpen] = useState(false);
-  const [feedbackReaction, setFeedbackReaction] = useState("negative");
-  const [feedbackResponse, setFeedbackResponse] = useState("");
-  const popupRef = useRef(null);
-
   const isLoading = response === "Loading Response";
-
-  const submitFeedback = () => {
-    const requestBody = {
-      conversationId: conversationId,
-      chat_id: chatId,
-      reaction: feedbackReaction,
-      response: feedbackResponse,
-    };
-
-    const apiUrl = `${API_BASE_URL}/feedback?conversation-id=${conversationId}&chat-id=${chatId}`;
-    axios
-      .post(apiUrl, requestBody)
-      .then((response) => {
-        setFeedbackResponse("");
-        const updatedChats = chats.map((chat) => {
-          if (chat.chat_id === chatId) {
-            return { ...chat, reaction: feedbackReaction };
-          }
-          return chat;
-        });
-
-        setChats(updatedChats);
-      })
-      .catch((error) => {
-        console.error("Error:", error);
-      });
-  };
-
-  const onFeedbackClick = (reaction) => {
-    setFeedbackReaction(reaction);
-    if (isPopupOpen) {
-      setFeedbackResponse("");
-    }
-    setIsPopupOpen((prev) => !prev);
-  };
-
-  // Scroll into view when the popup is opened
-  useEffect(() => {
-    setIsPopupOpen(false); // Close popup
-  }, [chatId, conversationId]);
-
-  useEffect(() => {
-    if (isPopupOpen && popupRef.current) {
-      setTimeout(() => {
-        popupRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
-      }, 0);
-    }
-  }, [isPopupOpen]);
-
-  const showClausesPage = () => {
-    window.open(
-      `${window.location.origin}/conversation/${conversationId}/chat/${chatId}/referred-clauses`,
-      "_blank"
-    );
-  };
+  const isBlue = tone === "blue";
+  const headerIcon = isBlue ? responseBlueIcon : responseIcon;
 
   return (
-    <div className={`response_wrapper ${variant === "finalAnswer" ? "final_answer" : ""}`}>
+    <div
+      className={`response_wrapper ${variant === "finalAnswer" ? "final_answer" : ""} ${
+        isBlue ? "tone_blue" : ""
+      }`}
+    >
       <div className="response_section">
-        <img src={responseIcon} alt="response icon" />
+        <img src={headerIcon} alt="response icon" />
         <div className="text">
           {isLoading ? (
-            <>
-              {"Generating response"}
-              <div className="loading_ellipsis"></div>
-            </>
+            <div className="loading_header" aria-live="polite">
+              <span className="label">Generating response</span>
+              <span className="typing_dots" aria-hidden="true">
+                <span />
+                <span />
+                <span />
+              </span>
+            </div>
           ) : (
-            variant === "finalAnswer" ? "Final Answer (AI)" : "Generated by AI"
+            headerLabel || (variant === "finalAnswer" ? "Final Answer (AI)" : "Generated by AI")
           )}
         </div>
         {!isLoading && <div className="line"></div>}
       </div>
 
-      {!isLoading && (
+      {isLoading ? (
+        <div className="response_loading_body" aria-hidden="true">
+          <div className="skeleton_line w90" />
+          <div className="skeleton_line w82" />
+          <div className="skeleton_line w65" />
+        </div>
+      ) : (
         <>
           <div
             className="response_text"
-            dangerouslySetInnerHTML={{
-              __html: response?.replace(/\*\*(.*?)\*\*/g, "<b>$1</b>"),
-            }}
-          ></div>
+          >
+            {renderResponseContent(response)}
+          </div>
 
           {Array.isArray(relevantChunks) && relevantChunks.length > 0 ? (
             <div className="chunks_wrapper">
@@ -133,39 +178,6 @@ const Response = ({
               </div>
             </div>
           ) : null}
-
-          <div className="icon_wrapper">
-            <div className={`icon_container ${isPopupOpen ? "active" : ""}`}>
-              <img
-                src={thumbsDownIcon}
-                alt="thumbs down icon"
-                onClick={() => onFeedbackClick("negative")}
-              />
-            </div>
-            <div className="icon_container">
-              <img src={shareIcon} alt="share icon" />
-            </div>
-            <div className="icon_container">
-              <img
-                src={documentsIcon}
-                alt="documents icon"
-                onClick={() => showClausesPage()}
-              />
-            </div>
-            <div className="icon_container">
-              <img src={menuIcon} alt="menu icon" />
-            </div>
-          </div>
-
-          {isPopupOpen && (
-            <Popup
-              popupRef={popupRef}
-              closePopup={() => setIsPopupOpen(false)}
-              feedbackResponse={feedbackResponse}
-              setFeedbackResponse={setFeedbackResponse}
-              submitFeedback={submitFeedback}
-            />
-          )}
         </>
       )}
     </div>
