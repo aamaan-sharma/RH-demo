@@ -60,7 +60,7 @@ const CallsTranscriptModal = ({
     <div className="calls_modal_backdrop">
       <div className="calls_modal">
         <div className="calls_modal_header">
-          <div className="title">Add Transcript</div>
+          <div className="title">Select a Case</div>
           <button type="button" className="close_button" onClick={onClose}>
             ✕
           </button>
@@ -69,7 +69,7 @@ const CallsTranscriptModal = ({
           <input
             type="text"
             className="search_input"
-            placeholder="Search transcripts by name"
+            placeholder="Search cases"
             value={searchTerm}
             onChange={(e) => onSearchTermChange(e.target.value)}
           />
@@ -78,15 +78,15 @@ const CallsTranscriptModal = ({
           {isLoading ? (
             <div className="loading">
               <div className="spinner" aria-hidden="true" />
-              <div className="loading_text">Loading transcripts...</div>
+              <div className="loading_text">Loading cases...</div>
             </div>
           ) : error ? (
             <div className="error_state">
-              <div className="error_text">Failed to load transcripts. Please try again.</div>
+              <div className="error_text">Failed to load cases. Please try again.</div>
               <TryAgainButton onRetry={onRetry} />
             </div>
           ) : transcripts.length === 0 ? (
-            <div className="empty_state">No transcripts found.</div>
+            <div className="empty_state">No cases found.</div>
           ) : (
             <>
               <div className="transcript_grid">

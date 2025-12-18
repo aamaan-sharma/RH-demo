@@ -111,7 +111,7 @@ const ChatList = ({ chats, setChats, conversationId, isCallsMode = false, server
 
         {finalAnswer?.response ? (
           <div className="calls_final_answer">
-            <div className="section_title">Final authorized answer (draft)</div>
+            <div className="section_title">Final authorized answer</div>
             <Response
               response={finalAnswer.response}
               chatId={finalAnswer.chat_id}
@@ -120,7 +120,7 @@ const ChatList = ({ chats, setChats, conversationId, isCallsMode = false, server
               setChats={setChats}
               relevantChunks={finalAnswer.relevantChunks || finalAnswer.relevant_chunks || []}
               variant="finalAnswer"
-              headerLabel="Final Authorized Answer (Draft)"
+              headerLabel="Final Authorized Answer"
               tone="blue"
             />
           </div>

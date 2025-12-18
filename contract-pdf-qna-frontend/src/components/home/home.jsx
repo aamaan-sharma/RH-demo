@@ -1201,18 +1201,18 @@ const Home = ({ bearerToken, setBearerToken }) => {
               chats.length === 0 &&
               !callsTranscriptName ? (
               <div className="prompt_wrapper calls_prompt_wrapper">
-                <div className="title">What would you like to focus on today?</div>
+                <div className="title">How can I help you today?</div>
                 <div className="subtitle">Your AI-powered copilot is ready to assist you!</div>
                 <div className="queries_part">
                   <div className="query">
-                    Upload a transcript to extract items, generate coverage guidance, and prepare an itemized authorization draft.
+                    Choose a case, generate coverage guidance, and prepare an itemized authorization draft.
                   </div>
                   </div>
                 <div className="card_list">
                   <div className="card_container calls_landing_card">
-                    <div className="topic">1. Load Transcript</div>
+                    <div className="topic">1. Choose a case</div>
                     <div className="prompt_info">
-                        Choose a transcript from the list to analyze.
+                        Choose a case from the list to analyze the customer conversations.
                       </div>
                     </div>
                   <div className="card_container calls_landing_card">
@@ -1398,7 +1398,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
                   className="add_transcript_button"
                   onClick={handleOpenTranscriptModal}
                 >
-                  Add Transcript
+                  Select Case
                 </button>
               )
             ) : isCallsMode && conversationId && conversationStatus === "inactive" ? (

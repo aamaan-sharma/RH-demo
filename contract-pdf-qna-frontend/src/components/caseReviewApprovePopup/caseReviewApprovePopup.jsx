@@ -103,18 +103,7 @@ const CaseReviewApprovePopup = ({
           </div>
 
           <div className="section">
-            <div className="section_title">Decision</div>
-            {decision?.decision ? (
-              <div className={`decision_box ${decisionToneClass(decision.decision)}`}>
-                <ItemizedDecision decision={decision} />
-              </div>
-            ) : (
-              <div className="empty">No decision available for this case yet.</div>
-            )}
-          </div>
-
-          <div className="section">
-            <div className="section_title">Final authorized answer (draft)</div>
+            <div className="section_title">Final authorized answer</div>
             <div className="hint">
               This is the structured summary you will proceed with and forward.
             </div>
