@@ -146,6 +146,21 @@
     padding: 16px 0;
     color: #828282;
     font-size: 14px;
+  }
+
+  .history_error {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 16px 0;
+
+    .error_text {
+      color: #d32f2f;
+      font-size: 14px;
+      text-align: center;
+    }
 
     .spinner {
       width: 16px;

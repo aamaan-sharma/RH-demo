@@ -11,6 +11,7 @@ import analyzeLiveIcon from "../../assets/analyze_live.svg";
 import bulbIcon from "../../assets/bulb.svg";
 import loginIcon from "../../assets/login.svg";
 import { API_BASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET } from "../../config";
+import TryAgainButton from "../common/tryAgainButton/tryAgainButton";
 
 const tokenUrl = "https://oauth2.googleapis.com/token";
 
@@ -20,6 +21,7 @@ const SideBar = (props) => {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [userName, setUserName] = useState("");
   const [isActive, setIsActive] = useState(null);
+  const [sidebarError, setSidebarError] = useState(null);
   const location = useLocation();
 
   let navigate = useNavigate();
@@ -47,6 +49,7 @@ const SideBar = (props) => {
     axios
       .get(apiUrl, config)
       .then((response) => {
+        setSidebarError(null);
         // Backend returns an array; keep this resilient.
         const data = response?.data;
         setSidebarHistory(Array.isArray(data) ? data : []);
@@ -54,7 +57,14 @@ const SideBar = (props) => {
       .catch((error) => {
         // Handle errors
         console.error("Error:", error);
-        setSidebarHistory([]);
+        const status = error?.response?.status;
+        if (status === 500) {
+          setSidebarError({
+            retryFn: () => getSidebarHistory(token, mode),
+          });
+        } else {
+          setSidebarHistory([]);
+        }
       })
       .finally(() => {
         setIsLoadingHistory(false);
@@ -266,6 +276,18 @@ const SideBar = (props) => {
             <div className="history_loading">
               <div className="spinner" aria-hidden="true" />
               <div className="text">Loading history…</div>
+            </div>
+          ) : sidebarError ? (
+            <div className="history_error">
+              <div className="error_text">Failed to load history. Please try again.</div>
+              <TryAgainButton
+                onRetry={() => {
+                  setSidebarError(null);
+                  if (sidebarError?.retryFn) {
+                    sidebarError.retryFn();
+                  }
+                }}
+              />
             </div>
           ) : (
             (props.selectedModel || "Search") === "Calls" ? (

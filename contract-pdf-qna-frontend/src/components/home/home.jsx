@@ -20,6 +20,7 @@ import CaseReviewApprovePopup from "../caseReviewApprovePopup/caseReviewApproveP
 import { formatTranscriptDisplayName } from "../utils/transcriptName";
 import { ItemizedFinalAnswer } from "../common/itemizedFinalAnswer/itemizedFinalAnswer";
 import { ItemizedDecision } from "../common/itemizedDecision/itemizedDecision";
+import TryAgainButton from "../common/tryAgainButton/tryAgainButton";
 
 const TRANSCRIPTS_PAGE_SIZE = 16;
 
@@ -75,6 +76,9 @@ const Home = ({ bearerToken, setBearerToken }) => {
   const [justApproved, setJustApproved] = useState(false);
   const [recentlyClosedConversationId, setRecentlyClosedConversationId] = useState("");
   const transcriptSearchDebounceRef = useRef(null);
+  // Error state for 500 status codes
+  const [serverError, setServerError] = useState(null); // { type: 'chat' | 'transcript' | 'sidebar' | 'conversation', retryFn: function }
+  const lastFailedRequestRef = useRef(null); // Store last failed request details for retry
 
   useEffect(() => {
     // Pull display name from the Google login payload stored by SideBar.
@@ -98,25 +102,28 @@ const Home = ({ bearerToken, setBearerToken }) => {
   });
 
   const handleSetGptModel = (model) => {
-    // If leaving Claims (Calls) while a case is open, reset to "new chat" UI for the selected mode.
-    // This ensures switching to Search/Infer doesn't keep showing the Claims case conversation.
-    const isLeavingCalls = isCallsMode && model !== "Calls";
-    if (isLeavingCalls) {
-      setIsTranscriptModalOpen(false);
-      setIsCheckingExistingTranscriptConversation(false);
-      setCallsGenerationStage("idle");
-      setCallsProgressText("");
-      setCallsTranscriptName("");
-      setCallsClaimDecision(null);
-      setFinalSummary("");
-      setAuthorizedFinalAnswer("");
-      setAuthorizedApprovedAt(null);
-      setConversationStatus("active");
-      setChats([]);
-      setInput("");
-      // Exit the conversation route so `conversationId` becomes empty.
-      navigate("/#");
+    // If clicking on the same mode that's already active, do nothing
+    if (gptModel === model) {
+      return;
     }
+
+    // Reset all state when switching modes to start a new chat/case
+    setIsTranscriptModalOpen(false);
+    setIsCheckingExistingTranscriptConversation(false);
+    setCallsGenerationStage("idle");
+    setCallsProgressText("");
+    setCallsTranscriptName("");
+    setCallsClaimDecision(null);
+    setFinalSummary("");
+    setAuthorizedFinalAnswer("");
+    setAuthorizedApprovedAt(null);
+    setConversationStatus("active");
+    setChats([]);
+    setInput("");
+    
+    // Exit the conversation route so `conversationId` becomes empty.
+    // This ensures switching modes opens a new chat/case.
+    navigate("/#");
 
     // Keep Calls/Claims mode in sync with selected model
     setIsCallsMode(model === "Calls");
@@ -145,6 +152,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
       axios
         .get(`${TRANSCRIPTS_API_BASE_URL}/transcripts`, { params })
         .then((response) => {
+          setServerError(null);
           const apiTranscripts = response?.data?.transcripts || [];
           const hasMore = Boolean(response?.data?.hasMore);
 
@@ -170,6 +178,14 @@ const Home = ({ bearerToken, setBearerToken }) => {
         })
         .catch((error) => {
           console.error("Error fetching transcripts:", error);
+          const status = error?.response?.status;
+          if (status === 500) {
+            setServerError({
+              type: "transcript",
+              retryFn: () => fetchTranscripts(searchTerm, status, offset, append),
+            });
+            lastFailedRequestRef.current = { searchTerm, status, offset, append };
+          }
         })
         .finally(() => {
           setIsLoadingTranscripts(false);
@@ -188,12 +204,16 @@ const Home = ({ bearerToken, setBearerToken }) => {
       setError("login");
       return;
     }
+    // Reset transcript state to null when modal opens
+    setTranscripts([]);
+    setTranscriptSearch("");
+    setTranscriptsOffset(0);
+    setTranscriptsHasMore(true);
+    setServerError(null);
     // Opening the transcript modal implies we are in Calls mode
     setIsCallsMode(true);
     setGptModelState("Calls");
     setIsTranscriptModalOpen(true);
-    setTranscriptsOffset(0);
-    setTranscriptsHasMore(true);
     fetchTranscripts("", transcriptStatusFilter, 0, false);
   };
 
@@ -340,14 +360,34 @@ const Home = ({ bearerToken, setBearerToken }) => {
           }
         })
         .catch((error) => {
+          const status = error?.response?.status;
           setCallsGenerationStage("idle");
           setCallsProgressText("");
+          const errorMessage = status === 500 
+            ? "An error occurred while processing your request. Please try again."
+            : "An error occurred while processing your request.";
+          
           setChats([
             {
               entered_query: "",
-              response: "An error occurred while processing your request.",
+              response: errorMessage,
+              isError: status === 500,
             },
           ]);
+          
+          if (status === 500) {
+            setServerError({
+              type: "transcript",
+              retryFn: () => {
+                // Retry transcript processing
+                const transcript = {
+                  id: requestBody.transcriptFileName,
+                  name: requestBody.transcriptFileName,
+                };
+                startNewCallsConversation(transcript, { newConversation: false });
+              },
+            });
+          }
           console.error("Error processing transcript with /transcripts/process:", error);
         });
     };
@@ -373,7 +413,20 @@ const Home = ({ bearerToken, setBearerToken }) => {
         });
 
         if (!resp.ok) {
-          throw new Error(`Streaming request failed: ${resp.status}`);
+          const status = resp.status;
+          if (status === 500) {
+            setServerError({
+              type: "transcript",
+              retryFn: () => {
+                const transcript = {
+                  id: requestBody.transcriptFileName,
+                  name: requestBody.transcriptFileName,
+                };
+                startNewCallsConversation(transcript, { newConversation: false });
+              },
+            });
+          }
+          throw new Error(`Streaming request failed: ${status}`);
         }
         if (!resp.body) {
           throw new Error("Streaming response body is not available");
@@ -536,6 +589,19 @@ const Home = ({ bearerToken, setBearerToken }) => {
         }
       } catch (err) {
         console.error("Streaming transcript processing failed, falling back:", err);
+        const status = err?.response?.status || (err?.message?.includes("500") ? 500 : null);
+        if (status === 500 && !serverError) {
+          setServerError({
+            type: "transcript",
+            retryFn: () => {
+              const transcript = {
+                id: requestBody.transcriptFileName,
+                name: requestBody.transcriptFileName,
+              };
+              startNewCallsConversation(transcript, { newConversation: false });
+            },
+          });
+        }
         runNonStreamingFallback();
       }
     };
@@ -587,6 +653,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
       axios
         .get(apiUrl)
         .then((response) => {
+          setServerError(null);
           if (
             response.data.message === "Token is invalid" ||
             response.data.message === "Token has expired" ||
@@ -629,6 +696,64 @@ const Home = ({ bearerToken, setBearerToken }) => {
         })
         .catch((error) => {
           console.error("Error:", error);
+          const status = error?.response?.status;
+          if (status === 500) {
+            setServerError({
+              type: "conversation",
+              retryFn: () => {
+                // Retry loading conversation
+                setIsLoadingConversation(true);
+                axios
+                  .get(apiUrl)
+                  .then((response) => {
+                    setServerError(null);
+                    if (
+                      response.data.message === "Token is invalid" ||
+                      response.data.message === "Token has expired" ||
+                      response.data.message === "Token is missing"
+                    ) {
+                      return;
+                    }
+                    setChats(response.data.chats);
+                    setSelectedState(response.data.selectedState);
+                    setSelectedContract(response.data.contractType);
+                    setSelectedPlan(response.data.selectedPlan);
+                    setFinalSummary(response.data.finalSummary || "");
+                    setCallsClaimDecision(response?.data?.claimDecision || null);
+                    setAuthorizedFinalAnswer(
+                      response.data.authorizedFinalAnswer || response.data.finalSummary || ""
+                    );
+                    setAuthorizedApprovedAt(response.data.authorizedApprovedAt || null);
+                    setConversationStatus((response.data.status || "active").toLowerCase());
+                    setCallsGeneratedAt(response.data.updatedAt || response.data.createdAt || null);
+                    const transcriptNameFromApi =
+                      response?.data?.transcriptMetadata?.fileName ||
+                      response?.data?.transcriptId ||
+                      "";
+                    if (transcriptNameFromApi) {
+                      setCallsTranscriptName(transcriptNameFromApi);
+                      setCallsGenerationStage("done");
+                      if (!response.data.updatedAt && !response.data.createdAt) {
+                        setCallsGeneratedAt(new Date().toISOString());
+                      }
+                    } else {
+                      setCallsTranscriptName("");
+                      setCallsGenerationStage("idle");
+                    }
+                    const modelFromHistory = response.data.gptModel || "Search";
+                    setGptModelState(modelFromHistory);
+                    setIsCallsMode(modelFromHistory === "Calls");
+                    setInput("");
+                  })
+                  .catch((err) => {
+                    console.error("Error retrying conversation load:", err);
+                  })
+                  .finally(() => {
+                    setIsLoadingConversation(false);
+                  });
+              },
+            });
+          }
         })
         .finally(() => {
           setIsLoadingConversation(false);
@@ -814,6 +939,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
       axios
         .post(apiUrl, { ...requestBody, gptModel: callsUnderlyingModel })
         .then((response) => {
+          setServerError(null);
           if (
             response.data.message === "Token is invalid" ||
             response.data.message === "Token has expired" ||
@@ -841,13 +967,36 @@ const Home = ({ bearerToken, setBearerToken }) => {
           }
         })
         .catch((error) => {
+          const status = error?.response?.status;
+          const errorMessage = status === 500 
+            ? "An error occurred while processing your request. Please try again."
+            : "An error occurred while processing your request.";
+          
           setChats((prevChats) => [
             ...prevChats.slice(0, -1),
             {
               entered_query: input,
-              response: "An error occurred while processing your request.",
+              response: errorMessage,
+              isError: status === 500,
             },
           ]);
+          
+          if (status === 500) {
+            setServerError({
+              type: "chat",
+              retryFn: () => {
+                const lastInput = input;
+                setInput(lastInput);
+                setTimeout(() => handleInputSubmit(), 100);
+              },
+            });
+            lastFailedRequestRef.current = { 
+              type: "calls-chat",
+              requestBody: { ...requestBody, gptModel: callsUnderlyingModel },
+              apiUrl,
+              input,
+            };
+          }
           console.error("Error:", error);
         });
     } else {
@@ -859,6 +1008,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
       axios
         .post(apiUrl, requestBody)
         .then((response) => {
+          setServerError(null);
           if (
             response.data.message === "Token is invalid" ||
             response.data.message === "Token has expired" ||
@@ -888,13 +1038,36 @@ const Home = ({ bearerToken, setBearerToken }) => {
           }
         })
         .catch((error) => {
+          const status = error?.response?.status;
+          const errorMessage = status === 500 
+            ? "An error occurred while processing your request. Please try again."
+            : "An error occurred while processing your request.";
+          
           setChats((prevChats) => [
             ...prevChats.slice(0, -1),
             {
               entered_query: input,
-              response: "An error occurred while processing your request.",
+              response: errorMessage,
+              isError: status === 500,
             },
           ]);
+          
+          if (status === 500) {
+            setServerError({
+              type: "chat",
+              retryFn: () => {
+                const lastInput = input;
+                setInput(lastInput);
+                setTimeout(() => handleInputSubmit(), 100);
+              },
+            });
+            lastFailedRequestRef.current = { 
+              type: "search-infer-chat",
+              requestBody,
+              apiUrl,
+              input,
+            };
+          }
           console.error("Error:", error);
         });
     }
@@ -1039,13 +1212,13 @@ const Home = ({ bearerToken, setBearerToken }) => {
                   <div className="card_container calls_landing_card">
                     <div className="topic">1. Load Transcript</div>
                     <div className="prompt_info">
-                        Choose a transcript from the searchable, paginated list.
+                        Choose a transcript from the list to analyze.
                       </div>
                     </div>
                   <div className="card_container calls_landing_card">
                     <div className="topic">2. Claim Coverage Information</div>
                     <div className="prompt_info">
-                      Summarize coverage outcomes per item and attach referred contract clauses for quick validation.
+                      Summarizes coverage outcomes per item and attaches referred contract clauses for quick validation.
                       </div>
                     </div>
                   <div className="card_container calls_landing_card">
@@ -1066,6 +1239,18 @@ const Home = ({ bearerToken, setBearerToken }) => {
                     <div className="conversation_loading" aria-live="polite">
                       <span className="mini_spinner" aria-hidden="true" />
                       <div className="text">Loading conversation…</div>
+                    </div>
+                  ) : serverError?.type === "conversation" ? (
+                    <div className="conversation_error">
+                      <div className="error_text">Failed to load conversation. Please try again.</div>
+                      <TryAgainButton
+                        onRetry={() => {
+                          if (serverError?.retryFn) {
+                            setServerError(null);
+                            serverError.retryFn();
+                          }
+                        }}
+                      />
                     </div>
                   ) : null}
                   {isCallsMode && callsTranscriptName ? (
@@ -1164,6 +1349,13 @@ const Home = ({ bearerToken, setBearerToken }) => {
                     setChats={setChats}
                     conversationId={conversationId}
                     isCallsMode={isCallsMode}
+                    serverError={serverError}
+                    onRetryChat={() => {
+                      if (serverError?.type === "chat" && serverError?.retryFn) {
+                        setServerError(null);
+                        serverError.retryFn();
+                      }
+                    }}
                   />
                   {isCallsMode && callsGenerationStage === "generating" ? (
                     <div className="calls_progress" aria-live="polite">
@@ -1249,6 +1441,13 @@ const Home = ({ bearerToken, setBearerToken }) => {
           statusFilter={transcriptStatusFilter}
           onStatusFilterChange={handleTranscriptStatusChange}
           onSelectTranscript={handleSelectTranscript}
+          error={serverError?.type === "transcript" ? serverError : null}
+          onRetry={() => {
+            if (serverError?.type === "transcript" && serverError?.retryFn) {
+              setServerError(null);
+              serverError.retryFn();
+            }
+          }}
           onToggleStatus={(t) => {
             const nextStatus = t.status === "active" ? "inactive" : "active";
             axios

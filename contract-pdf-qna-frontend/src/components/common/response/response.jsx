@@ -2,6 +2,7 @@ import React from "react";
 import responseIcon from "../../../assets/response.svg";
 import responseBlueIcon from "../../../assets/response_blue.svg";
 import { ItemizedFinalAnswer } from "../itemizedFinalAnswer/itemizedFinalAnswer";
+import TryAgainButton from "../tryAgainButton/tryAgainButton";
 import "./response.scss";
 
 const renderInlineBold = (text) => {
@@ -108,8 +109,11 @@ const Response = ({
   variant = "default",
   headerLabel,
   tone = "default", // default | blue
+  isError = false,
+  onRetry = null,
 }) => {
   const isLoading = response === "Loading Response";
+  const isErrorState = isError || (response && response.includes("Please try again"));
   const isBlue = tone === "blue";
   const headerIcon = isBlue ? responseBlueIcon : responseIcon;
 
@@ -147,7 +151,7 @@ const Response = ({
       ) : (
         <>
           <div
-            className="response_text"
+            className={`response_text ${isErrorState ? "error_response" : ""}`}
           >
             {variant === "finalAnswer" ? (
               <ItemizedFinalAnswer text={response} title="" asCard={true} />
@@ -155,6 +159,11 @@ const Response = ({
               renderResponseContent(response)
             )}
           </div>
+          {isErrorState && onRetry && (
+            <div className="error_actions">
+              <TryAgainButton onRetry={onRetry} />
+            </div>
+          )}
 
           {Array.isArray(relevantChunks) && relevantChunks.length > 0 ? (
             <div className="chunks_wrapper">

@@ -626,6 +626,23 @@ def extract_transcript_metadata(transcript_content: str, file_name: str) -> Dict
             "MO": ["Missouri"],
             "MD": ["Maryland"],
             "WI": ["Wisconsin"],
+            "NV": ["Nevada"],
+            "UT": ["Utah"],
+            "HI": ["Hawaii"],
+            "AK": ["Alaska"],
+            "AR": ["Arkansas"],
+            "CO": ["Colorado"],
+            "CT": ["Connecticut"],
+            "DE": ["Delaware"],
+            "HI": ["Hawaii"],
+            "ID": ["Idaho"],
+            "IA": ["Iowa"],
+            "KS": ["Kansas"],
+            "KY": ["Kentucky"],
+            "LA": ["Louisiana"],
+            "ME": ["Maine"],
+            "MN": ["Minnesota"],
+            "MS": ["Mississippi"],
         }
         
         for state_code, names in state_names.items():
@@ -4150,17 +4167,21 @@ def process_transcript_stream():
                             "- Related: related parts/components/secondary-damage items (if any)\n"
                             "- Situation: what happened / what customer is claiming (from Situation lines)\n"
                             "- Decision: APPROVED | REJECTED | PARTIAL | NEED_INFO\n"
-                            "- What’s covered (bullet list, if any)\n"
-                            "- What’s not covered / limitations (bullet list, if any)\n"
+                            "- What's covered (bullet list, if any)\n"
+                            "- What's not covered / limitations (bullet list, if any)\n"
                             "- Amounts (only if mentioned in Q&A):\n"
                             "  - Customer quoted/asked: $...\n"
                             "  - Company can provide: $... (coverage amount/limit/service fee/deductible as stated in Q&A)\n"
                             "- Why (1–2 short sentences grounded in the Q&A outcomes; no policy speculation)\n"
                             "- Next steps (specific actions the customer should take)\n"
                             "\n"
-                            "If outcomes are mixed for the same item, use PARTIAL and clearly break down covered vs not covered.\n"
-                            "Be concise, decisive, and avoid hypothetical/if-then language.\n"
-                            "End with a short overall next step (1–2 bullets) if multiple items exist.\n\n"
+                            "CRITICAL DECISION RULES:\n"
+                            "- The Decision field is MANDATORY and MUST NEVER be left empty for any item.\n"
+                            "- If it is confirmed that there is NO coverage for a particular item, the Decision MUST be REJECTED.\n"
+                            "- If outcomes are mixed for the same item, use PARTIAL and clearly break down covered vs not covered.\n"
+                            "- If coverage cannot be determined, use NEED_INFO.\n"
+                            "- Be concise, decisive, and avoid hypothetical/if-then language.\n"
+                            "- End with a short overall next step (1–2 bullets) if multiple items exist.\n\n"
                             "{qa_blob}\n"
                         ),
                     )
@@ -4755,14 +4776,18 @@ def process_transcript():
                                 "  1. Customer quoted/asked: $...\n"
                                 "  2. Company can provide: $... (coverage amount/limit/service fee/deductible as stated in Q&A)\n"
                                 "- Situation: what happened / what customer is claiming (from Situation lines)\n"
-                                "- What’s covered (numeric list, if any)\n"
-                                "- What’s not covered / limitations (numeric list, if any)\n"
+                                "- What's covered (numeric list, if any)\n"
+                                "- What's not covered / limitations (numeric list, if any)\n"
                                 "- Why (1–2 short sentences grounded in the Q&A outcomes; no policy speculation)\n"
                                 "- Next steps (specific actions the customer should take)\n"
                                 "\n"
-                                "If outcomes are mixed for the same item, use PARTIAL and clearly break down covered vs not covered.\n"
-                                "Be concise, decisive, and avoid hypothetical/if-then language.\n"
-                                "End with a short overall next step (1–2 bullets) if multiple items exist.\n\n"
+                                "CRITICAL DECISION RULES:\n"
+                                "- The DECISION field is MANDATORY and MUST NEVER be left empty for any item.\n"
+                                "- If it is confirmed that there is NO coverage for a particular item, the DECISION MUST be REJECTED.\n"
+                                "- If outcomes are mixed for the same item, use PARTIAL and clearly break down covered vs not covered.\n"
+                                "- If coverage cannot be determined, use NEED_HUMAN_ASSISTANCE.\n"
+                                "- Be concise, decisive, and avoid hypothetical/if-then language.\n"
+                                "- End with a short overall next step (1–2 bullets) if multiple items exist.\n\n"
                                 "{qa_blob}\n"
                             ),
                         )

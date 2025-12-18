@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from "react";
 import "./callsTranscriptModal.scss";
 import { formatTranscriptDisplayName } from "../utils/transcriptName";
+import TryAgainButton from "../common/tryAgainButton/tryAgainButton";
 
 const CallsTranscriptModal = ({
   isOpen,
@@ -16,6 +17,8 @@ const CallsTranscriptModal = ({
   isLoadingMore,
   hasMore,
   onLoadMore,
+  error,
+  onRetry,
 }) => {
   if (!isOpen) return null;
 
@@ -76,6 +79,11 @@ const CallsTranscriptModal = ({
             <div className="loading">
               <div className="spinner" aria-hidden="true" />
               <div className="loading_text">Loading transcripts...</div>
+            </div>
+          ) : error ? (
+            <div className="error_state">
+              <div className="error_text">Failed to load transcripts. Please try again.</div>
+              <TryAgainButton onRetry={onRetry} />
             </div>
           ) : transcripts.length === 0 ? (
             <div className="empty_state">No transcripts found.</div>

@@ -71,11 +71,25 @@
   min-height: 0; // allow the body to shrink within the flex column and become scrollable
 
   .loading,
-  .empty_state {
+  .empty_state,
+  .error_state {
     text-align: center;
     color: #828282;
     font-size: 14px;
     padding: 24px 0;
+  }
+
+  .error_state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+
+    .error_text {
+      color: #d32f2f;
+      font-size: 14px;
+    }
   }
 
   .loading {

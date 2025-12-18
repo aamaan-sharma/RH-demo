@@ -13,7 +13,7 @@ const isFinalAnswerChat = (chat) => {
   return id === "final_answer" || chat?.entered_query === "Final Answer for transcript";
 };
 
-const ChatList = ({ chats, setChats, conversationId, isCallsMode = false }) => {
+const ChatList = ({ chats, setChats, conversationId, isCallsMode = false, serverError = null, onRetryChat = null }) => {
   const lastChatRef = useRef(null);
 
   useEffect(() => {
@@ -68,6 +68,8 @@ const ChatList = ({ chats, setChats, conversationId, isCallsMode = false }) => {
                         relevantChunks={chat.relevantChunks || chat.relevant_chunks || []}
                         headerLabel="AI Draft Answer"
                         tone="blue"
+                        isError={chat.isError}
+                        onRetry={chat.isError && onRetryChat ? onRetryChat : null}
                       />
                     ) : null}
                   </details>
@@ -98,6 +100,8 @@ const ChatList = ({ chats, setChats, conversationId, isCallsMode = false }) => {
                     setChats={setChats}
                     relevantChunks={chat.relevantChunks || chat.relevant_chunks || []}
                     headerLabel="Assistant (Case Context)"
+                    isError={chat.isError}
+                    onRetry={chat.isError && onRetryChat ? onRetryChat : null}
                   />
                 ) : null}
               </div>
@@ -153,6 +157,8 @@ const ChatList = ({ chats, setChats, conversationId, isCallsMode = false }) => {
               setChats={setChats}
               relevantChunks={chat.relevantChunks || chat.relevant_chunks || []}
               variant={isCallsMode && isFinalAnswerChat(chat) ? "finalAnswer" : "default"}
+              isError={chat.isError}
+              onRetry={chat.isError && onRetryChat ? onRetryChat : null}
             />
           )}
         </div>
