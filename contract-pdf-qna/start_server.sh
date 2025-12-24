@@ -5,9 +5,9 @@
 cd "$(dirname "$0")"
 
 # Prefer the local venv if present (this repo vendors `venv/`).
-if [ -f "venv/bin/activate" ]; then
+if [ -f ".venv1/bin/activate" ]; then
   # shellcheck disable=SC1091
-  source "venv/bin/activate"
+  source ".venv1/bin/activate"
 fi
 
 # Choose python from the (possibly activated) environment.
