@@ -4984,6 +4984,8 @@ def process_transcript():
 @app.route("/transcript-event", methods=["POST"])
 def transcript_event():
     # simple shared-secret auth
+    db = mongo_client[os.getenv("MONGO_DB_NAME")]
+    transcripts_collection = db.call_transcripts
     auth = request.headers.get("authorization", "")
     if auth != f"Bearer {os.getenv('FLASK_AUTH_TOKEN')}":
         return {"error": "unauthorized"}, 401
@@ -4995,6 +4997,20 @@ def transcript_event():
     session_id = data.get("sessionId")
     if not session_id:
         return {"error": "sessionId is required"}, 400
+
+    transcript_doc = {
+        "sessionId": data["sessionId"],
+        "contactId": data.get("contactId"),
+        "utteranceId": data.get("utteranceId"),
+        "speaker": data.get("speaker"),
+        "text": data.get("text"),
+        "isPartial": data.get("isPartial", True),
+        "beginOffsetMillis": data.get("beginOffsetMillis"),
+        "endOffsetMillis": data.get("endOffsetMillis"),
+        "createdAt": data.get("createdAt")
+    }
+
+    transcripts_collection.insert_one(transcript_doc)
 
     # broadcast to UI via websocket
     # 🔥 LOG TRANSCRIPT EVENT
