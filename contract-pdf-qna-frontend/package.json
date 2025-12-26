@@ -11,13 +11,15 @@
   },
   "dependencies": {
     "@react-oauth/google": "^0.12.1",
+    "amazon-connect-streams": "^2.22.0",
     "axios": "^1.7.5",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.26.1",
     "react-speech-recognition": "^3.10.0",
     "regenerator-runtime": "^0.14.1",
-    "sass": "^1.77.8"
+    "sass": "^1.77.8",
+    "socket.io-client": "^4.8.3"
   },
   "devDependencies": {
     "@eslint/js": "^9.8.0",

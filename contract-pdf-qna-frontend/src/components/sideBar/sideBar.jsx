@@ -1,8 +1,7 @@
 import { googleLogout, useGoogleLogin } from "@react-oauth/google";
 import axios from "axios";
 import React, { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import plusIcon from "../../assets/plus.svg";
 import "./sideBar.scss";
 import HistoryButton from "./historyButton/historyButton.jsx";
@@ -376,7 +375,10 @@ const SideBar = (props) => {
       </div>
 
       <div className="options_container">
-        <div className="setting_section">
+        <div
+          className="setting_section"
+          onClick={() => navigate("/live-transcript")}
+        >
           <img src={analyzeLiveIcon} alt="Setting Icon" />
           <div className="setting_text">Analyze Live</div>
         </div>

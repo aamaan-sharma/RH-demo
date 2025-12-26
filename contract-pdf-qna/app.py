@@ -1,13 +1,18 @@
 # Set the OpenAI API Keys, embedding model,
-
-import eventlet
-eventlet.monkey_patch()
+try:
+    import eventlet
+    eventlet.monkey_patch()
+    async_mode = "eventlet"
+    print("✅ Using eventlet for WebSocket support")
+except ImportError:
+    async_mode = "threading"
+    print("⚠️ Using threading mode. For better WebSocket support, install eventlet: pip install eventlet")
 
 import os
 import asyncio
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify, make_response, Response, stream_with_context
-from flask_socketio import SocketIO
+from flask_socketio import SocketIO, emit, join_room
 from pymongo import MongoClient, ReturnDocument
 from datetime import datetime
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
@@ -102,7 +107,7 @@ app = Flask(__name__)
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
-    async_mode='eventlet',
+    async_mode=async_mode, 
 )
 
 JWT_AUDIENCE = os.getenv("JWT_AUDIENCE")
@@ -221,6 +226,8 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 
 mongo_client = MongoClient(MONGO_URI, unicode_decode_error_handler='ignore')
 db = mongo_client["FrontDoorDB"]
+db2 = mongo_client[os.getenv("MONGO_DB_NAME")]
+transcripts_collection = db2.call_transcripts
 
 model_name = "text-embedding-ada-002"
 embed = OpenAIEmbeddings(model=model_name, openai_api_key=OPENAI_API_KEY)
@@ -4981,27 +4988,24 @@ def process_transcript():
         }), 500
 
 
-@app.route("/transcript-event", methods=["POST"])
+@app.route("/webhook", methods=["POST"])
 def transcript_event():
     # simple shared-secret auth
-    db = mongo_client[os.getenv("MONGO_DB_NAME")]
-    transcripts_collection = db.call_transcripts
-    auth = request.headers.get("authorization", "")
-    if auth != f"Bearer {os.getenv('FLASK_AUTH_TOKEN')}":
-        return {"error": "unauthorized"}, 401
+    # auth = request.headers.get("authorization", "")
+    # if auth != f"Bearer {os.getenv('FLASK_AUTH_TOKEN')}":
+    #     return {"error": "unauthorized"}, 401
 
     data = request.get_json()
     if not data:
-        return {"error": "invalid payload"}, 400
+        return jsonify({"error": "invalid payload"}), 400
     
     session_id = data.get("sessionId")
     if not session_id:
-        return {"error": "sessionId is required"}, 400
+        return jsonify({"error": "sessionId is required"}), 400
 
     transcript_doc = {
         "sessionId": data["sessionId"],
         "contactId": data.get("contactId"),
-        "utteranceId": data.get("utteranceId"),
         "speaker": data.get("speaker"),
         "text": data.get("text"),
         "isPartial": data.get("isPartial", True),
@@ -5015,13 +5019,10 @@ def transcript_event():
     # broadcast to UI via websocket
     # 🔥 LOG TRANSCRIPT EVENT
     print("🔴 TRANSCRIPT RECEIVED:", json.dumps(data, indent=2))
-    socketio.emit(
-        "transcript_update",
-        data,
-        room=data["sessionId"]  # important
-    )
+    socketio.emit("transcript_update", data)
+    socketio.emit("transcript_update", data, room=data["sessionId"])
 
-    return {"ok": True}
+    return jsonify({"ok": True}), 200
 
 @socketio.on("join_session")
 def on_join_session(data):
@@ -5030,4 +5031,5 @@ def on_join_session(data):
         join_room(session_id)
 
 if __name__ == "__main__":
-    socketio.run(app, host="0.0.0.0", port=8001, debug=True)
+    # use_reloader=False to avoid Windows socket errors during reload
+    socketio.run(app, host="0.0.0.0", port=8001, debug=True, use_reloader=False)

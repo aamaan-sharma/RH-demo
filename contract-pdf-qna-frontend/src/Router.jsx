@@ -3,6 +3,7 @@ import { Route, BrowserRouter as Router, Routes } from "react-router-dom";
 import Home from "./components/home/home";
 import Insights from "./components/insights/insights";
 import ReferredClauses from "./components/referredClauses/referredClauses";
+import LiveTranscript from "./components/liveTranscript/liveTranscript";
 
 const AppRoutes = () => {
   const [bearerToken, setBearerToken] = useState("");
@@ -33,6 +34,7 @@ const AppRoutes = () => {
           element={<ReferredClauses />}
         />
         <Route path="/insights" element={<Insights />} />
+        <Route path="/live-transcript" element={<LiveTranscript />} />
       </Routes>
     </Router>
   );

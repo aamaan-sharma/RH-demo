@@ -4,6 +4,7 @@ import App from './App.jsx'
 import './index.css'
 import axios from "axios";
 import { installMockApi, isMockApiEnabled } from "./mock/mockApi";
+import "amazon-connect-streams";
 
 if (isMockApiEnabled()) {
   installMockApi(axios);
