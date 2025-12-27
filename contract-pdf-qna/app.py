@@ -1,12 +1,4 @@
 # Set the OpenAI API Keys, embedding model,
-try:
-    import eventlet
-    eventlet.monkey_patch()
-    async_mode = "eventlet"
-    print("✅ Using eventlet for WebSocket support")
-except ImportError:
-    async_mode = "threading"
-    print("⚠️ Using threading mode. For better WebSocket support, install eventlet: pip install eventlet")
 
 import os
 import asyncio
@@ -107,7 +99,7 @@ app = Flask(__name__)
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
-    async_mode=async_mode, 
+    async_mode='threading', 
 )
 
 JWT_AUDIENCE = os.getenv("JWT_AUDIENCE")
