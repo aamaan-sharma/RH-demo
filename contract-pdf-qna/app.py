@@ -1,8 +1,10 @@
 # Set the OpenAI API Keys, embedding model,
+
 import os
 import asyncio
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify, make_response, Response, stream_with_context
+from flask_socketio import SocketIO, emit, join_room
 from pymongo import MongoClient, ReturnDocument
 from datetime import datetime
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
@@ -93,6 +95,12 @@ memory1 = InMemoryChatMessageHistory()
 handler = CallbackHandler()
 load_dotenv()
 app = Flask(__name__)
+
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    async_mode='threading', 
+)
 
 JWT_AUDIENCE = os.getenv("JWT_AUDIENCE")
 JWKS_URL = os.getenv("JWKS_URL")
@@ -210,6 +218,8 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 
 mongo_client = MongoClient(MONGO_URI, unicode_decode_error_handler='ignore')
 db = mongo_client["FrontDoorDB"]
+db2 = mongo_client[os.getenv("MONGO_DB_NAME")]
+transcripts_collection = db2.call_transcripts
 
 model_name = "text-embedding-ada-002"
 embed = OpenAIEmbeddings(model=model_name, openai_api_key=OPENAI_API_KEY)
@@ -345,6 +355,8 @@ You are assisting an AHS customer care executive with home insurance related inq
 
 You are given a tool named Knowledge Base, always use this tool to answer the questions. 
 
+You also have access to a tool named User Lookup that can fetch user details from the database based on mobile number. Use this tool when you need to retrieve customer information or user profile data. 
+
 The inquiry asked might be subject to some exclusions and limitations which need to be checked for first before answering the rest of the inquiry. 
 You have to break down these complex inquiries into multiple subqueries and then use the knowledge base tool multiple times to return the overall answer from the subqueries for the customer's inquiry. 
 Make sure to answer to all the subqueries before you return the final answer.
@@ -391,6 +403,36 @@ If the inquiry is unrelated to home repair and service, answer with "I don't hav
 """
 
 
+def fetch_user_by_mobile(mobile_number: str) -> str:
+    """
+    Fetch user details from the database based on mobile number.
+    
+    Args:
+        mobile_number: The mobile number to search for
+        
+    Returns:
+        A string containing user details in JSON format, or an error message
+    """
+    try:
+        # Access the 'ahs' database and 'Users' collection
+        ahs_db = mongo_client["AHS"]
+        users_collection = ahs_db["Users"]
+        
+        # Search for user by mobile number
+        user = users_collection.find_one({"mobile": mobile_number})
+        
+        if user:
+            # Convert ObjectId to string for JSON serialization
+            if "_id" in user:
+                user["_id"] = str(user["_id"])
+            # Return user details as JSON string
+            return json.dumps(user, indent=2, default=str)
+        else:
+            return f"No user found with mobile number: {mobile_number}"
+    except Exception as e:
+        return f"Error fetching user details: {str(e)}"
+
+
 def input_prompt(entered_query, qa, llm):
     # Retriever chain as Tool for agent
     knowledge_base_tool = Tool(
@@ -400,8 +442,19 @@ def input_prompt(entered_query, qa, llm):
             "Useful for answering questions related to insurance coverage of home appliances, home fixtures, their repairs/replacement, service requests, about the renewal, cancellation or refund policies, whether a certain service is covered under the contract, permit limit, code violation limit, modification limit, limitations and exclusions."
         ),
     )
+    
+    # User lookup tool
+    user_lookup_tool = Tool(
+        name="User Lookup",
+        func=fetch_user_by_mobile,
+        description=(
+            "Useful for fetching user details from the database based on mobile number. "
+            "Use this tool when you need to retrieve customer information, user profile, or any user-related data. "
+            "Input should be the mobile number as a string. Returns user details in JSON format if found, or an error message if not found."
+        ),
+    )
 
-    tools = [knowledge_base_tool]
+    tools = [knowledge_base_tool, user_lookup_tool]
 
     current_time = time()
 
@@ -4927,5 +4980,48 @@ def process_transcript():
         }), 500
 
 
+@app.route("/webhook", methods=["POST"])
+def transcript_event():
+    # simple shared-secret auth
+    # auth = request.headers.get("authorization", "")
+    # if auth != f"Bearer {os.getenv('FLASK_AUTH_TOKEN')}":
+    #     return {"error": "unauthorized"}, 401
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "invalid payload"}), 400
+    
+    session_id = data.get("sessionId")
+    if not session_id:
+        return jsonify({"error": "sessionId is required"}), 400
+
+    transcript_doc = {
+        "sessionId": data["sessionId"],
+        "contactId": data.get("contactId"),
+        "speaker": data.get("speaker"),
+        "text": data.get("text"),
+        "isPartial": data.get("isPartial", True),
+        "beginOffsetMillis": data.get("beginOffsetMillis"),
+        "endOffsetMillis": data.get("endOffsetMillis"),
+        "createdAt": data.get("createdAt")
+    }
+
+    transcripts_collection.insert_one(transcript_doc)
+
+    # broadcast to UI via websocket
+    # 🔥 LOG TRANSCRIPT EVENT
+    print("🔴 TRANSCRIPT RECEIVED:", json.dumps(data, indent=2))
+    socketio.emit("transcript_update", data)
+    socketio.emit("transcript_update", data, room=data["sessionId"])
+
+    return jsonify({"ok": True}), 200
+
+@socketio.on("join_session")
+def on_join_session(data):
+    session_id = data.get("sessionId")
+    if session_id:
+        join_room(session_id)
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8001, debug=True)
+    # use_reloader=False to avoid Windows socket errors during reload
+    socketio.run(app, host="0.0.0.0", port=8001, debug=True, use_reloader=False)

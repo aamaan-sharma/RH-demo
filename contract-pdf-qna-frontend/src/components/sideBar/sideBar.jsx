@@ -1,8 +1,7 @@
 import { googleLogout, useGoogleLogin } from "@react-oauth/google";
 import axios from "axios";
-import React, { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router";
-import { useLocation } from "react-router-dom";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import plusIcon from "../../assets/plus.svg";
 import "./sideBar.scss";
 import HistoryButton from "./historyButton/historyButton.jsx";
@@ -12,6 +11,13 @@ import bulbIcon from "../../assets/bulb.svg";
 import loginIcon from "../../assets/login.svg";
 import { API_BASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET } from "../../config";
 import TryAgainButton from "../common/tryAgainButton/tryAgainButton";
+import {
+  clearAuthTokens,
+  getIdToken,
+  getPayloadObjectRaw,
+  getRefreshToken,
+  setAuthTokens,
+} from "../../utils/authStorage";
 
 const tokenUrl = "https://oauth2.googleapis.com/token";
 
@@ -23,6 +29,7 @@ const SideBar = (props) => {
   const [isActive, setIsActive] = useState(null);
   const [sidebarError, setSidebarError] = useState(null);
   const location = useLocation();
+  const cleanedAuthUrlRef = useRef(false);
 
   let navigate = useNavigate();
 
@@ -94,10 +101,7 @@ const SideBar = (props) => {
     props.setUserImage("");
     setSidebarHistory([]);
     setUserName("");
-    sessionStorage.removeItem("payloadObject");
-    sessionStorage.removeItem("idToken");
-    sessionStorage.removeItem("refreshToken");
-    sessionStorage.removeItem("timeoutId");
+    clearAuthTokens();
 
     googleLogout();
     let path = `/#`;
@@ -105,7 +109,7 @@ const SideBar = (props) => {
   }, [navigate, props]);
 
   useEffect(() => {
-    const queryParams = new URLSearchParams(window.location.search);
+    const queryParams = new URLSearchParams(location.search);
     let urlCode = queryParams.get("code");
 
     if (urlCode && !props.bearerToken) {
@@ -128,8 +132,6 @@ const SideBar = (props) => {
 
           props.setBearerToken(idToken);
           props.setRefreshToken(refreshToken);
-          sessionStorage.setItem("idToken", idToken);
-          sessionStorage.setItem("refreshToken", refreshToken);
           const parts = idToken.split(".");
           const decodedPayload = atob(parts[1]);
           const payloadObject = JSON.parse(decodedPayload);
@@ -141,31 +143,47 @@ const SideBar = (props) => {
           setIsLoggedIn(true);
 
           getSidebarHistory(idToken, props.selectedModel || "Search");
-          sessionStorage.setItem(
-            "payloadObject",
-            JSON.stringify(payloadObject)
-          );
+          setAuthTokens({ idToken, refreshToken, payloadObject });
+
+          // IMPORTANT: remove OAuth query params from browser history so back button doesn't land on auth URLs.
+          // Keep the current pathname + hash but clear the search string.
+          if (!cleanedAuthUrlRef.current && location.search) {
+            cleanedAuthUrlRef.current = true;
+            navigate(
+              { pathname: location.pathname, search: "", hash: location.hash },
+              { replace: true }
+            );
+          }
         })
         .catch((error) => {
           console.error("Error exchanging code for tokens:", error);
         });
     }
-    var payloadObject = JSON.parse(
-      JSON.parse(JSON.stringify(sessionStorage.getItem("payloadObject")))
-    );
+    const payloadObjectRaw = getPayloadObjectRaw();
+    var payloadObject = payloadObjectRaw ? JSON.parse(payloadObjectRaw) : null;
     if (payloadObject && !userName) {
       setUserName(payloadObject.name);
       props.setUserImage(payloadObject.picture);
       props.setUserEmail(payloadObject.email);
       setIsLoggedIn(true);
       getSidebarHistory(
-        sessionStorage.getItem("idToken"),
+        getIdToken(),
         props.selectedModel || "Search"
       );
-      props.setBearerToken(sessionStorage.getItem("idToken"));
-      props.setRefreshToken(sessionStorage.getItem("refreshToken"));
+      props.setBearerToken(getIdToken());
+      props.setRefreshToken(getRefreshToken());
+
+      // If we got here with OAuth params already in the URL (e.g. refresh/redirect),
+      // clean them so back button doesn't revisit them.
+      if (!cleanedAuthUrlRef.current && location.search) {
+        cleanedAuthUrlRef.current = true;
+        navigate(
+          { pathname: location.pathname, search: "", hash: location.hash },
+          { replace: true }
+        );
+      }
     }
-  }, [userName]);
+  }, [userName, location.search, location.pathname, location.hash, navigate]);
 
   useEffect(() => {
     setIsActive(location.pathname.split("/")[2]);
@@ -174,7 +192,7 @@ const SideBar = (props) => {
   useEffect(() => {
     if (!isLoggedIn) return;
     const mode = props.selectedModel || "Search";
-    getSidebarHistory(sessionStorage.getItem("idToken"), mode);
+    getSidebarHistory(getIdToken(), mode);
   }, [isLoggedIn, props.selectedModel, props.sidebarRefreshTick]);
 
   // Optimistically move a case into "Closed" immediately after approval.
@@ -201,7 +219,7 @@ const SideBar = (props) => {
       client_id: GOOGLE_CLIENT_ID,
       client_secret: GOOGLE_CLIENT_SECRET,
       grant_type: "refresh_token",
-      refreshToken: sessionStorage.getItem("refreshToken"),
+      refreshToken: getRefreshToken(),
     };
 
     const uninterceptedAxiosInstance = axios.create();
@@ -210,11 +228,10 @@ const SideBar = (props) => {
       .then((response) => {
         const idToken = response.data.id_token;
         props.setBearerToken(idToken);
-        sessionStorage.setItem("idToken", idToken);
         const parts = idToken.split(".");
         const decodedPayload = atob(parts[1]);
         const payloadObject = JSON.parse(decodedPayload);
-        sessionStorage.setItem("payloadObject", JSON.stringify(payloadObject));
+        setAuthTokens({ idToken, payloadObject });
       })
       .catch((error) => {
         console.error("Error exchanging code for tokens:", error);
@@ -250,7 +267,7 @@ const SideBar = (props) => {
   }, [handleTimeout, isLoggedIn, logout]);
 
   useEffect(() => {
-    sessionStorage.clear();
+    // Clearing auth tokens is handled by logout().
     logout();
   }, []);
 
@@ -376,7 +393,22 @@ const SideBar = (props) => {
       </div>
 
       <div className="options_container">
-        <div className="setting_section">
+        <div
+          className="setting_section"
+          onClick={() => {
+            const token = getIdToken();
+            if (!isLoggedIn || !token) {
+              props.setError("login");
+              navigate("/?error=login", { replace: true });
+              return;
+            }
+            window.open(
+              `${window.location.origin}/live-transcript`,
+              "_blank",
+              "noopener,noreferrer"
+            );
+          }}
+        >
           <img src={analyzeLiveIcon} alt="Setting Icon" />
           <div className="setting_text">Analyze Live</div>
         </div>
