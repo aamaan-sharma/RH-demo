@@ -1,112 +1,200 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import "./liveTranscript.scss";
 import { BACKEND_BASE, CCP_URL, REGION } from "../../config";
 
-
 const LiveTranscript = () => {
   const ccpContainerRef = useRef(null);
+  const ccpInitializedRef = useRef(false);
+  const [ccpInitError, setCcpInitError] = useState(null);
+  const [ccpInitRequested, setCcpInitRequested] = useState(false);
+  const [ccpInitInProgress, setCcpInitInProgress] = useState(false);
 
   const socket = useMemo(() => {
-    // Use websocket transport first; fallback allowed by socket.io
     return io(BACKEND_BASE, {
       transports: ["websocket", "polling"],
       reconnection: true,
       reconnectionAttempts: Infinity,
       reconnectionDelay: 500,
     });
-  }, [BACKEND_BASE]);
+  }, []);
 
   const [agentName, setAgentName] = useState("-");
   const [contactId, setContactId] = useState(null);
   const [callState, setCallState] = useState("IDLE");
+
   const [transcripts, setTranscripts] = useState([]);
+  // Reflect Amazon Connect login/CCP readiness (NOT backend socket connection).
+  const [isConnected, setIsConnected] = useState(false);
 
   const getTurnRole = (speaker) => {
-    const x = String(speaker ?? "").trim().toLowerCase();
-    // Backend normalizes to "Customer" | "CSR" | "Unknown" but keep fallbacks just in case
+    const x = String(speaker ?? "")
+      .trim()
+      .toLowerCase();
     if (!x) return "unknown";
-    if (x === "csr" || x.includes("csr") || x.includes("agent") || x.includes("rep") || x.includes("representative") || x.includes("support")) {
+    if (
+      x === "csr" ||
+      x.includes("csr") ||
+      x.includes("agent") ||
+      x.includes("rep") ||
+      x.includes("representative") ||
+      x.includes("support")
+    ) {
       return "agent";
     }
-    if (x === "customer" || x.includes("customer") || x.includes("caller") || x.includes("homeowner") || x.includes("policyholder") || x.includes("member")) {
+    if (
+      x === "customer" ||
+      x.includes("customer") ||
+      x.includes("caller") ||
+      x.includes("homeowner") ||
+      x.includes("policyholder") ||
+      x.includes("member")
+    ) {
       return "customer";
     }
     return "unknown";
   };
 
-  // De-dupe because your backend currently emits both:
-  // 1) socketio.emit("transcript_update", data)  (global)
-  // 2) socketio.emit("transcript_update", data, room=sessionId) (room)
   const seenRef = useRef(new Set());
 
-  useEffect(() => {
-    // ---- 1) init CCP once page loads ----
-    if (!ccpContainerRef.current || !window.connect) return;
+  const formatOffsetToTime = (ms) => {
+    const n = Number(ms);
+    if (!Number.isFinite(n) || n < 0) return "—";
+    const totalSeconds = Math.floor(n / 1000);
+    const mm = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
+    const ss = String(totalSeconds % 60).padStart(2, "0");
+    return `${mm}:${ss}`;
+  };
 
-    window.connect.core.initCCP(ccpContainerRef.current, {
-      ccpUrl: CCP_URL, 
-      loginPopup: true,
-      loginPopupAutoClose: true,
-      region: REGION, 
-      softphone: {
-        allowFramedSoftphone: true, 
-      },
-    });
+  const isCallConnected = callState === "CONNECTED";
 
-    // ---- 2) agent info ----
-    window.connect.agent((agent) => {
-      setAgentName(agent.getName ? agent.getName() : "Agent");
+  const getEffectiveCcpUrl = () => {
+    if (!CCP_URL) return CCP_URL;
+    try {
+      const u = new URL(CCP_URL);
+      const p = u.pathname.replace(/\/+$/, "");
+      if (p === "" || p === "/") u.pathname = "/ccp-v2/";
+      else if (p === "/connect/ccp-v2") u.pathname = "/ccp-v2/";
+      else if (p === "/connect/ccp") u.pathname = "/ccp/";
+      return u.toString();
+    } catch {
+      return CCP_URL;
+    }
+  };
 
-      agent.onStateChange(() => {
-        // optional: reflect agent state if you want
+  const initCcp = () => {
+    if (!ccpContainerRef.current || !window.connect) {
+      setCcpInitError(
+        "Amazon Connect Streams not loaded (window.connect missing)."
+      );
+      setCcpInitInProgress(false);
+      return;
+    }
+
+    const container = ccpContainerRef.current;
+    const effectiveCcpUrl = getEffectiveCcpUrl();
+
+    if (!effectiveCcpUrl) {
+      setCcpInitError("CCP URL is missing. Set VITE_CCP_URL.");
+      setCcpInitInProgress(false);
+      return;
+    }
+
+    if (ccpInitializedRef.current) return;
+    if (container.querySelector("iframe")) return;
+    ccpInitializedRef.current = true;
+    setCcpInitError(null);
+    setCcpInitInProgress(true);
+
+    try {
+      window.connect.core.initCCP(container, {
+        ccpUrl: effectiveCcpUrl,
+        loginPopup: true,
+        loginPopupAutoClose: true,
+        ccpAckTimeout: 15000,
+        region: REGION,
+        softphone: {
+          allowFramedSoftphone: true,
+        },
       });
-    });
 
-    // ---- 3) contact lifecycle ----
-    // When a new contact (call) arrives/starts, Streams gives a Contact object.
-    // We'll use contactId as your sessionId (matches Lambda: sessionId = ContactId).
-    window.connect.contact((contact) => {
-      const id = contact.getContactId ? contact.getContactId() : null;
-      if (id) {
-        setContactId(id);
-        setCallState("CONTACT_CREATED");
+      window.connect.agent((agent) => {
+        setAgentName(agent.getName ? agent.getName() : "Agent");
+        setIsConnected(true);
+        setCcpInitInProgress(false);
+        // Best-effort: keep status in sync if Streams exposes state changes.
+        try {
+          const update = () => {
+            // `getState()` exists on agent in Streams; if unavailable, keep "connected" once agent resolves.
+            const s = agent.getState ? agent.getState() : null;
+            if (s) setIsConnected(true);
+          };
+          update();
+          if (agent.onStateChange) agent.onStateChange(update);
+        } catch {
+          // ignore
+        }
+      });
 
-        // Join backend room (so you can isolate transcripts per call)
-        socket.emit("join_session", { sessionId: id });
+      window.connect.contact((contact) => {
+        const id = contact.getContactId ? contact.getContactId() : null;
+        if (id) {
+          setContactId(id);
+          setCallState("CONTACT_CREATED");
+          socket.emit("join_session", { sessionId: id });
+          // reset transcript view for new call
+          seenRef.current.clear();
+          setTranscripts([]);
+        }
 
-        // reset transcript view for new call
-        seenRef.current.clear();
-        setTranscripts([]);
+        if (contact.onConnecting) {
+          contact.onConnecting(() => setCallState("CONNECTING"));
+        }
+        if (contact.onConnected) {
+          contact.onConnected(() => setCallState("CONNECTED"));
+        }
+        if (contact.onEnded) {
+          contact.onEnded(() => setCallState("ENDED"));
+        }
+      });
+
+      // Best-effort: if Streams reports auth issues, mark disconnected.
+      try {
+        if (window.connect?.core?.onAuthFail) {
+          window.connect.core.onAuthFail(() => setIsConnected(false));
+        }
+      } catch {
+        // ignore
       }
+    } catch (e) {
+      ccpInitializedRef.current = false;
+      setCcpInitError(e?.message || String(e));
+      setIsConnected(false);
+      setCcpInitInProgress(false);
+    }
+  };
 
-      // Optional state hooks
-      if (contact.onConnecting) {
-        contact.onConnecting(() => setCallState("CONNECTING"));
-      }
-      if (contact.onConnected) {
-        contact.onConnected(() => setCallState("CONNECTED"));
-      }
-      if (contact.onEnded) {
-        contact.onEnded(() => {
-          setCallState("ENDED");
-          // keep transcript visible after end; you can also clear contactId if you want
-          // setContactId(null);
-        });
-      }
-    });
-
-    // Cleanup not strictly necessary for a POC
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [CCP_URL, REGION, socket]);
+  const handleCcpLoginClick = () => {
+    setCcpInitRequested(true);
+    setCcpInitError(null);
+    // Streams opens a named popup; pre-open it on user gesture to avoid popup blockers.
+    try {
+      const loginPopupName =
+        window.connect?.MasterTopics?.LOGIN_POPUP || "connect::loginPopup";
+      window.open("about:blank", loginPopupName, "width=420,height=720");
+    } catch {
+      // ignore
+    }
+    // Now initialize CCP (still requires user gesture for the popup).
+    initCcp();
+  };
 
   useEffect(() => {
-    // ---- 4) receive transcripts from backend ----
     const handler = (msg) => {
       // Only show current call's transcript (sessionId == ContactId)
-      if (contactId && msg?.sessionId !== contactId) return;
+      if (!contactId) return;
+      if (msg?.sessionId !== contactId) return;
 
-      // de-dupe (backend emits global + room)
       const key = [
         msg?.sessionId,
         msg?.speaker,
@@ -134,100 +222,181 @@ const LiveTranscript = () => {
     };
 
     socket.on("transcript_update", handler);
-
     return () => {
       socket.off("transcript_update", handler);
     };
   }, [socket, contactId]);
 
+  useEffect(() => {
+    const container = ccpContainerRef.current;
+    return () => {
+      ccpInitializedRef.current = false;
+      if (container) container.innerHTML = "";
+      setIsConnected(false);
+      try {
+        socket?.disconnect?.();
+      } catch {
+        // ignore
+      }
+    };
+  }, [socket]);
+
   return (
-    <div style={{ display: "flex", height: "100vh", fontFamily: "Arial, sans-serif" }}>
-      {/* LEFT: CCP */}
-      <div style={{ width: 420, borderRight: "1px solid #ddd", padding: 12 }}>
-        <h3 style={{ margin: "8px 0" }}>Amazon Connect CCP</h3>
-        <div style={{ fontSize: 13, marginBottom: 8 }}>
-          <div><b>Agent:</b> {agentName}</div>
-          <div><b>Call State:</b> {callState}</div>
-          <div><b>ContactId / SessionId:</b> {contactId || "-"}</div>
-          <div style={{ marginTop: 8, fontSize: 12, color: "#555" }}>
-            If you see a blank iframe: allowlist this web app domain in Connect and use correct CCP URL.
+    <div className="live_transcript_layout">
+      {/* LEFT: Amazon Connect CCP */}
+      <aside className="lt_left_ccp">
+        <div className="live_transcript_header lt_left_ccp_header">
+          <div className="title">Amazon Connect CCP</div>
+          <div className="lt_conn_pill">
+            {isConnected ? "Connected" : "Disconnected"}
           </div>
         </div>
 
-        <div
-          ref={ccpContainerRef}
-          id="ccp-container"
-          style={{
-            width: "100%",
-            height: "80vh",
-            border: "1px solid #ccc",
-            borderRadius: 6,
-            overflow: "hidden",
-          }}
-        />
-      </div>
+        {!isConnected ? (
+          <div className="live_transcript_card lt_ccp_login">
+            <div className="label">AMAZON CONNECT</div>
+            <div className="lt_ccp_login_body">
+              <div className="lt_ccp_login_text">
+                {ccpInitRequested
+                  ? ccpInitInProgress
+                    ? "Waiting for Amazon Connect login…"
+                    : "Complete login in the popup, then return here."
+                  : "Click to login, then the CCP panel will appear here."}
+              </div>
+              <button
+                type="button"
+                className="back_button lt_ccp_login_button"
+                onClick={handleCcpLoginClick}
+                disabled={ccpInitInProgress}
+              >
+                {ccpInitInProgress ? "Logging in…" : "Login to Amazon Connect"}
+              </button>
+              {ccpInitError ? (
+                <div className="lt_ccp_error">{ccpInitError}</div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
 
-      {/* RIGHT: Transcript */}
-      <div style={{ flex: 1, padding: 16 }}>
-        <h3 style={{ margin: "8px 0" }}>Live Transcript</h3>
-        <div style={{ fontSize: 13, color: "#666", marginBottom: 12 }}>
-          This shows text only for the current <b>ContactId</b>. Lambda already sends <code>sessionId = ContactId</code>.
+        <div className="live_transcript_card lt_ccp_meta">
+          <div className="lt_kv">
+            <span className="k">Agent:</span>
+            <span className="v">{agentName}</span>
+          </div>
+          <div className="lt_kv">
+            <span className="k">Call State:</span>
+            <span className="v">{callState}</span>
+          </div>
+          {contactId ? (
+            <div className="lt_kv">
+              <span className="k">ContactId / SessionId:</span>
+              <span className="v mono" title={contactId}>
+                {contactId}
+              </span>
+            </div>
+          ) : null}
         </div>
 
-        <div
-          className="lt_chat"
-          style={{
-            height: "85vh",
-            overflowY: "auto",
-            border: "1px solid #ddd",
-            borderRadius: 8,
-            padding: 12,
-            background: "#fafafa",
-          }}
-        >
-          {transcripts.length === 0 ? (
-            <div style={{ color: "#777" }}>
-              No transcripts yet. Start a call in CCP and wait for Transcribe → Kinesis → Lambda → Backend → UI.
-            </div>
-          ) : (
-            transcripts.map((t, idx) => (
-              (() => {
-                const role = getTurnRole(t.speaker);
-                const rowClass =
-                  role === "agent"
-                    ? "lt_row lt_row--right"
-                    : role === "customer"
-                      ? "lt_row lt_row--left"
-                      : "lt_row lt_row--left";
-                const bubbleClass =
-                  role === "agent"
-                    ? "lt_bubble lt_bubble--agent"
-                    : role === "customer"
-                      ? "lt_bubble lt_bubble--customer"
-                      : "lt_bubble lt_bubble--unknown";
+        {/* IMPORTANT: keep the container mounted so initCCP() has a DOM node to attach to.
+            Otherwise clicking "Login" would only open about:blank and initCCP() would no-op. */}
+        <div className="live_transcript_card lt_ccp_frame">
+          <div ref={ccpContainerRef} id="ccp-container" />
+        </div>
+      </aside>
 
-                return (
-                  <div key={idx} className={rowClass}>
-                    <div className={bubbleClass}>
-                      <div className="lt_meta">
-                        <span className="lt_speaker">{t.speaker}</span>
-                        {t.begin != null && t.end != null ? (
-                          <span className="lt_time">{`(${t.begin}–${t.end}ms)`}</span>
-                        ) : null}
-                        {t.isPartial ? <span className="lt_partial">partial</span> : null}
+      {/* CENTER: Transcript */}
+      <main className="lt_center">
+        <div className="live_transcript_header lt_center_header">
+          <div className="title_row">
+            <div className="title">Call Transcript</div>
+            {isCallConnected ? (
+              <div className="lt_streaming_badge">
+                Streaming
+                <span className="lt_ellipsis" aria-hidden="true">
+                  …
+                </span>
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="live_transcript_center_body">
+          <div className="live_transcript_card lt_transcript_card">
+            <div className="lt_transcript_scroller">
+              {transcripts.length === 0 ? (
+                <div className="lt_empty_state">No transcript yet.</div>
+              ) : (
+                <div className="lt_chat">
+                  {transcripts.map((t, idx) => {
+                    const role = getTurnRole(t.speaker);
+                    const rowClass =
+                      role === "agent"
+                        ? "lt_row lt_row--right"
+                        : "lt_row lt_row--left";
+                    const bubbleClass =
+                      role === "agent"
+                        ? "lt_bubble lt_bubble--agent"
+                        : role === "customer"
+                        ? "lt_bubble lt_bubble--customer"
+                        : "lt_bubble lt_bubble--unknown";
+
+                    return (
+                      <div key={idx} className={rowClass}>
+                        <div className={bubbleClass}>
+                          <div className="lt_meta">
+                            <span className="lt_speaker">
+                              {String(t?.speaker || "UNKNOWN").toUpperCase()}
+                            </span>
+                            <span className="lt_time">
+                              {formatOffsetToTime(t?.begin)}
+                            </span>
+                          </div>
+                          <div className="lt_text">{t?.text || ""}</div>
+                        </div>
                       </div>
-                      <div className="lt_text">{t.text}</div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {isCallConnected ? (
+                <div className="lt_row lt_row--left" aria-label="Typing">
+                  <div className="lt_bubble lt_bubble--unknown lt_typing_bubble">
+                    <div className="lt_typing_dots" aria-hidden="true">
+                      <span />
+                      <span />
+                      <span />
                     </div>
                   </div>
-                );
-              })()
-            ))
-          )}
+                </div>
+              ) : null}
+            </div>
+          </div>
         </div>
-      </div>
+      </main>
+
+      {/* RIGHT: Panel */}
+      <aside className="lt_right">
+        <div className="live_transcript_card lt_right_section">
+          <div className="label">USER DETAILS</div>
+          <div className="lt_placeholder">
+            <div>Name: —</div>
+            <div>Policy: —</div>
+            <div>Claim: —</div>
+          </div>
+        </div>
+
+        <div className="live_transcript_card lt_right_section">
+          <div className="label">AI SUGGESTIONS</div>
+          <ul className="lt_placeholder_list">
+            <li>Ask for policy number and address to verify identity.</li>
+            <li>Confirm incident date and type of damage.</li>
+            <li>Summarize next steps and expected timelines.</li>
+          </ul>
+        </div>
+      </aside>
     </div>
   );
 };
 
 export default LiveTranscript;
-

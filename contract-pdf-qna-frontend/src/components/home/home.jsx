@@ -13,6 +13,7 @@ import SamplePrompt from "../samplePrompt/samplePrompt";
 import SideBar from "../sideBar/sideBar";
 import { setHeaders } from "../utils/apiUtils";
 import { API_BASE_URL, TRANSCRIPTS_API_BASE_URL } from "../../config";
+import { getIdToken, getPayloadObjectRaw } from "../../utils/authStorage";
 import "./home.scss";
 import ChatList from "../chatList/chatList";
 import CallsTranscriptModal from "../callsTranscriptModal/callsTranscriptModal";
@@ -83,7 +84,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
   useEffect(() => {
     // Pull display name from the Google login payload stored by SideBar.
     try {
-      const raw = sessionStorage.getItem("payloadObject");
+      const raw = getPayloadObjectRaw();
       if (!raw) return;
       const obj = JSON.parse(raw);
       const name = obj?.name || "";
@@ -92,6 +93,13 @@ const Home = ({ bearerToken, setBearerToken }) => {
       // ignore
     }
   }, []);
+
+  useEffect(() => {
+    // If a protected route redirects here, reflect it in the existing error/highlight UX.
+    const q = new URLSearchParams(location.search);
+    const err = q.get("error");
+    if (err === "login") setError("login");
+  }, [location.search]);
 
   const hasFinalAnswerChat = chats?.some(
     (c) => c?.entered_query === "Final Answer for transcript"
@@ -200,7 +208,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
     if (callsGenerationStage === "generating") {
       return;
     }
-    if (!sessionStorage.getItem("idToken")) {
+    if (!getIdToken()) {
       setError("login");
       return;
     }
@@ -393,7 +401,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
     };
 
     const runStreaming = async () => {
-      const token = sessionStorage.getItem("idToken");
+      const token = getIdToken();
       if (!token) {
         runNonStreamingFallback();
         return;
@@ -841,7 +849,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
   }, []);
 
   const handleInputSubmit = () => {
-    if (!sessionStorage.getItem("idToken")) {
+    if (!getIdToken()) {
       setError("login");
       return;
     }

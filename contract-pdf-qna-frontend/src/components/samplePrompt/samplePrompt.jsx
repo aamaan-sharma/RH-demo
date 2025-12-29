@@ -54,7 +54,7 @@ const SamplePrompt = ({ gptModel, input, setInput }) => {
 
   return (
     <div className="prompt_wrapper">
-      <div className="title">What would you like to focus on today?</div>
+      <div className="title">How can I help you today?</div>
       <div className="subtitle">
         Your AI-powered copilot is ready to assist you!
       </div>

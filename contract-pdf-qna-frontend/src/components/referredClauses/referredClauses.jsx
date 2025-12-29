@@ -3,6 +3,7 @@ import "./referredClauses.scss";
 import { useLocation } from "react-router-dom";
 import axios from "axios";
 import { API_BASE_URL } from "../../config";
+import { getIdToken } from "../../utils/authStorage";
 
 const ReferredClauses = () => {
   const location = useLocation();
@@ -17,8 +18,7 @@ const ReferredClauses = () => {
   const [gptModel, setGptModel] = useState("");
   const [wordCount, setWordCount] = useState();
 
-  // Retrieve the token directly from session storage
-  const bearerToken = sessionStorage.getItem("idToken");
+  const bearerToken = getIdToken();
 
   function removeMetadata(inputString) {
     const startIndex = inputString.indexOf("{'source':");

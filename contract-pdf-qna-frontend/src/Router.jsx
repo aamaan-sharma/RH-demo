@@ -1,9 +1,16 @@
 import React, { useState } from "react";
-import { Route, BrowserRouter as Router, Routes } from "react-router-dom";
+import { Navigate, Route, BrowserRouter as Router, Routes } from "react-router-dom";
 import Home from "./components/home/home";
 import Insights from "./components/insights/insights";
 import ReferredClauses from "./components/referredClauses/referredClauses";
 import LiveTranscript from "./components/liveTranscript/liveTranscript";
+import { getIdToken } from "./utils/authStorage";
+
+const RequireLogin = ({ children }) => {
+  const token = getIdToken();
+  if (!token) return <Navigate to="/?error=login" replace />;
+  return children;
+};
 
 const AppRoutes = () => {
   const [bearerToken, setBearerToken] = useState("");
@@ -34,7 +41,14 @@ const AppRoutes = () => {
           element={<ReferredClauses />}
         />
         <Route path="/insights" element={<Insights />} />
-        <Route path="/live-transcript" element={<LiveTranscript />} />
+        <Route
+          path="/live-transcript"
+          element={
+            <RequireLogin>
+              <LiveTranscript />
+            </RequireLogin>
+          }
+        />
       </Routes>
     </Router>
   );

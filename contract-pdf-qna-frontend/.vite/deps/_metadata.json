@@ -1,0 +1,70 @@
+{
+  "hash": "77c6789b",
+  "configHash": "ef22a0f6",
+  "lockfileHash": "212e89f9",
+  "browserHash": "3474c561",
+  "optimized": {
+    "react": {
+      "src": "../../node_modules/react/index.js",
+      "file": "react.js",
+      "fileHash": "b2442f50",
+      "needsInterop": true
+    },
+    "react-dom/client": {
+      "src": "../../node_modules/react-dom/client.js",
+      "file": "react-dom_client.js",
+      "fileHash": "4cdecc17",
+      "needsInterop": true
+    },
+    "axios": {
+      "src": "../../node_modules/axios/index.js",
+      "file": "axios.js",
+      "fileHash": "85971493",
+      "needsInterop": false
+    },
+    "@react-oauth/google": {
+      "src": "../../node_modules/@react-oauth/google/dist/index.esm.js",
+      "file": "@react-oauth_google.js",
+      "fileHash": "5e698d54",
+      "needsInterop": false
+    },
+    "react-router-dom": {
+      "src": "../../node_modules/react-router-dom/dist/index.js",
+      "file": "react-router-dom.js",
+      "fileHash": "d15744a8",
+      "needsInterop": false
+    },
+    "regenerator-runtime": {
+      "src": "../../node_modules/regenerator-runtime/runtime.js",
+      "file": "regenerator-runtime.js",
+      "fileHash": "670d5681",
+      "needsInterop": true
+    },
+    "react-speech-recognition": {
+      "src": "../../node_modules/react-speech-recognition/lib/index.js",
+      "file": "react-speech-recognition.js",
+      "fileHash": "1c64aacf",
+      "needsInterop": true
+    },
+    "react-router": {
+      "src": "../../node_modules/react-router/dist/index.js",
+      "file": "react-router.js",
+      "fileHash": "200ae2c6",
+      "needsInterop": false
+    }
+  },
+  "chunks": {
+    "chunk-TNTPHDQH": {
+      "file": "chunk-TNTPHDQH.js"
+    },
+    "chunk-2IA6OFP6": {
+      "file": "chunk-2IA6OFP6.js"
+    },
+    "chunk-32E4H3EV": {
+      "file": "chunk-32E4H3EV.js"
+    },
+    "chunk-G3PMV62Z": {
+      "file": "chunk-G3PMV62Z.js"
+    }
+  }
+}

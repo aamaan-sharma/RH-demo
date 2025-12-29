@@ -1,5 +1,7 @@
+import { getIdToken } from "../../utils/authStorage";
+
 export const setHeaders = (config) => {
-  const token = sessionStorage.getItem("idToken");
+  const token = getIdToken();
   if (token) {
     config.headers["Authorization"] = "Bearer " + token;
     config.headers["Content-Type"] = "application/json";
