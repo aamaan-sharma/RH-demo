@@ -27,6 +27,11 @@ const LiveTranscript = () => {
   // Reflect Amazon Connect login/CCP readiness (NOT backend socket connection).
   const [isConnected, setIsConnected] = useState(false);
 
+  // Live Copilot UI state (populated by backend `suggestion_update`)
+  const [copilotUser, setCopilotUser] = useState(null);
+  const [copilotCards, setCopilotCards] = useState([]);
+  const [copilotStatus, setCopilotStatus] = useState(null);
+
   const getTurnRole = (speaker) => {
     const x = String(speaker ?? "")
       .trim()
@@ -145,16 +150,37 @@ const LiveTranscript = () => {
           // reset transcript view for new call
           seenRef.current.clear();
           setTranscripts([]);
+          setCopilotUser(null);
+          setCopilotCards([]);
+          setCopilotStatus(null);
         }
 
         if (contact.onConnecting) {
           contact.onConnecting(() => setCallState("CONNECTING"));
         }
         if (contact.onConnected) {
-          contact.onConnected(() => setCallState("CONNECTED"));
+          contact.onConnected(() => {
+            setCallState("CONNECTED");
+            // Enable copilot ONLY when call is connected (Analyze Live tab requirement)
+            try {
+              const sid = contact.getContactId ? contact.getContactId() : id;
+              if (sid) socket.emit("copilot_enable", { sessionId: sid });
+            } catch {
+              // ignore
+            }
+          });
         }
         if (contact.onEnded) {
-          contact.onEnded(() => setCallState("ENDED"));
+          contact.onEnded(() => {
+            setCallState("ENDED");
+            // Disable copilot when call ends
+            try {
+              const sid = contact.getContactId ? contact.getContactId() : id;
+              if (sid) socket.emit("copilot_disable", { sessionId: sid });
+            } catch {
+              // ignore
+            }
+          });
         }
       });
 
@@ -224,6 +250,38 @@ const LiveTranscript = () => {
     socket.on("transcript_update", handler);
     return () => {
       socket.off("transcript_update", handler);
+    };
+  }, [socket, contactId]);
+
+  useEffect(() => {
+    const handler = (msg) => {
+      // Only show current call's copilot suggestions
+      if (!contactId) return;
+      if (msg?.sessionId !== contactId) return;
+
+      // Accept flexible payload shapes, prefer `customer` + `cards`
+      const customer = msg?.customer || msg?.user || null;
+      const cards = Array.isArray(msg?.cards)
+        ? msg.cards
+        : Array.isArray(msg?.suggestions)
+        ? msg.suggestions
+        : [];
+
+      setCopilotUser(customer);
+      setCopilotCards(cards);
+    };
+
+    const statusHandler = (msg) => {
+      if (!contactId) return;
+      if (msg?.sessionId && msg?.sessionId !== contactId) return;
+      setCopilotStatus(msg);
+    };
+
+    socket.on("suggestion_update", handler);
+    socket.on("copilot_status", statusHandler);
+    return () => {
+      socket.off("suggestion_update", handler);
+      socket.off("copilot_status", statusHandler);
     };
   }, [socket, contactId]);
 
@@ -379,20 +437,82 @@ const LiveTranscript = () => {
       <aside className="lt_right">
         <div className="live_transcript_card lt_right_section">
           <div className="label">USER DETAILS</div>
-          <div className="lt_placeholder">
-            <div>Name: —</div>
-            <div>Policy: —</div>
-            <div>Claim: —</div>
-          </div>
+          {copilotUser ? (
+            <div className="lt_placeholder">
+              <div>Verified: {copilotUser?.verified ? "Yes" : "No"}</div>
+              <div>
+                Name: {copilotUser?.name || copilotUser?.fullName || "—"}
+              </div>
+              <div>Phone: {copilotUser?.phone || "—"}</div>
+              <div>Contract Type: {copilotUser?.contractType || "—"}</div>
+              <div>Plan: {copilotUser?.plan || "—"}</div>
+              <div>
+                State: {copilotUser?.state || copilotUser?.selectedState || "—"}
+              </div>
+            </div>
+          ) : (
+            <div className="lt_placeholder">
+              <div>Verified: —</div>
+              <div>Name: —</div>
+              <div>Phone: —</div>
+              <div>Contract Type: —</div>
+              <div>Plan: —</div>
+              <div>State: —</div>
+            </div>
+          )}
+          {copilotStatus ? (
+            <div
+              className="lt_placeholder"
+              style={{ marginTop: 10, opacity: 0.8 }}
+            >
+              <div>
+                Copilot: {copilotStatus?.enabled ? "Enabled" : "Disabled"}
+              </div>
+            </div>
+          ) : null}
         </div>
 
         <div className="live_transcript_card lt_right_section">
           <div className="label">AI SUGGESTIONS</div>
-          <ul className="lt_placeholder_list">
-            <li>Ask for policy number and address to verify identity.</li>
-            <li>Confirm incident date and type of damage.</li>
-            <li>Summarize next steps and expected timelines.</li>
-          </ul>
+          {copilotCards && copilotCards.length > 0 ? (
+            <div className="lt_placeholder">
+              {copilotCards.map((c, idx) => (
+                <div key={idx} style={{ marginBottom: 12 }}>
+                  <div style={{ fontWeight: 600 }}>
+                    {c?.title || c?.heading || "Suggestion"}
+                  </div>
+                  {c?.csrScript ? (
+                    <div style={{ marginTop: 6, opacity: 0.95 }}>
+                      {c.csrScript}
+                    </div>
+                  ) : c?.text ? (
+                    <div style={{ marginTop: 6, opacity: 0.95 }}>{c.text}</div>
+                  ) : null}
+                  {c?.evidence ? (
+                    <div
+                      style={{
+                        marginTop: 6,
+                        opacity: 0.75,
+                        fontStyle: "italic",
+                      }}
+                    >
+                      “{c.evidence}”
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <ul className="lt_placeholder_list">
+              <li>
+                Ask for customer phone number to verify identity (if needed).
+              </li>
+              <li>
+                Confirm the appliance/system and what symptom is happening.
+              </li>
+              <li>Summarize next steps and expected timelines.</li>
+            </ul>
+          )}
         </div>
       </aside>
     </div>

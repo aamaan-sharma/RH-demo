@@ -9,7 +9,11 @@ import settingIcon from "../../assets/setting.svg";
 import analyzeLiveIcon from "../../assets/analyze_live.svg";
 import bulbIcon from "../../assets/bulb.svg";
 import loginIcon from "../../assets/login.svg";
-import { API_BASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET } from "../../config";
+import {
+  API_BASE_URL,
+  GOOGLE_CLIENT_ID,
+  GOOGLE_CLIENT_SECRET,
+} from "../../config";
 import TryAgainButton from "../common/tryAgainButton/tryAgainButton";
 import {
   clearAuthTokens,
@@ -166,10 +170,7 @@ const SideBar = (props) => {
       props.setUserImage(payloadObject.picture);
       props.setUserEmail(payloadObject.email);
       setIsLoggedIn(true);
-      getSidebarHistory(
-        getIdToken(),
-        props.selectedModel || "Search"
-      );
+      getSidebarHistory(getIdToken(), props.selectedModel || "Search");
       props.setBearerToken(getIdToken());
       props.setRefreshToken(getRefreshToken());
 
@@ -277,7 +278,9 @@ const SideBar = (props) => {
       <div className="new_chat_button" onClick={() => setChatUrl()}>
         <img src={plusIcon} alt="plus icon" />
         <div className="button_name">
-          {(props.selectedModel || "Search") === "Calls" ? "New Case" : "New Chat"}
+          {(props.selectedModel || "Search") === "Calls"
+            ? "New Case"
+            : "New Chat"}
         </div>
       </div>
 
@@ -296,7 +299,9 @@ const SideBar = (props) => {
             </div>
           ) : sidebarError ? (
             <div className="history_error">
-              <div className="error_text">Failed to load history. Please try again.</div>
+              <div className="error_text">
+                Failed to load history. Please try again.
+              </div>
               <TryAgainButton
                 onRetry={() => {
                   setSidebarError(null);
@@ -306,77 +311,33 @@ const SideBar = (props) => {
                 }}
               />
             </div>
-          ) : (
-            (props.selectedModel || "Search") === "Calls" ? (
-              (() => {
-                const sortedHistory = (sidebarHistory || []).slice().sort((a, b) => {
+          ) : (props.selectedModel || "Search") === "Calls" ? (
+            (() => {
+              const sortedHistory = (sidebarHistory || [])
+                .slice()
+                .sort((a, b) => {
                   const at = Date.parse(a?.updatedAt || "") || 0;
                   const bt = Date.parse(b?.updatedAt || "") || 0;
                   return bt - at;
                 });
-                const openCases = sortedHistory.filter(
-                  (c) => (c?.status || "active").toLowerCase() !== "inactive"
-                );
-                const closedCases = sortedHistory.filter(
-                  (c) => (c?.status || "active").toLowerCase() === "inactive"
-                );
-                const shouldOpenClosed = Boolean(props.recentlyClosedConversationId);
+              const openCases = sortedHistory.filter(
+                (c) => (c?.status || "active").toLowerCase() !== "inactive"
+              );
+              const closedCases = sortedHistory.filter(
+                (c) => (c?.status || "active").toLowerCase() === "inactive"
+              );
+              const shouldOpenClosed = Boolean(
+                props.recentlyClosedConversationId
+              );
 
-                const renderCaseRow = (chat, index) => (
-                  <HistoryButton
-                    key={chat?.conversationId || index}
-                    setError={props.setError}
-                    name={chat.conversationName}
-                    conversationId={chat.conversationId}
-                    conversationMode={chat.conversationMode}
-                    status={chat.status}
-                    setGptModel={props.setGptModel}
-                    isActive={isActive}
-                    setIsActive={setIsActive}
-                    bearerToken={props.bearerToken}
-                    getSidebarHistory={(token) =>
-                      getSidebarHistory(token, props.selectedModel || "Search")
-                    }
-                  />
-                );
-
-                return (
-                  <div className="cases_wrapper">
-                    <details className="case_group" open>
-                      <summary className="case_group_summary">
-                        Open <span className="count">{openCases.length}</span>
-                      </summary>
-                      <div className="case_group_list">
-                        {openCases.length > 0 ? (
-                          openCases.map(renderCaseRow)
-                        ) : (
-                          <div className="empty_state">No open cases.</div>
-                        )}
-                      </div>
-                    </details>
-                    <details className="case_group" open={shouldOpenClosed ? true : undefined}>
-                      <summary className="case_group_summary">
-                        Closed <span className="count">{closedCases.length}</span>
-                      </summary>
-                      <div className="case_group_list">
-                        {closedCases.length > 0 ? (
-                          closedCases.map(renderCaseRow)
-                        ) : (
-                          <div className="empty_state">No closed cases.</div>
-                        )}
-                      </div>
-                    </details>
-                  </div>
-                );
-              })()
-            ) : (
-              sidebarHistory.map((chat, index) => (
+              const renderCaseRow = (chat, index) => (
                 <HistoryButton
-                  key={index}
+                  key={chat?.conversationId || index}
                   setError={props.setError}
                   name={chat.conversationName}
                   conversationId={chat.conversationId}
                   conversationMode={chat.conversationMode}
+                  status={chat.status}
                   setGptModel={props.setGptModel}
                   isActive={isActive}
                   setIsActive={setIsActive}
@@ -385,8 +346,57 @@ const SideBar = (props) => {
                     getSidebarHistory(token, props.selectedModel || "Search")
                   }
                 />
-              ))
-            )
+              );
+
+              return (
+                <div className="cases_wrapper">
+                  <details className="case_group" open>
+                    <summary className="case_group_summary">
+                      Open <span className="count">{openCases.length}</span>
+                    </summary>
+                    <div className="case_group_list">
+                      {openCases.length > 0 ? (
+                        openCases.map(renderCaseRow)
+                      ) : (
+                        <div className="empty_state">No open cases.</div>
+                      )}
+                    </div>
+                  </details>
+                  <details
+                    className="case_group"
+                    open={shouldOpenClosed ? true : undefined}
+                  >
+                    <summary className="case_group_summary">
+                      Closed <span className="count">{closedCases.length}</span>
+                    </summary>
+                    <div className="case_group_list">
+                      {closedCases.length > 0 ? (
+                        closedCases.map(renderCaseRow)
+                      ) : (
+                        <div className="empty_state">No closed cases.</div>
+                      )}
+                    </div>
+                  </details>
+                </div>
+              );
+            })()
+          ) : (
+            sidebarHistory.map((chat, index) => (
+              <HistoryButton
+                key={index}
+                setError={props.setError}
+                name={chat.conversationName}
+                conversationId={chat.conversationId}
+                conversationMode={chat.conversationMode}
+                setGptModel={props.setGptModel}
+                isActive={isActive}
+                setIsActive={setIsActive}
+                bearerToken={props.bearerToken}
+                getSidebarHistory={(token) =>
+                  getSidebarHistory(token, props.selectedModel || "Search")
+                }
+              />
+            ))
           )}
         </div>
         <div className="gredient"></div>
