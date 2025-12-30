@@ -1,0 +1,40 @@
+services:
+  contract-pdf-qna:
+    # Option C: build/run as linux/amd64 (useful on Apple Silicon to leverage prebuilt wheels).
+    # Override if needed: export DOCKER_PLATFORM=linux/arm64 (or omit).
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
+    build: .
+    ports:
+      - "8001:8001"
+    # Loads env vars from `./.env` (local file; not baked into the image).
+    env_file:
+      - .env
+    volumes:
+      # Optional: mount local BigQuery credentials file (not baked into image)
+      - ./bigquery.json:/run/secrets/bigquery.json:ro
+      # Optional: mount a custom CA bundle if you have one (keep commented if file doesn't exist)
+      # - ./cacert.pem:/run/secrets/cacert.pem:ro
+    environment:
+      # ---- required (examples; set in your shell or .env file used by docker compose) ----
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      MONGO_URI: ${MONGO_URI}
+      MILVUS_HOST: ${MILVUS_HOST}
+      JWT_AUDIENCE: ${JWT_AUDIENCE}
+      JWKS_URL: ${JWKS_URL}
+      # Docker default: don't run in debug mode
+      FLASK_DEBUG: ${FLASK_DEBUG:-0}
+      PORT: ${PORT:-8001}
+
+      # ---- BigQuery creds via env (choose ONE) ----
+      # BIGQUERY_SERVICE_ACCOUNT_JSON: ${BIGQUERY_SERVICE_ACCOUNT_JSON}
+      # BIGQUERY_SERVICE_ACCOUNT_JSON_BASE64: ${BIGQUERY_SERVICE_ACCOUNT_JSON_BASE64}
+      # ---- BigQuery creds via mounted file ----
+      # (matches the volume mount above)
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/bigquery.json
+
+      # ---- GCS creds ----
+      # Force app.py to use the explicit service-account path (avoids ADC invalid_scope in containers)
+      GCP_SERVICE_ACCOUNT_PATH: /run/secrets/bigquery.json
+
+    # If you want automatic restarts:
+    # restart: unless-stopped

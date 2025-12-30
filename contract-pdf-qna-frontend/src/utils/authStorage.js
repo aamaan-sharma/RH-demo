@@ -4,7 +4,8 @@ export function getIdToken() {
 
 export function getRefreshToken() {
   return (
-    localStorage.getItem("refreshToken") || sessionStorage.getItem("refreshToken")
+    localStorage.getItem("refreshToken") ||
+    sessionStorage.getItem("refreshToken")
   );
 }
 
@@ -26,7 +27,9 @@ export function setAuthTokens({ idToken, refreshToken, payloadObject }) {
   }
   if (payloadObject) {
     const raw =
-      typeof payloadObject === "string" ? payloadObject : JSON.stringify(payloadObject);
+      typeof payloadObject === "string"
+        ? payloadObject
+        : JSON.stringify(payloadObject);
     localStorage.setItem("payloadObject", raw);
     sessionStorage.setItem("payloadObject", raw);
   }
@@ -46,5 +49,3 @@ export function clearAuthTokens() {
     }
   });
 }
-
-
