@@ -119,6 +119,53 @@ MONGO_URI = (
     os.getenv("MONGO_URI")
 )
 
+# ----------------------------
+# Live Copilot: session gating
+# ----------------------------
+# IMPORTANT:
+# - This is intentionally fail-open and no-op by default.
+# - Copilot runs ONLY if:
+#   1) ENABLE_LIVE_COPILOT=1 (feature flag), AND
+#   2) Analyze Live tab explicitly enables the session via Socket.IO (copilot_enable)
+#
+# This ensures existing /webhook + transcript_update behavior remains unchanged.
+_copilot_enabled_sessions = {}  # sessionId -> expires_at_epoch_seconds
+# Persist per-session plan context for Live Copilot (Analyze Live).
+# Filled by `copilot_enable` from the UI and attached to webhook payloads.
+_copilot_session_context = {}  # sessionId -> {"contractType": "...", "selectedPlan": "...", "selectedState": "..."}
+_copilot_sessions_lock = threading.Lock()
+
+
+def _flag_enabled(var_name: str, default: str = "0") -> bool:
+    raw = (os.getenv(var_name, default) or "").strip().lower()
+    return raw in ("1", "true", "yes", "y", "on")
+
+
+def _copilot_session_ttl_seconds() -> int:
+    try:
+        raw = (os.getenv("COPILOT_SESSION_TTL_SECONDS") or "").strip()
+        ttl = int(raw) if raw else 1800
+        return ttl if ttl > 0 else 1800
+    except Exception:
+        return 1800
+
+
+def _copilot_session_is_enabled(session_id: str) -> bool:
+    if not session_id:
+        return False
+    now = time()
+    with _copilot_sessions_lock:
+        exp = _copilot_enabled_sessions.get(session_id)
+        if exp is None:
+            return False
+        if exp <= now:
+            try:
+                del _copilot_enabled_sessions[session_id]
+            except Exception:
+                pass
+            return False
+        return True
+
 def _optional_positive_int_env(var_name: str):
     """Return a positive int from env var, otherwise None (unset/invalid/<=0)."""
     raw = (os.getenv(var_name) or "").strip()
