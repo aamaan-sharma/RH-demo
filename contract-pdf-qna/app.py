@@ -96,10 +96,19 @@ handler = CallbackHandler()
 load_dotenv()
 app = Flask(__name__)
 
+_async_mode = "threading"
+try:
+    import eventlet  # noqa: F401
+
+    # Prefer eventlet when available (recommended for production SocketIO)
+    _async_mode = "eventlet"
+except Exception:
+    _async_mode = os.getenv("SOCKETIO_ASYNC_MODE", "threading")
+
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
-    async_mode='threading', 
+    async_mode=_async_mode,
 )
 
 JWT_AUDIENCE = os.getenv("JWT_AUDIENCE")
@@ -5024,4 +5033,16 @@ def on_join_session(data):
 
 if __name__ == "__main__":
     # use_reloader=False to avoid Windows socket errors during reload
-    socketio.run(app, host="0.0.0.0", port=8001, debug=True, use_reloader=False)
+    port = int(os.getenv("PORT", "8001"))
+    debug = str(os.getenv("FLASK_DEBUG", "0")).lower() in ("1", "true", "yes")
+
+    # Flask-SocketIO blocks Werkzeug in production by default; allow it if we ever
+    # fall back to "threading" mode (eventlet/gevent are preferred when available).
+    socketio.run(
+        app,
+        host="0.0.0.0",
+        port=port,
+        debug=debug,
+        use_reloader=False,
+        allow_unsafe_werkzeug=True,
+    )

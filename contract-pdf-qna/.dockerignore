@@ -1,0 +1,26 @@
+# Never bake secrets / local env into the image
+.env
+*.env
+bigquery.json
+cacert.pem
+
+# Python caches / venvs
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+venv/
+.venv/
+
+# Local data / misc
+files/
+tests/
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
+

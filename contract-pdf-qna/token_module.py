@@ -8,30 +8,92 @@ from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.outputs import LLMResult
 from langchain_core.documents import Document
 import time
+import os
+import json
+import base64
+from pathlib import Path
 
 
-credentials = service_account.Credentials.from_service_account_file(
-    r'bigquery.json',
-    scopes=['https://www.googleapis.com/auth/bigquery']
-)
+def _load_bigquery_credentials():
+    """
+    Docker-friendly BigQuery auth:
+    1) If GOOGLE_APPLICATION_CREDENTIALS points to a file, use it.
+    2) Else if BIGQUERY_SERVICE_ACCOUNT_JSON(_BASE64) is set, use it.
+    3) Else fall back to ./bigquery.json if present.
+    """
+    scopes = ["https://www.googleapis.com/auth/bigquery"]
+
+    # Common container mount path (works even if entrypoint didn't set env yet)
+    default_mounted = Path("/run/secrets/bigquery.json")
+    if default_mounted.exists():
+        return service_account.Credentials.from_service_account_file(
+            str(default_mounted), scopes=scopes
+        )
+
+    cred_path = (os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or "").strip()
+    if cred_path and Path(cred_path).exists():
+        return service_account.Credentials.from_service_account_file(
+            cred_path, scopes=scopes
+        )
+
+    raw_b64 = (os.getenv("BIGQUERY_SERVICE_ACCOUNT_JSON_BASE64") or "").strip()
+    if raw_b64:
+        info = json.loads(base64.b64decode(raw_b64).decode("utf-8"))
+        return service_account.Credentials.from_service_account_info(info, scopes=scopes)
+
+    raw_json = (os.getenv("BIGQUERY_SERVICE_ACCOUNT_JSON") or "").strip()
+    if raw_json:
+        info = json.loads(raw_json)
+        return service_account.Credentials.from_service_account_info(info, scopes=scopes)
+
+    local = Path("bigquery.json")
+    if local.exists():
+        return service_account.Credentials.from_service_account_file(
+            str(local), scopes=scopes
+        )
+
+    raise FileNotFoundError(
+        "BigQuery credentials not found. Provide GOOGLE_APPLICATION_CREDENTIALS "
+        "(mounted file), or BIGQUERY_SERVICE_ACCOUNT_JSON(_BASE64), or mount ./bigquery.json."
+    )
 
 
-# Initialize the BigQuery client
-client_t = bigquery.Client(credentials=credentials, project='data-404309')
+BIGQUERY_ENABLED = True
+_bigquery_init_error = None
+
+try:
+    credentials = _load_bigquery_credentials()
+    # Initialize the BigQuery client
+    client_t = bigquery.Client(
+        credentials=credentials, project=os.getenv("BQ_PROJECT") or "data-404309"
+    )
+except Exception as e:
+    # Don't crash the whole app if BigQuery creds aren't provided in Docker.
+    BIGQUERY_ENABLED = False
+    _bigquery_init_error = str(e)
+    client_t = None
 
 # Define the dataset ID, table ID
-dataset_id = 'data123'
-table_id = 'Token'
+dataset_id = "data123"
+table_id = "Token"
 
-# Construct the reference to the table
-table_ref = client_t.dataset(dataset_id).table(table_id)
-table = client_t.get_table(table_ref)
+if BIGQUERY_ENABLED:
+    # Construct the reference to the table
+    table_ref = client_t.dataset(dataset_id).table(table_id)
+    table = client_t.get_table(table_ref)
+else:
+    table_ref = None
+    table = None
 
 def token_calculator(dict):
     for i in dict:
         token_insert_to_bigquery(i)
 
 def token_insert_to_bigquery(dic):
+    if not BIGQUERY_ENABLED:
+        # Keep the rest of the app working even if BigQuery is not configured.
+        # You can enable by mounting /run/secrets/bigquery.json or setting env vars.
+        return
     current_time = datetime.now()
     
     # Format the current time as a string
