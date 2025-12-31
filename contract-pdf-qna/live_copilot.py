@@ -142,16 +142,44 @@ def _buffer_text(st: _SessionState) -> str:
 
 
 def _update_session_context_from_payload(st: _SessionState, payload: Dict[str, Any]):
-    # Payload may contain these keys (attached by app.py from copilot_enable context)
+    """
+    Update session context from transcript payload.
+    
+    Payload may contain these fields directly from the transcript:
+    - contractType: Contract type (RE, DTC)
+    - plan / selectedPlan: Plan name (ShieldPlus, ShieldGold, etc.)
+    - state / selectedState: State name (Texas, California, etc.)
+    - phone: Customer phone number for user verification
+    """
+    # Extract contract type
     ct = _s(payload.get("contractType"))
-    pl = _s(payload.get("selectedPlan"))
-    stt = _s(payload.get("selectedState"))
     if ct:
         st.contract_type = ct
+    
+    # Extract plan (check both 'plan' and 'selectedPlan' keys)
+    pl = _s(payload.get("plan")) or _s(payload.get("selectedPlan"))
     if pl:
         st.selected_plan = pl
+    
+    # Extract state (check both 'state' and 'selectedState' keys)
+    stt = _s(payload.get("state")) or _s(payload.get("selectedState"))
     if stt:
         st.selected_state = stt
+    
+    # Auto-lookup user by phone if provided and not yet verified
+    phone = _s(payload.get("phone"))
+    if phone and not st.customer:
+        doc = _lookup_user_by_phone([phone])
+        if doc:
+            st.customer = _normalize_customer_doc(doc, phone)
+            # Update session context from verified user document if not already set
+            if not st.contract_type:
+                st.contract_type = _s(st.customer.get("contractType"))
+            if not st.selected_plan:
+                st.selected_plan = _s(st.customer.get("plan"))
+            if not st.selected_state:
+                st.selected_state = _s(st.customer.get("state"))
+            print(f"✅ User verified from phone {phone}: {st.customer.get('name')}")
 
 
 def _effective_customer_context(st: _SessionState) -> Dict[str, Any]:
@@ -586,24 +614,37 @@ Transcript:\n
 
 _suggest_prompt = ChatPromptTemplate.from_template(
     """
-You are a real-time copilot helping a CSR handle an insurance-related customer call.
+You are a real-time copilot helping a CSR (Customer Service Representative) during a live home warranty insurance call.
 
-INFER-style operating rules:
+Your role is to generate PROFESSIONAL, CALM, and CONCISE suggestions that the CSR can say directly to the customer.
+
+OPERATING RULES:
 - Use conversation context below (do not ignore earlier customer questions).
-- Use tool_result + customer_context as your ground truth; do NOT invent details.
-- If plan context (contractType/plan/state) is missing, suggest asking CSR to confirm it.
-- If user is not verified, you may still draft guidance based on the currently selected plan context,
-  but you MUST recommend verifying phone number before making account-specific commitments.
-- Do NOT re-answer repeated questions verbatim; instead reference that it was already addressed and suggest next step.
-- Always return MULTIPLE suggestions in parallel (3 to 6 cards) so the CSR can pick the best next move.
+- Use tool_result + customer_context as your ground truth; do NOT invent coverage details.
+- If plan context (contractType/plan/state) is missing, suggest asking CSR to confirm it before making commitments.
+- If user is not verified, draft guidance based on selected plan context, but recommend verifying phone first.
+- Do NOT re-answer questions already addressed; reference prior answer and suggest next step.
+- Generate 2-4 suggestion cards so CSR can pick the best response.
+
+CSR SCRIPT TONE REQUIREMENTS:
+- Be CALM and reassuring - avoid alarming language
+- Be CONCISE - 1-2 sentences maximum
+- Be PROFESSIONAL - use polite, helpful language
+- Be DIRECT about coverage decisions (Yes, covered / No, not covered / Partially covered)
+- Include specific details when available (limits, fees, next steps)
+
+EXAMPLES OF GOOD CSR SCRIPTS:
+- "Good news! Your plan does cover water heater repairs. The service call fee is $75, and we can dispatch a technician within 24-48 hours."
+- "I understand your concern about the refrigerator. Unfortunately, cosmetic damage to the exterior panel is not covered under your plan, but I can help you with other options."
+- "Based on your ShieldPlus plan, drain line stoppages are covered. Let me create a service request for you."
 
 Return ONLY valid JSON:
 {{
   "cards": [
     {{
-      "title": "short title",
-      "csrScript": "what the CSR should say next (1-3 sentences)",
-      "evidence": "verbatim quote that triggered this",
+      "title": "Coverage Confirmation",
+      "csrScript": "The calm, professional sentence CSR says to customer",
+      "evidence": "Verbatim customer quote that triggered this",
       "priority": "high|medium|low"
     }}
   ]

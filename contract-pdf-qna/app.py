@@ -30,6 +30,14 @@ import re
 from typing import List, Dict
 from pathlib import Path
 
+# Live Copilot for real-time AI suggestions during calls
+try:
+    from live_copilot import handle_transcript_event
+    LIVE_COPILOT_AVAILABLE = True
+except ImportError:
+    LIVE_COPILOT_AVAILABLE = False
+    print("Warning: live_copilot module not available - Live Copilot disabled")
+
 # GCP Storage imports using fsspec (unified filesystem interface)
 try:
     import fsspec
@@ -5051,6 +5059,20 @@ def transcript_event():
     if not session_id:
         return jsonify({"error": "sessionId is required"}), 400
 
+    # Deduplication: Check if this exact transcript already exists
+    dedup_query = {
+        "sessionId": data.get("sessionId"),
+        "speaker": data.get("speaker"),
+        "text": data.get("text"),
+        "beginOffsetMillis": data.get("beginOffsetMillis"),
+        "endOffsetMillis": data.get("endOffsetMillis"),
+    }
+    
+    existing = transcripts_collection.find_one(dedup_query)
+    if existing:
+        # Already received this transcript, skip logging and storing
+        return jsonify({"ok": True, "duplicate": True}), 200
+
     transcript_doc = {
         "sessionId": data["sessionId"],
         "contactId": data.get("contactId"),
@@ -5070,6 +5092,49 @@ def transcript_event():
     socketio.emit("transcript_update", data)
     socketio.emit("transcript_update", data, room=data["sessionId"])
 
+    # ========== LIVE COPILOT: Real-time AI suggestions ==========
+    # Process through Live Copilot if:
+    # 1. Module is available
+    # 2. Feature flag is enabled
+    # 3. Session has copilot enabled (via copilot_enable from UI)
+    # 4. Transcript is complete (not partial)
+    if (
+        LIVE_COPILOT_AVAILABLE
+        and _flag_enabled("ENABLE_LIVE_COPILOT", "0")
+        and not data.get("isPartial", True)
+    ):
+        try:
+            # Build copilot payload with session context
+            # Include phone, state, plan, contractType from transcript payload
+            copilot_payload = {
+                "sessionId": session_id,
+                "contactId": data.get("contactId"),
+                "speaker": data.get("speaker"),
+                "text": data.get("text"),
+                "isPartial": data.get("isPartial", False),
+                "beginOffsetMillis": data.get("beginOffsetMillis"),
+                "endOffsetMillis": data.get("endOffsetMillis"),
+                # New fields from transcript for session context
+                "phone": data.get("phone"),
+                "state": data.get("state"),
+                "contractType": data.get("contractType"),
+                "plan": data.get("plan"),
+            }
+            
+            # Call Live Copilot to process transcript
+            copilot_result = handle_transcript_event(copilot_payload)
+            
+            if copilot_result:
+                print("🟢 COPILOT SUGGESTION:", json.dumps(copilot_result, indent=2, default=str))
+                # Emit suggestion to UI
+                socketio.emit("suggestion_update", copilot_result)
+                socketio.emit("suggestion_update", copilot_result, room=session_id)
+        except Exception as e:
+            print(f"⚠️ Copilot processing error (non-blocking): {e}")
+            import traceback
+            traceback.print_exc()
+    # =============================================================
+
     return jsonify({"ok": True}), 200
 
 @socketio.on("join_session")
@@ -5077,6 +5142,40 @@ def on_join_session(data):
     session_id = data.get("sessionId")
     if session_id:
         join_room(session_id)
+
+@socketio.on("copilot_enable")
+def on_copilot_enable(data):
+    """Enable Live Copilot for a session when call connects."""
+    session_id = data.get("sessionId")
+    if session_id:
+        with _copilot_sessions_lock:
+            _copilot_enabled_sessions[session_id] = time() + _copilot_session_ttl_seconds()
+            _copilot_session_context[session_id] = {
+                "contractType": data.get("contractType", ""),
+                "selectedPlan": data.get("selectedPlan", ""),
+                "selectedState": data.get("selectedState", ""),
+            }
+        print(f"🟢 COPILOT ENABLED for session: {session_id}")
+        # Emit status back to UI
+        socketio.emit("copilot_status", {
+            "sessionId": session_id,
+            "enabled": True
+        }, room=session_id)
+
+@socketio.on("copilot_disable")
+def on_copilot_disable(data):
+    """Disable Live Copilot when call ends."""
+    session_id = data.get("sessionId")
+    if session_id:
+        with _copilot_sessions_lock:
+            _copilot_enabled_sessions.pop(session_id, None)
+            _copilot_session_context.pop(session_id, None)
+        print(f"🔴 COPILOT DISABLED for session: {session_id}")
+        # Emit status back to UI
+        socketio.emit("copilot_status", {
+            "sessionId": session_id,
+            "enabled": False
+        }, room=session_id)
 
 if __name__ == "__main__":
     # use_reloader=False to avoid Windows socket errors during reload

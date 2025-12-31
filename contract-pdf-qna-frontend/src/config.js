@@ -15,7 +15,7 @@ export const CCP_URL =
 export const REGION = import.meta.env.VITE_REGION;
 
 export const BACKEND_BASE =
-  import.meta.env.VITE_BACKEND_BASE;
+  import.meta.env.VITE_BACKEND_BASE || "http://localhost:8001";
 
 // Google OAuth Configuration
 export const GOOGLE_CLIENT_ID =
