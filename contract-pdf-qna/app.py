@@ -1927,6 +1927,118 @@ Answer format:
         }
 
 
+# -------------------------------------------------------------------
+# process_live_copilot_question: Wrapper for Live Copilot INFER
+# -------------------------------------------------------------------
+def process_live_copilot_question(
+    question: str,
+    contract_type: str,
+    selected_plan: str,
+    selected_state: str,
+    transcript_context: str = "",
+) -> Dict:
+    """
+    Wrapper for Live Copilot to use the existing INFER implementation.
+    
+    This function initializes Milvus, LLMs, and retriever, then calls
+    process_single_transcript_question with gpt_model="Infer" to leverage
+    the full LangChain Agent with Knowledge Base and User Lookup tools.
+    
+    Args:
+        question: The customer question to answer
+        contract_type: Contract type (RE or DTC)
+        selected_plan: Plan name (ShieldPlus, ShieldGold, etc.)
+        selected_state: State name (California, Texas, etc.)
+        transcript_context: Optional transcript context for enrichment
+        
+    Returns:
+        Dict with keys: answer, relevantChunks, confidence, latency
+    """
+    try:
+        print(
+            f"[LIVE_COPILOT_INFER] Processing question='{question[:100]}...', "
+            f"contract_type={contract_type}, plan={selected_plan}, state={selected_state}"
+        )
+        
+        # Normalize inputs
+        milvus_state = normalize_state_for_milvus(selected_state)
+        contract_type_norm = normalize_contract_type(contract_type)
+        selected_plan_norm = normalize_plan_for_milvus(contract_type_norm, selected_plan)
+        
+        # Build collection name
+        collection_mapping = {
+            "RE": {
+                "ShieldEssential": f"{milvus_state}_RE_ShieldEssential",
+                "ShieldPlus": f"{milvus_state}_RE_ShieldPlus",
+                "default": f"{milvus_state}_RE_ShieldComplete",
+            },
+            "DTC": {
+                "ShieldSilver": f"{milvus_state}_DTC_ShieldSilver",
+                "ShieldGold": f"{milvus_state}_DTC_ShieldGold",
+                "default": f"{milvus_state}_DTC_ShieldPlatinum",
+            },
+        }
+        
+        selected_collection_name = collection_mapping.get(contract_type_norm, {}).get(
+            selected_plan_norm, collection_mapping.get(contract_type_norm, {}).get("default")
+        )
+        
+        if not selected_collection_name:
+            print(f"[LIVE_COPILOT_INFER] Could not determine collection name for contract_type={contract_type_norm}, plan={selected_plan_norm}")
+            return {
+                "answer": "Unable to determine the appropriate knowledge base for your query.",
+                "relevantChunks": [],
+                "confidence": 0.0,
+                "latency": 0.0,
+            }
+        
+        print(f"[LIVE_COPILOT_INFER] Using Milvus collection: {selected_collection_name}")
+        
+        # Initialize Milvus vector DB
+        vector_db1 = Milvus(
+            embed,
+            collection_name=selected_collection_name,
+            connection_args={"host": MILVUS_HOST, "port": "19530"},
+        )
+        
+        # Initialize retriever
+        retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
+        
+        # Initialize LLMs for Infer mode
+        llm = ChatOpenAI(temperature=0.0, model="gpt-4o")
+        llm2 = ChatOpenAI(temperature=0.0, model="gpt-4o")
+        
+        # Call the existing INFER implementation
+        result = process_single_transcript_question(
+            question=question,
+            contract_type=contract_type,
+            selected_plan=selected_plan,
+            selected_state=selected_state,
+            gpt_model="Infer",  # Use INFER mode with LangChain Agent
+            vector_db=vector_db1,
+            llm=llm,
+            llm2=llm2,
+            retriever=retriever,
+            handler=handler,
+            transcript_context=transcript_context,
+        )
+        
+        print(f"[LIVE_COPILOT_INFER] Result: answer_len={len(result.get('answer', ''))}, chunks={len(result.get('relevantChunks', []))}")
+        
+        return result
+        
+    except Exception as e:
+        print(f"[LIVE_COPILOT_INFER] Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "answer": f"Error processing question: {str(e)}",
+            "relevantChunks": [],
+            "confidence": 0.0,
+            "latency": 0.0,
+        }
+
+
 # Feedback CRUD Operations
 
 
@@ -5115,7 +5227,8 @@ def transcript_event():
                 "beginOffsetMillis": data.get("beginOffsetMillis"),
                 "endOffsetMillis": data.get("endOffsetMillis"),
                 # New fields from transcript for session context
-                "phone": data.get("phone"),
+                # Support both 'phoneNumber' (Amazon Connect) and 'phone' keys
+                "phoneNumber": data.get("phoneNumber") or data.get("phone"),
                 "state": data.get("state"),
                 "contractType": data.get("contractType"),
                 "plan": data.get("plan"),

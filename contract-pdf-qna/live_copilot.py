@@ -14,6 +14,37 @@ from langchain.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 
+# -------------------------------------------------------------------
+# INFER Integration: Import the wrapper from app.py
+# Uses lazy import to avoid circular dependency issues
+# -------------------------------------------------------------------
+_INFER_WRAPPER_AVAILABLE = False
+_process_live_copilot_question = None
+
+
+def _get_infer_wrapper():
+    """
+    Lazy import of process_live_copilot_question from app.py.
+    This avoids circular import issues since app.py imports live_copilot.
+    """
+    global _INFER_WRAPPER_AVAILABLE, _process_live_copilot_question
+    
+    if _process_live_copilot_question is not None:
+        return _process_live_copilot_question
+    
+    try:
+        from app import process_live_copilot_question
+        _process_live_copilot_question = process_live_copilot_question
+        _INFER_WRAPPER_AVAILABLE = True
+        print("✅ [LIVE_COPILOT] INFER wrapper loaded successfully - using full LangChain Agent")
+        return _process_live_copilot_question
+    except ImportError as e:
+        print(f"⚠️ [LIVE_COPILOT] Could not import INFER wrapper: {e}")
+        print("   Falling back to simple RAG implementation")
+        _INFER_WRAPPER_AVAILABLE = False
+        return None
+
+
 """
 Live Copilot Orchestrator (PoC)
 
@@ -145,11 +176,13 @@ def _update_session_context_from_payload(st: _SessionState, payload: Dict[str, A
     """
     Update session context from transcript payload.
     
-    Payload may contain these fields directly from the transcript:
+    Payload contains these fields directly from Amazon Connect:
     - contractType: Contract type (RE, DTC)
     - plan / selectedPlan: Plan name (ShieldPlus, ShieldGold, etc.)
     - state / selectedState: State name (Texas, California, etc.)
-    - phone: Customer phone number for user verification
+    - phoneNumber / phone: Customer phone number
+    
+    Since Amazon Connect provides all necessary info, we auto-verify the user.
     """
     # Extract contract type
     ct = _s(payload.get("contractType"))
@@ -166,20 +199,38 @@ def _update_session_context_from_payload(st: _SessionState, payload: Dict[str, A
     if stt:
         st.selected_state = stt
     
-    # Auto-lookup user by phone if provided and not yet verified
-    phone = _s(payload.get("phone"))
-    if phone and not st.customer:
+    # Extract phone (check both 'phoneNumber' and 'phone' keys)
+    phone = _s(payload.get("phoneNumber")) or _s(payload.get("phone"))
+    
+    print(f"[LIVE_COPILOT_DEBUG] Payload check: phone={phone}, ct={ct}, pl={pl}, stt={stt}")
+    
+    # AUTO-VERIFY: Since Amazon Connect provides phoneNumber + plan context,
+    # we consider the user verified without DB lookup
+    if phone and ct and pl and stt:
+        # Create verified customer context directly from payload
+        print(f"[LIVE_COPILOT_DEBUG] All fields present! Checking st.customer: {st.customer}")
+        if not st.customer or not st.customer.get("verified"):
+            st.customer = {
+                "phone": phone,
+                "contractType": ct,
+                "plan": pl,
+                "state": stt,
+                "verified": True,  # Auto-verified from Amazon Connect data
+                "name": "Customer",
+            }
+            print(f"✅ User AUTO-VERIFIED from Amazon Connect: phone={phone}, plan={pl}, state={stt}")
+    elif phone and not st.customer:
+        # Fallback: Try DB lookup if we have phone but missing other context
         doc = _lookup_user_by_phone([phone])
         if doc:
             st.customer = _normalize_customer_doc(doc, phone)
-            # Update session context from verified user document if not already set
             if not st.contract_type:
                 st.contract_type = _s(st.customer.get("contractType"))
             if not st.selected_plan:
                 st.selected_plan = _s(st.customer.get("plan"))
             if not st.selected_state:
                 st.selected_state = _s(st.customer.get("state"))
-            print(f"✅ User verified from phone {phone}: {st.customer.get('name')}")
+            print(f"✅ User verified from DB: phone={phone}, name={st.customer.get('name')}")
 
 
 def _effective_customer_context(st: _SessionState) -> Dict[str, Any]:
@@ -238,12 +289,12 @@ _question_extract_prompt = ChatPromptTemplate.from_template(
 You extract customer-intent questions from a live insurance support call.
 
 Return ONLY valid JSON:
-{"questions":["q1","q2"]}
+{{"questions":["q1","q2"]}}
 
 Rules:
 - Extract ONLY customer-intent questions (coverage, limits, exclusions, service steps/timeline/costs).
 - If the customer described a problem but did not ask explicitly, infer a likely question.
-- Each question must be specific (include appliance/system + issue) unless it’s a general policy/process question.
+- Each question must be specific (include appliance/system + issue) unless it's a general policy/process question.
 - Max 3 questions.
 
 Transcript (most recent last):
@@ -256,18 +307,40 @@ def _extract_questions_llm(transcript: str) -> List[str]:
     llm = ChatOpenAI(temperature=0.0, model=MODEL_SUGGEST)
     chain = _question_extract_prompt | llm | StrOutputParser()
     raw = (chain.invoke({"transcript": transcript}) or "").strip()
+    print(f"[LIVE_COPILOT_DEBUG] _extract_questions_llm raw LLM response: {raw[:500]}")
+    
+    # Clean markdown code blocks if present
+    cleaned = raw
+    if "```json" in cleaned:
+        cleaned = re.sub(r"```json\n?", "", cleaned)
+    if "```" in cleaned:
+        cleaned = re.sub(r"```\n?", "", cleaned)
+    cleaned = cleaned.strip()
+    
+    # Also try to find JSON object in the response
+    if not cleaned.startswith("{"):
+        match = re.search(r"\{[\s\S]*\}", cleaned)
+        if match:
+            cleaned = match.group(0)
+    
+    print(f"[LIVE_COPILOT_DEBUG] _extract_questions_llm cleaned: {cleaned[:300]}")
+    
     try:
-        obj = json.loads(raw)
+        obj = json.loads(cleaned)
+        print(f"[LIVE_COPILOT_DEBUG] _extract_questions_llm parsed JSON: {obj}")
         qs = obj.get("questions") if isinstance(obj, dict) else []
         if not isinstance(qs, list):
+            print(f"[LIVE_COPILOT_DEBUG] _extract_questions_llm: qs is not a list: {type(qs)}")
             return []
         out: List[str] = []
         for q in qs:
             q = _s(q)
             if q:
                 out.append(q)
+        print(f"[LIVE_COPILOT_DEBUG] _extract_questions_llm final output: {out}")
         return out[:3]
-    except Exception:
+    except Exception as e:
+        print(f"[LIVE_COPILOT_DEBUG] _extract_questions_llm JSON parse error: {e}")
         return []
 
 
@@ -556,8 +629,11 @@ Return ONLY JSON:\n
 )
 
 
-def _rag_answer(question: str, customer: Dict[str, Any]) -> Dict[str, Any]:
-    # customer must contain plan/contractType/state
+def _simple_rag_answer(question: str, customer: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Simple RAG implementation - fallback when INFER wrapper is not available.
+    Uses direct Milvus similarity search + LLM summarization.
+    """
     if not MILVUS_HOST:
         return {"error": "MILVUS_HOST not configured"}
     collection = _milvus_collection(customer.get("contractType"), customer.get("plan"), customer.get("state"))
@@ -572,7 +648,7 @@ def _rag_answer(question: str, customer: Dict[str, Any]) -> Dict[str, Any]:
         if content.strip():
             chunks.append(content.strip())
     if not chunks:
-        return {"answer": "I couldn’t find relevant policy language for that question.", "citedChunks": []}
+        return {"answer": "I couldn't find relevant policy language for that question.", "citedChunks": []}
     llm = ChatOpenAI(temperature=0.0, model=MODEL_SUGGEST)
     chain = _rag_prompt | llm | StrOutputParser()
     raw = (chain.invoke({"question": question, "chunks": "\n\n".join(chunks)}) or "").strip()
@@ -586,6 +662,69 @@ def _rag_answer(question: str, customer: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         pass
     return {"answer": raw[:1200], "citedChunks": chunks[:1]}
+
+
+def _rag_answer(question: str, customer: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Main RAG function - uses INFER wrapper if available, otherwise falls back to simple RAG.
+    
+    The INFER wrapper uses the full LangChain Agent with:
+    - Knowledge Base tool (RetrievalQA)
+    - User Lookup tool
+    - Sophisticated system prompt for query breakdown
+    
+    Args:
+        question: The customer question to answer
+        customer: Dict with contractType, plan, state, etc.
+        
+    Returns:
+        Dict with keys: answer, citedChunks/relevantChunks, and optionally error
+    """
+    contract_type = customer.get("contractType", "")
+    plan = customer.get("plan", "")
+    state = customer.get("state", "")
+    
+    # Try to use INFER wrapper first (full LangChain Agent)
+    infer_wrapper = _get_infer_wrapper()
+    
+    if infer_wrapper is not None:
+        try:
+            print(f"[LIVE_COPILOT] Using INFER wrapper for question: '{question[:80]}...'")
+            result = infer_wrapper(
+                question=question,
+                contract_type=contract_type,
+                selected_plan=plan,
+                selected_state=state,
+                transcript_context="",  # Could add more context here if needed
+            )
+            
+            # Transform result to match expected format
+            answer = result.get("answer", "")
+            chunks = result.get("relevantChunks", [])
+            
+            if result.get("error"):
+                print(f"[LIVE_COPILOT] INFER returned error: {result.get('error')}")
+                # Fall through to simple RAG
+            elif answer:
+                print(f"[LIVE_COPILOT] INFER answer received (len={len(answer)})")
+                return {
+                    "answer": answer,
+                    "citedChunks": chunks[:3] if chunks else [],
+                    "confidence": result.get("confidence", 0.9),
+                    "latency": result.get("latency", 0.0),
+                    "source": "INFER",  # Track which method was used
+                }
+        except Exception as e:
+            print(f"[LIVE_COPILOT] INFER wrapper failed: {e}")
+            import traceback
+            traceback.print_exc()
+            # Fall through to simple RAG
+    
+    # Fallback: use simple RAG implementation
+    print(f"[LIVE_COPILOT] Using simple RAG fallback for question: '{question[:80]}...'")
+    result = _simple_rag_answer(question, customer)
+    result["source"] = "simple_rag"
+    return result
 
 
 def _diagnostics_steps(transcript: str) -> Dict[str, Any]:
@@ -622,9 +761,10 @@ OPERATING RULES:
 - Use conversation context below (do not ignore earlier customer questions).
 - Use tool_result + customer_context as your ground truth; do NOT invent coverage details.
 - If plan context (contractType/plan/state) is missing, suggest asking CSR to confirm it before making commitments.
-- If user is not verified, draft guidance based on selected plan context, but recommend verifying phone first.
+- If customer_context shows "verified": true, DO NOT ask for phone verification - the user is already verified!
+- When user is verified, focus on answering their questions using newAnswers from tool_result.
 - Do NOT re-answer questions already addressed; reference prior answer and suggest next step.
-- Generate 2-4 suggestion cards so CSR can pick the best response.
+- Generate 1-3 suggestion cards focused on the customer's actual questions/issues.
 
 CSR SCRIPT TONE REQUIREMENTS:
 - Be CALM and reassuring - avoid alarming language
@@ -669,6 +809,9 @@ def _call_suggest_llm(
     transcript: str,
     evidence: str,
 ) -> List[Dict[str, Any]]:
+    # Debug: log the tool_result being passed to LLM
+    print(f"[LIVE_COPILOT_DEBUG] _call_suggest_llm tool_result: {json.dumps(tool_result, default=str)[:500]}")
+    
     llm = ChatOpenAI(temperature=0.2, model=MODEL_SUGGEST)
     chain = _suggest_prompt | llm | StrOutputParser()
     raw = (chain.invoke(
@@ -680,8 +823,20 @@ def _call_suggest_llm(
             "transcript": transcript,
         }
     ) or "").strip()
+    
+    print(f"[LIVE_COPILOT_DEBUG] _call_suggest_llm raw response: {raw[:500]}")
+    
+    # Clean markdown if present
+    cleaned = raw
+    if "```json" in cleaned:
+        cleaned = re.sub(r"```json\n?", "", cleaned)
+    if "```" in cleaned:
+        cleaned = re.sub(r"```\n?", "", cleaned)
+    cleaned = cleaned.strip()
+    
     try:
-        obj = json.loads(raw)
+        obj = json.loads(cleaned)
+        print(f"[LIVE_COPILOT_DEBUG] _call_suggest_llm parsed: {obj}")
         cards = obj.get("cards") if isinstance(obj, dict) else None
         if isinstance(cards, list) and cards:
             # Ensure evidence populated
@@ -689,12 +844,13 @@ def _call_suggest_llm(
                 if isinstance(c, dict) and not c.get("evidence") and evidence:
                     c["evidence"] = evidence
             return cards
-    except Exception:
+    except Exception as e:
+        print(f"[LIVE_COPILOT_DEBUG] _call_suggest_llm parse error: {e}")
         pass
     return [
         {
             "title": "Next step",
-            "csrScript": "I can help. Could you tell me a bit more about what happened and what you’re trying to get resolved today?",
+            "csrScript": "I can help. Could you tell me a bit more about what happened and what you're trying to get resolved today?",
             "evidence": evidence or "",
             "priority": "medium",
         }
@@ -785,17 +941,26 @@ def handle_transcript_event(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
 
     customer_ctx = _effective_customer_context(st)
     verified = bool(customer_ctx.get("verified"))
+    
+    # DEBUG: Log customer context
+    print(f"[LIVE_COPILOT_DEBUG] customer_ctx: contractType={customer_ctx.get('contractType')}, plan={customer_ctx.get('plan')}, state={customer_ctx.get('state')}")
 
     # Queue customer questions so they never get skipped by later verification steps.
-    if speaker == "customer" and _should_extract_questions(text):
+    should_extract = speaker == "customer" and _should_extract_questions(text)
+    print(f"[LIVE_COPILOT_DEBUG] speaker={speaker}, _should_extract_questions={_should_extract_questions(text)}, should_extract={should_extract}")
+    
+    if should_extract:
         extracted = _extract_questions_llm(transcript)
+        print(f"[LIVE_COPILOT_DEBUG] _extract_questions_llm returned: {extracted}")
         if not extracted:
             q1 = _s(entities.get("question"))
             if q1:
                 extracted = [q1]
+                print(f"[LIVE_COPILOT_DEBUG] Using entity question: {q1}")
         if extracted:
             if _queue_questions(st, extracted):
                 important_change = True
+                print(f"[LIVE_COPILOT_DEBUG] Questions queued: {extracted}")
 
     # Build tool_result snapshot (always present so the prompt has state + conversation context)
     tool_result = {
@@ -824,7 +989,10 @@ def handle_transcript_event(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
 
     # If we have enough plan context, answer a couple pending questions per cycle (even if unverified).
     can_rag = bool(customer_ctx.get("contractType") and customer_ctx.get("plan") and customer_ctx.get("state"))
+    print(f"[LIVE_COPILOT_DEBUG] can_rag={can_rag}, pending_questions={len(st.pending_questions)}")
+    
     if can_rag and st.pending_questions:
+        print(f"[LIVE_COPILOT_DEBUG] 🚀 Starting RAG processing for {len(st.pending_questions)} questions")
         answered_now = []
         for item in list(st.pending_questions)[:2]:
             k = _s(item.get("k"))
@@ -833,7 +1001,9 @@ def handle_transcript_event(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
                 continue
             if k in st.answered:
                 continue
+            print(f"[LIVE_COPILOT_DEBUG] 🔍 Calling _rag_answer for question: '{q[:80]}...'")
             res = _rag_answer(q, customer_ctx)
+            print(f"[LIVE_COPILOT_DEBUG] 📝 RAG result: answer_len={len(res.get('answer', ''))}, source={res.get('source', 'unknown')}")
             st.answered[k] = {"ts": time(), **(res or {})}
             answered_now.append({"question": q, "result": res})
         # Remove answered from pending

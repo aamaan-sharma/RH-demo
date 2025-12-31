@@ -71,6 +71,13 @@ const LiveTranscript = () => {
     return `${mm}:${ss}`;
   };
 
+  // Format timestamp for suggestions (e.g., "2:34 PM")
+  const formatSuggestionTime = (timestamp) => {
+    if (!timestamp) return "";
+    const date = new Date(timestamp);
+    return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  };
+
   const isCallConnected = callState === "CONNECTED";
 
   const getEffectiveCcpUrl = () => {
@@ -149,6 +156,7 @@ const LiveTranscript = () => {
           socket.emit("join_session", { sessionId: id });
           // reset transcript view for new call
           seenRef.current.clear();
+          seenSuggestionsRef.current.clear(); // Clear suggestion dedup set for new call
           setTranscripts([]);
           setCopilotUser(null);
           setCopilotCards([]);
@@ -253,6 +261,9 @@ const LiveTranscript = () => {
     };
   }, [socket, contactId]);
 
+  // Track seen suggestion keys to avoid duplicates
+  const seenSuggestionsRef = useRef(new Set());
+
   useEffect(() => {
     const handler = (msg) => {
       // Only show current call's copilot suggestions
@@ -261,14 +272,41 @@ const LiveTranscript = () => {
 
       // Accept flexible payload shapes, prefer `customer` + `cards`
       const customer = msg?.customer || msg?.user || null;
-      const cards = Array.isArray(msg?.cards)
+      const newCards = Array.isArray(msg?.cards)
         ? msg.cards
         : Array.isArray(msg?.suggestions)
         ? msg.suggestions
         : [];
 
       setCopilotUser(customer);
-      setCopilotCards(cards);
+      
+      // ACCUMULATE suggestions instead of replacing
+      // Add timestamp and unique ID to each new card for tracking
+      setCopilotCards((prevCards) => {
+        const updatedCards = [...prevCards];
+        
+        newCards.forEach((card) => {
+          // Create a unique key for deduplication
+          const cardKey = [
+            card?.title || "",
+            card?.csrScript || card?.text || "",
+            card?.evidence || "",
+          ].join("|");
+          
+          // Only add if not already seen
+          if (!seenSuggestionsRef.current.has(cardKey)) {
+            seenSuggestionsRef.current.add(cardKey);
+            updatedCards.push({
+              ...card,
+              timestamp: Date.now(),
+              id: `suggestion-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            });
+          }
+        });
+        
+        // Keep most recent 10 suggestions to avoid clutter
+        return updatedCards.slice(-10);
+      });
     };
 
     const statusHandler = (msg) => {
@@ -433,8 +471,9 @@ const LiveTranscript = () => {
         </div>
       </main>
 
-      {/* RIGHT: Panel */}
-      <aside className="lt_right">
+      {/* RIGHT: AI Suggestions Panel */}
+      <aside className="lt_right lt_ai_panel">
+        {/* USER DETAILS - Commented out per request
         <div className="live_transcript_card lt_right_section">
           <div className="label">USER DETAILS</div>
           {copilotUser ? (
@@ -471,48 +510,90 @@ const LiveTranscript = () => {
             </div>
           ) : null}
         </div>
+        */}
 
-        <div className="live_transcript_card lt_right_section">
-          <div className="label">AI SUGGESTIONS</div>
-          {copilotCards && copilotCards.length > 0 ? (
-            <div className="lt_placeholder">
-              {copilotCards.map((c, idx) => (
-                <div key={idx} style={{ marginBottom: 12 }}>
-                  <div style={{ fontWeight: 600 }}>
-                    {c?.title || c?.heading || "Suggestion"}
-                  </div>
-                  {c?.csrScript ? (
-                    <div style={{ marginTop: 6, opacity: 0.95 }}>
-                      {c.csrScript}
-                    </div>
-                  ) : c?.text ? (
-                    <div style={{ marginTop: 6, opacity: 0.95 }}>{c.text}</div>
-                  ) : null}
-                  {c?.evidence ? (
-                    <div
-                      style={{
-                        marginTop: 6,
-                        opacity: 0.75,
-                        fontStyle: "italic",
-                      }}
-                    >
-                      “{c.evidence}”
-                    </div>
-                  ) : null}
-                </div>
-              ))}
+        <div className="lt_ai_suggestions_container">
+          <div className="lt_ai_header">
+            <div className="lt_ai_icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="currentColor"/>
+              </svg>
             </div>
-          ) : (
-            <ul className="lt_placeholder_list">
-              <li>
-                Ask for customer phone number to verify identity (if needed).
-              </li>
-              <li>
-                Confirm the appliance/system and what symptom is happening.
-              </li>
-              <li>Summarize next steps and expected timelines.</li>
-            </ul>
-          )}
+            <div className="lt_ai_title">AI Assistant</div>
+            {copilotCards && copilotCards.length > 0 && (
+              <div className="lt_ai_count">{copilotCards.length}</div>
+            )}
+            <div className="lt_ai_badge">Live</div>
+          </div>
+
+          <div className="lt_ai_body">
+            {copilotCards && copilotCards.length > 0 ? (
+              <div className="lt_suggestion_list">
+                {/* Show most recent suggestions first */}
+                {[...copilotCards].reverse().map((c, idx) => {
+                  const priority = c?.priority || "medium";
+                  const priorityClass = `lt_suggestion_card lt_priority_${priority}`;
+                  const cardKey = c?.id || `card-${idx}`;
+                  return (
+                    <div key={cardKey} className={priorityClass}>
+                      <div className="lt_suggestion_header">
+                        <span className="lt_suggestion_icon">
+                          {priority === "high" ? "🔴" : priority === "low" ? "🟢" : "🟡"}
+                        </span>
+                        <span className="lt_suggestion_title">
+                          {c?.title || c?.heading || "Suggestion"}
+                        </span>
+                        {c?.timestamp && (
+                          <span className="lt_suggestion_time">
+                            {formatSuggestionTime(c.timestamp)}
+                          </span>
+                        )}
+                      </div>
+                      {c?.csrScript ? (
+                        <div className="lt_suggestion_script">
+                          <div className="lt_script_label">Say this:</div>
+                          <div className="lt_script_text">"{c.csrScript}"</div>
+                        </div>
+                      ) : c?.text ? (
+                        <div className="lt_suggestion_script">
+                          <div className="lt_script_text">{c.text}</div>
+                        </div>
+                      ) : null}
+                      {c?.evidence ? (
+                        <div className="lt_suggestion_evidence">
+                          <span className="lt_evidence_label">Triggered by:</span>
+                          <span className="lt_evidence_text">"{c.evidence}"</span>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="lt_ai_empty_state">
+                <div className="lt_empty_icon">
+                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M21 15C21 15.5304 20.7893 16.0391 20.4142 16.4142C20.0391 16.7893 19.5304 17 19 17H7L3 21V5C3 4.46957 3.21071 3.96086 3.58579 3.58579C3.96086 3.21071 4.46957 3 5 3H19C19.5304 3 20.0391 3.21071 20.4142 3.58579C20.7893 3.96086 21 4.46957 21 5V15Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </div>
+                <div className="lt_empty_title">Ready to assist</div>
+                <div className="lt_empty_tips">
+                  <div className="lt_tip_item">
+                    <span className="lt_tip_bullet">💡</span>
+                    <span>Verify customer identity with phone number</span>
+                  </div>
+                  <div className="lt_tip_item">
+                    <span className="lt_tip_bullet">🔍</span>
+                    <span>Confirm appliance and symptom details</span>
+                  </div>
+                  <div className="lt_tip_item">
+                    <span className="lt_tip_bullet">📋</span>
+                    <span>Summarize next steps and timelines</span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </aside>
     </div>
