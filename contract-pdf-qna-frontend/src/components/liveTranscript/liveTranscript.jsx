@@ -161,6 +161,7 @@ const LiveTranscript = () => {
           socket.emit("join_session", { sessionId: id });
           // reset transcript view for new call
           seenRef.current.clear();
+          seenSuggestionsRef.current.clear(); // Clear suggestion dedup set for new call
           setTranscripts([]);
           setCopilotUser(null);
           setCopilotCards([]);
@@ -265,6 +266,9 @@ const LiveTranscript = () => {
     };
   }, [socket, contactId]);
 
+  // Track seen suggestion keys to avoid duplicates
+  const seenSuggestionsRef = useRef(new Set());
+
   useEffect(() => {
     const handler = (msg) => {
       // Only show current call's copilot suggestions
@@ -281,17 +285,33 @@ const LiveTranscript = () => {
 
       setCopilotUser(customer);
       
-      // REPLACE - Only show the most recent suggestion(s) from the latest backend response
-      // This ensures the agent sees the current/relevant suggestion aligned with user intent
-      if (newCards.length > 0) {
-        setCopilotCards(
-          newCards.map((card, idx) => ({
-            ...card,
-            timestamp: Date.now(),
-            id: `suggestion-${Date.now()}-${idx}-${Math.random().toString(36).substr(2, 9)}`,
-          }))
-        );
-      }
+      // ACCUMULATE suggestions - keep history of suggestions during the call
+      // Add timestamp and unique ID to each new card for tracking
+      setCopilotCards((prevCards) => {
+        const updatedCards = [...prevCards];
+        
+        newCards.forEach((card) => {
+          // Create a unique key for deduplication
+          const cardKey = [
+            card?.title || "",
+            card?.csrScript || card?.text || "",
+            card?.evidence || "",
+          ].join("|");
+          
+          // Only add if not already seen
+          if (!seenSuggestionsRef.current.has(cardKey)) {
+            seenSuggestionsRef.current.add(cardKey);
+            updatedCards.push({
+              ...card,
+              timestamp: Date.now(),
+              id: `suggestion-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            });
+          }
+        });
+        
+        // Keep most recent 10 suggestions to avoid clutter
+        return updatedCards.slice(-10);
+      });
     };
 
     const statusHandler = (msg) => {
