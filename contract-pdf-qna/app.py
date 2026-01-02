@@ -72,27 +72,27 @@ except ImportError:
     ssl_context = None
 
 # Safe import of monitoring_module - handle missing dependencies gracefully
-try:
-    from monitoring_module import q_monitor, tracer, llm_trace_to_jaeger
-except ImportError as e:
-    print(f"Warning: Could not import monitoring_module: {e}")
-    print("Monitoring features will be disabled. The app will continue to run.")
-    # Create dummy functions to prevent errors
-    def q_monitor(*args, **kwargs):
-        pass
-    class DummyTracer:
-        def start_span(self, *args, **kwargs):
-            return DummySpan()
-    class DummySpan:
-        def __enter__(self):
-            return self
-        def __exit__(self, *args):
-            pass
-        def __getattr__(self, name):
-            return self
-    tracer = DummyTracer()
-    def llm_trace_to_jaeger(*args, **kwargs):
-        pass
+# try:
+from monitoring_module import q_monitor, tracer, llm_trace_to_jaeger
+# except ImportError as e:
+#     print(f"Warning: Could not import monitoring_module: {e}")
+#     print("Monitoring features will be disabled. The app will continue to run.")
+#     # Create dummy functions to prevent errors
+#     def q_monitor(*args, **kwargs):
+#         pass
+#     class DummyTracer:
+#         def start_span(self, *args, **kwargs):
+#             return DummySpan()
+#     class DummySpan:
+#         def __enter__(self):
+#             return self
+#         def __exit__(self, *args):
+#             pass
+#         def __getattr__(self, name):
+#             return self
+#     tracer = DummyTracer()
+#     def llm_trace_to_jaeger(*args, **kwargs):
+#         pass
 
 from token_module import token_calculator, CallbackHandler
 import threading

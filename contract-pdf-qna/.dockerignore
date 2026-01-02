@@ -16,7 +16,7 @@ venv/
 .venv/
 
 # Local data / misc
-files/
+# files/
 tests/
 
 # OS/editor

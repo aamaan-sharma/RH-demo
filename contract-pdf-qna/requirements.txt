@@ -46,3 +46,4 @@ nltk
 closest
 flask-socketio==5.3.6
 eventlet==0.35.2
+numpy==1.26.4

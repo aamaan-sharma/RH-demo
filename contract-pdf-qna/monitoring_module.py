@@ -12,14 +12,16 @@ import closest
 from jaeger_client import Config, span, span_context, constants
 from sentence_transformers import SentenceTransformer, util
 import json
+from pathlib import Path
 
 model = SentenceTransformer( "sentence-transformers/all-MiniLM-L6-v2")
 
-with open('files/ontopic_fd.json', 'r', encoding='utf-8') as file:
+BASE_DIR = Path(__file__).resolve().parent
+with open(BASE_DIR / 'files' / 'ontopic_fd.json', 'r', encoding='utf-8') as file:
     ontopic = json.load(file)
     ontopic = ontopic['jailbreak']
 
-with open('files/offtopic_fd.json', 'r', encoding='utf-8') as file:
+with open(BASE_DIR / 'files' / 'offtopic_fd.json', 'r', encoding='utf-8') as file:
     offtopic = json.load(file)
     offtopic = offtopic['jailbreak']
 
@@ -43,9 +45,20 @@ def init_tracer(service_name):
 tracer = init_tracer('AHS Customer Rep Copilot')
 
 
+#credentials = service_account.Credentials.from_service_account_file(
+#    r'bigquery.json',
+#    scopes=['https://www.googleapis.com/auth/bigquery']
+#)
+import os
+from google.oauth2 import service_account
+BQ_CRED_PATH = os.getenv(
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "bigquery.json"  # fallback for local non-docker runs
+)
+
 credentials = service_account.Credentials.from_service_account_file(
-    r'bigquery.json',
-    scopes=['https://www.googleapis.com/auth/bigquery']
+    BQ_CRED_PATH,
+    scopes=["https://www.googleapis.com/auth/bigquery"]
 )
 
 
@@ -61,6 +74,8 @@ table_ref = client.dataset(dataset_id).table(table_id)
 table = client.get_table(table_ref)
 
 text_schema = udf_schema()
+
+
 
 
 def func_Binsert(parent1, dicts,prompt):
@@ -79,7 +94,7 @@ def func_Binsert(parent1, dicts,prompt):
                 'toxicity':dicts['prompt.toxicity'],
                 'sentiment':dicts['prompt.sentiment_nltk'],
                 'jailbreak':dicts['prompt.jailbreak_similarity'],
-                'injection':dicts['prompt.injection'],
+                'injection':dicts.get('prompt.injection'),
                 'flesch_reading_ease':dicts['prompt.flesch_reading_ease'],
                 'automated_readability_index':dicts['prompt.automated_readability_index'],
                 'aggregate_reading_level':dicts['prompt.aggregate_reading_level'],
@@ -113,10 +128,19 @@ def closest_t(child1, question):
 def score_calculator(child1, question):
     with tracer.start_span('score_calculator', child_of=child1) as child1_2:
         dicts = {}
-        results = why.log({"prompt": question}, schema = text_schema)
+       #results = why.log({"prompt": question}, schema = text_schema)
+        results = why.log(
+            {"prompt": question},
+            schema=text_schema
+        )
+
         score = results.view()
         for i in score.get_columns():    
-            val = score.get_column(i).to_summary_dict()['distribution/mean']
+            # Skip injection metric (unstable in whylogs)
+            if i == "prompt.injection":
+                continue
+
+            val = score.get_column(i).to_summary_dict().get('distribution/mean')
             dicts[i] = val
         return dicts
 
@@ -162,6 +186,9 @@ def security_scores(parent1, question):
 
 
 def q_monitor(parent1, question):
+    # Guard against empty / bad input
+    if not question or not isinstance(question, str):
+        return
     dicts = security_scores(parent1,question)
     func_Binsert(parent1,dicts,question)
 
