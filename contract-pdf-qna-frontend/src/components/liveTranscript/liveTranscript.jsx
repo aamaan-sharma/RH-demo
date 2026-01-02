@@ -9,6 +9,11 @@ const LiveTranscript = () => {
   const [ccpInitError, setCcpInitError] = useState(null);
   const [ccpInitRequested, setCcpInitRequested] = useState(false);
   const [ccpInitInProgress, setCcpInitInProgress] = useState(false);
+  
+  // Refs for auto-scroll functionality
+  const transcriptScrollerRef = useRef(null);
+  const suggestionsScrollerRef = useRef(null);
+  const shouldAutoScrollRef = useRef(true);
 
   const socket = useMemo(() => {
     return io(BACKEND_BASE, {
@@ -156,7 +161,6 @@ const LiveTranscript = () => {
           socket.emit("join_session", { sessionId: id });
           // reset transcript view for new call
           seenRef.current.clear();
-          seenSuggestionsRef.current.clear(); // Clear suggestion dedup set for new call
           setTranscripts([]);
           setCopilotUser(null);
           setCopilotCards([]);
@@ -261,9 +265,6 @@ const LiveTranscript = () => {
     };
   }, [socket, contactId]);
 
-  // Track seen suggestion keys to avoid duplicates
-  const seenSuggestionsRef = useRef(new Set());
-
   useEffect(() => {
     const handler = (msg) => {
       // Only show current call's copilot suggestions
@@ -280,33 +281,17 @@ const LiveTranscript = () => {
 
       setCopilotUser(customer);
       
-      // ACCUMULATE suggestions instead of replacing
-      // Add timestamp and unique ID to each new card for tracking
-      setCopilotCards((prevCards) => {
-        const updatedCards = [...prevCards];
-        
-        newCards.forEach((card) => {
-          // Create a unique key for deduplication
-          const cardKey = [
-            card?.title || "",
-            card?.csrScript || card?.text || "",
-            card?.evidence || "",
-          ].join("|");
-          
-          // Only add if not already seen
-          if (!seenSuggestionsRef.current.has(cardKey)) {
-            seenSuggestionsRef.current.add(cardKey);
-            updatedCards.push({
-              ...card,
-              timestamp: Date.now(),
-              id: `suggestion-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-            });
-          }
-        });
-        
-        // Keep most recent 10 suggestions to avoid clutter
-        return updatedCards.slice(-10);
-      });
+      // REPLACE - Only show the most recent suggestion(s) from the latest backend response
+      // This ensures the agent sees the current/relevant suggestion aligned with user intent
+      if (newCards.length > 0) {
+        setCopilotCards(
+          newCards.map((card, idx) => ({
+            ...card,
+            timestamp: Date.now(),
+            id: `suggestion-${Date.now()}-${idx}-${Math.random().toString(36).substr(2, 9)}`,
+          }))
+        );
+      }
     };
 
     const statusHandler = (msg) => {
@@ -337,13 +322,47 @@ const LiveTranscript = () => {
     };
   }, [socket]);
 
+  // Auto-scroll transcripts to bottom when new messages arrive
+  useEffect(() => {
+    if (transcriptScrollerRef.current && shouldAutoScrollRef.current) {
+      const scroller = transcriptScrollerRef.current;
+      // Smooth scroll to bottom
+      scroller.scrollTo({
+        top: scroller.scrollHeight,
+        behavior: "smooth",
+      });
+    }
+  }, [transcripts]);
+
+  // Auto-scroll suggestions panel when new suggestions arrive
+  useEffect(() => {
+    if (suggestionsScrollerRef.current && copilotCards.length > 0) {
+      const scroller = suggestionsScrollerRef.current;
+      // Scroll to top since newest suggestions are displayed first (reversed order)
+      scroller.scrollTo({
+        top: 0,
+        behavior: "smooth",
+      });
+    }
+  }, [copilotCards]);
+
+  // Handle manual scroll detection for transcript scroller
+  const handleTranscriptScroll = () => {
+    if (!transcriptScrollerRef.current) return;
+    const scroller = transcriptScrollerRef.current;
+    const { scrollTop, scrollHeight, clientHeight } = scroller;
+    // If user is within 100px of bottom, enable auto-scroll; otherwise disable
+    const isNearBottom = scrollHeight - scrollTop - clientHeight < 100;
+    shouldAutoScrollRef.current = isNearBottom;
+  };
+
   return (
     <div className="live_transcript_layout">
       {/* LEFT: Amazon Connect CCP */}
       <aside className="lt_left_ccp">
         <div className="live_transcript_header lt_left_ccp_header">
           <div className="title">Amazon Connect CCP</div>
-          <div className="lt_conn_pill">
+          <div className={`lt_conn_pill ${isConnected ? "lt_conn_pill--connected" : "lt_conn_pill--disconnected"}`}>
             {isConnected ? "Connected" : "Disconnected"}
           </div>
         </div>
@@ -418,9 +437,63 @@ const LiveTranscript = () => {
 
         <div className="live_transcript_center_body">
           <div className="live_transcript_card lt_transcript_card">
-            <div className="lt_transcript_scroller">
+            <div 
+              className="lt_transcript_scroller"
+              ref={transcriptScrollerRef}
+              onScroll={handleTranscriptScroll}
+            >
               {transcripts.length === 0 ? (
-                <div className="lt_empty_state">No transcript yet.</div>
+                !isConnected ? (
+                  // Not logged in - Show login steps
+                  <div className="lt_transcript_empty_state">
+                    <div className="lt_transcript_empty_icon">
+                      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M22 16.92V19.92C22.0011 20.1985 21.9441 20.4742 21.8325 20.7293C21.7209 20.9845 21.5573 21.2136 21.3521 21.4019C21.1468 21.5901 20.9046 21.7335 20.6407 21.8227C20.3769 21.9119 20.0974 21.9451 19.82 21.92C16.7428 21.5856 13.787 20.5341 11.19 18.85C8.77382 17.3147 6.72533 15.2662 5.18999 12.85C3.49997 10.2412 2.44824 7.27099 2.11999 4.18C2.095 3.90347 2.12787 3.62476 2.21649 3.36162C2.30512 3.09849 2.44756 2.85669 2.63476 2.65162C2.82196 2.44655 3.0498 2.28271 3.30379 2.17052C3.55777 2.05833 3.83233 2.00026 4.10999 2H7.10999C7.5953 1.99522 8.06579 2.16708 8.43376 2.48353C8.80173 2.79999 9.04207 3.23945 9.10999 3.72C9.23662 4.68007 9.47144 5.62273 9.80999 6.53C9.94454 6.88792 9.97366 7.27691 9.8939 7.65088C9.81415 8.02485 9.62886 8.36811 9.35999 8.64L8.08999 9.91C9.51355 12.4135 11.5765 14.4765 14.08 15.9L15.35 14.63C15.6219 14.3611 15.9651 14.1758 16.3391 14.0961C16.7131 14.0163 17.1021 14.0454 17.46 14.18C18.3673 14.5185 19.3099 14.7534 20.27 14.88C20.7558 14.9485 21.1996 15.1907 21.5177 15.5627C21.8359 15.9347 22.0057 16.4108 22 16.92Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    </div>
+                    <div className="lt_transcript_empty_title">Waiting for Connection</div>
+                    <div className="lt_transcript_empty_subtitle">
+                      Please login to Amazon Connect to start receiving calls
+                    </div>
+                    <div className="lt_transcript_empty_steps">
+                      <div className="lt_step_item">
+                        <span className="lt_step_number">1</span>
+                        <span className="lt_step_text">Login to Amazon Connect CCP</span>
+                      </div>
+                      <div className="lt_step_item">
+                        <span className="lt_step_number">2</span>
+                        <span className="lt_step_text">Set your status to Available</span>
+                      </div>
+                      <div className="lt_step_item">
+                        <span className="lt_step_number">3</span>
+                        <span className="lt_step_text">Accept incoming call</span>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  // Logged in but no active call - Ready to listen
+                  <div className="lt_transcript_ready_state">
+                    <div className="lt_ready_icon_container">
+                      <div className="lt_ready_icon">
+                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                          <path d="M12 1C12 1 12 1 12 1C5.92487 1 1 5.92487 1 12C1 18.0751 5.92487 23 12 23C18.0751 23 23 18.0751 23 12C23 5.92487 18.0751 1 12 1Z" stroke="currentColor" strokeWidth="2"/>
+                          <path d="M8 14C8 14 9.5 16 12 16C14.5 16 16 14 16 14" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                          <circle cx="9" cy="10" r="1" fill="currentColor"/>
+                          <circle cx="15" cy="10" r="1" fill="currentColor"/>
+                        </svg>
+                      </div>
+                      <div className="lt_ready_pulse"></div>
+                    </div>
+                    <div className="lt_ready_title">Ready to Listen</div>
+                    <div className="lt_ready_subtitle">
+                      Waiting for incoming calls. The live transcript will appear here automatically once a call is connected.
+                    </div>
+                    <div className="lt_ready_status">
+                      <span className="lt_ready_dot"></span>
+                      <span>Agent Online</span>
+                    </div>
+                  </div>
+                )
               ) : (
                 <div className="lt_chat">
                   {transcripts.map((t, idx) => {
@@ -526,13 +599,14 @@ const LiveTranscript = () => {
             <div className="lt_ai_badge">Live</div>
           </div>
 
-          <div className="lt_ai_body">
+          <div className="lt_ai_body" ref={suggestionsScrollerRef}>
             {copilotCards && copilotCards.length > 0 ? (
               <div className="lt_suggestion_list">
                 {/* Show most recent suggestions first */}
                 {[...copilotCards].reverse().map((c, idx) => {
                   const priority = c?.priority || "medium";
-                  const priorityClass = `lt_suggestion_card lt_priority_${priority}`;
+                  const isLatest = idx === 0; // First item is latest since array is reversed
+                  const priorityClass = `lt_suggestion_card lt_priority_${priority}${isLatest ? " lt_suggestion_latest" : ""}`;
                   const cardKey = c?.id || `card-${idx}`;
                   return (
                     <div key={cardKey} className={priorityClass}>
@@ -543,12 +617,25 @@ const LiveTranscript = () => {
                         <span className="lt_suggestion_title">
                           {c?.title || c?.heading || "Suggestion"}
                         </span>
+                        {isLatest && (
+                          <span className="lt_latest_badge">
+                            <span className="lt_latest_dot"></span>
+                            Latest
+                          </span>
+                        )}
                         {c?.timestamp && (
                           <span className="lt_suggestion_time">
                             {formatSuggestionTime(c.timestamp)}
                           </span>
                         )}
                       </div>
+                      {/* Show user intent that triggered this suggestion */}
+                      {c?.userIntent && (
+                        <div className="lt_user_intent">
+                          <span className="lt_intent_label">User Intent:</span>
+                          <span className="lt_intent_text">{c.userIntent}</span>
+                        </div>
+                      )}
                       {c?.csrScript ? (
                         <div className="lt_suggestion_script">
                           <div className="lt_script_label">Say this:</div>
@@ -572,24 +659,13 @@ const LiveTranscript = () => {
             ) : (
               <div className="lt_ai_empty_state">
                 <div className="lt_empty_icon">
-                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M21 15C21 15.5304 20.7893 16.0391 20.4142 16.4142C20.0391 16.7893 19.5304 17 19 17H7L3 21V5C3 4.46957 3.21071 3.96086 3.58579 3.58579C3.96086 3.21071 4.46957 3 5 3H19C19.5304 3 20.0391 3.21071 20.4142 3.58579C20.7893 3.96086 21 4.46957 21 5V15Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="currentColor"/>
                   </svg>
                 </div>
-                <div className="lt_empty_title">Ready to assist</div>
-                <div className="lt_empty_tips">
-                  <div className="lt_tip_item">
-                    <span className="lt_tip_bullet">💡</span>
-                    <span>Verify customer identity with phone number</span>
-                  </div>
-                  <div className="lt_tip_item">
-                    <span className="lt_tip_bullet">🔍</span>
-                    <span>Confirm appliance and symptom details</span>
-                  </div>
-                  <div className="lt_tip_item">
-                    <span className="lt_tip_bullet">📋</span>
-                    <span>Summarize next steps and timelines</span>
-                  </div>
+                <div className="lt_empty_title">Ready to Assist</div>
+                <div className="lt_empty_subtitle">
+                  AI suggestions will appear here during an active call
                 </div>
               </div>
             )}
