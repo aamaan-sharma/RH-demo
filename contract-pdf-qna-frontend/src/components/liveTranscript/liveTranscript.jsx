@@ -441,22 +441,17 @@ const LiveTranscript = () => {
 
       {/* CENTER: Transcript */}
       <main className="lt_center">
-        <div className="live_transcript_header lt_center_header">
-          <div className="title_row">
-            <div className="title">Call Transcript</div>
-            {isCallConnected ? (
-              <div className="lt_streaming_badge">
-                Streaming
-                <span className="lt_ellipsis" aria-hidden="true">
-                  …
-                </span>
-              </div>
-            ) : null}
-          </div>
-        </div>
-
         <div className="live_transcript_center_body">
           <div className="live_transcript_card lt_transcript_card">
+            {/* Streaming indicator - shows when call is active */}
+            {isCallConnected && (
+              <div className="lt_transcript_status_bar">
+                <div className="lt_streaming_badge">
+                  <span className="lt_streaming_dot"></span>
+                  Live
+                </div>
+              </div>
+            )}
             <div 
               className="lt_transcript_scroller"
               ref={transcriptScrollerRef}

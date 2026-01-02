@@ -1,8 +1,13 @@
-import React from "react";
+import React, { useState, useRef, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import responseIcon from "../../../assets/response.svg";
 import responseBlueIcon from "../../../assets/response_blue.svg";
+import documentsIcon from "../../../assets/documents.svg";
+import thumbsDownIcon from "../../../assets/thumbs_down.svg";
+import shareIcon from "../../../assets/share.svg";
 import { ItemizedFinalAnswer } from "../itemizedFinalAnswer/itemizedFinalAnswer";
 import TryAgainButton from "../tryAgainButton/tryAgainButton";
+import Popup from "../popup/popup";
 import "./response.scss";
 
 const renderInlineBold = (text) => {
@@ -112,10 +117,76 @@ const Response = ({
   isError = false,
   onRetry = null,
 }) => {
+  const navigate = useNavigate();
+  const popupRef = useRef(null);
+  
+  // State for action icons
+  const [showFeedbackPopup, setShowFeedbackPopup] = useState(false);
+  const [feedbackResponse, setFeedbackResponse] = useState("");
+  const [copiedToClipboard, setCopiedToClipboard] = useState(false);
+
   const isLoading = response === "Loading Response";
   const isErrorState = isError || (response && response.includes("Please try again"));
   const isBlue = tone === "blue";
   const headerIcon = isBlue ? responseBlueIcon : responseIcon;
+
+  // Close feedback popup when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (popupRef.current && !popupRef.current.contains(event.target)) {
+        setShowFeedbackPopup(false);
+      }
+    };
+    if (showFeedbackPopup) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [showFeedbackPopup]);
+
+  // Handle reference icon click - navigate to referred clauses page
+  const handleReferenceClick = () => {
+    if (conversationId && chatId) {
+      window.open(
+        `/conversation/${conversationId}/chat/${chatId}/referred-clauses`,
+        "_blank",
+        "noopener,noreferrer"
+      );
+    }
+  };
+
+  // Handle feedback icon click - toggle popup
+  const handleFeedbackClick = () => {
+    setShowFeedbackPopup((prev) => !prev);
+  };
+
+  // Handle share icon click - copy response to clipboard
+  const handleShareClick = async () => {
+    try {
+      await navigator.clipboard.writeText(response || "");
+      setCopiedToClipboard(true);
+      setTimeout(() => setCopiedToClipboard(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy to clipboard:", err);
+    }
+  };
+
+  // Submit feedback handler
+  const submitFeedback = () => {
+    if (!feedbackResponse.trim()) return;
+    
+    // TODO: Send feedback to backend API
+    console.log("Feedback submitted:", {
+      chatId,
+      conversationId,
+      feedback: feedbackResponse,
+    });
+    
+    // Reset and close popup
+    setFeedbackResponse("");
+    setShowFeedbackPopup(false);
+  };
 
   return (
     <div
@@ -228,6 +299,49 @@ const Response = ({
               </div>
             </div>
           ) : null}
+
+          {/* Action Icons - Reference, Feedback, Share */}
+          {variant !== "finalAnswer" && (
+            <div className="icon_wrapper">
+              {/* Reference Icon - View referred clauses */}
+              <div 
+                className="icon_container" 
+                onClick={handleReferenceClick}
+                title="View referred clauses"
+              >
+                <img src={documentsIcon} alt="Reference clauses" />
+              </div>
+
+              {/* Feedback Icon - Report unhelpful response */}
+              <div 
+                className={`icon_container ${showFeedbackPopup ? "active" : ""}`}
+                onClick={handleFeedbackClick}
+                title="Report feedback"
+              >
+                <img src={thumbsDownIcon} alt="Feedback" />
+              </div>
+
+              {/* Share Icon - Copy to clipboard */}
+              <div 
+                className={`icon_container ${copiedToClipboard ? "active" : ""}`}
+                onClick={handleShareClick}
+                title={copiedToClipboard ? "Copied!" : "Copy response"}
+              >
+                <img src={shareIcon} alt="Share" />
+              </div>
+            </div>
+          )}
+
+          {/* Feedback Popup */}
+          {showFeedbackPopup && (
+            <Popup
+              popupRef={popupRef}
+              closePopup={() => setShowFeedbackPopup(false)}
+              feedbackResponse={feedbackResponse}
+              setFeedbackResponse={setFeedbackResponse}
+              submitFeedback={submitFeedback}
+            />
+          )}
         </>
       )}
     </div>
