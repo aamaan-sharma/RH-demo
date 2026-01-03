@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import "./liveTranscript.scss";
 import { BACKEND_BASE, CCP_URL, REGION } from "../../config";
+import { getIdToken } from "../../utils/authStorage";
 
 const LiveTranscript = () => {
   const ccpContainerRef = useRef(null);
@@ -19,6 +20,9 @@ const LiveTranscript = () => {
     return io(BACKEND_BASE, {
       transports: ["websocket", "polling"],
       reconnection: true,
+      auth: {
+        token: getIdToken(),   // 🔐 JWT goes here
+      },
       reconnectionAttempts: Infinity,
       reconnectionDelay: 500,
     });
@@ -136,7 +140,9 @@ const LiveTranscript = () => {
       });
 
       window.connect.agent((agent) => {
-        setAgentName(agent.getName ? agent.getName() : "Agent");
+        const name = agent.getName ? agent.getName() : "Agent";
+
+        setAgentName(name);
         setIsConnected(true);
         setCcpInitInProgress(false);
         // Best-effort: keep status in sync if Streams exposes state changes.
