@@ -179,15 +179,45 @@
     }
   }
 
-  .ifa_split,
-  .ifa_amounts,
-  .ifa_why,
-  .ifa_next {
+  .ifa_situation {
+    margin-bottom: 10px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid rgba(94, 123, 198, 0.18);
+    background: linear-gradient(180deg, #fbfcff 0%, #ffffff 100%);
+
     .h {
       font-size: 12px;
       font-weight: 900;
       color: #2f3a57;
-      margin-bottom: 6px;
+      margin-bottom: 8px;
+    }
+
+    .content {
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 18px;
+      color: #333333;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+  }
+
+  .ifa_split,
+  .ifa_amounts,
+  .ifa_why,
+  .ifa_next {
+    margin-bottom: 10px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid rgba(94, 123, 198, 0.18);
+    background: linear-gradient(180deg, #fbfcff 0%, #ffffff 100%);
+
+    .h {
+      font-size: 12px;
+      font-weight: 900;
+      color: #2f3a57;
+      margin-bottom: 8px;
     }
     ul {
       margin: 0;
@@ -199,8 +229,16 @@
     }
   }
 
+  .ifa_split {
+    padding: 12px;
+    .col {
+      padding: 8px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.5);
+    }
+  }
+
   .ifa_amounts {
-    margin-bottom: 10px;
     .sub {
       margin-top: 6px;
     }

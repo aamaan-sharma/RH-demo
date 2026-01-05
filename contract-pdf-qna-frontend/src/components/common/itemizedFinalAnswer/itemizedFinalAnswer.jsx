@@ -165,7 +165,21 @@ const parseItemSections = (text) => {
           if (!/^none$/i.test(v)) item.notCovered.push(v);
           mode = "";
         } else {
-          // "What’s not covered / limitations:" -> capture following bullets
+          mode = "notCovered";
+        }
+        continue;
+      }
+      // Handle "Limitations / not covered:" pattern
+      const limitationsInline = base.match(
+        /^Limitations\s*\/\s*not covered\s*:\s*(.*)$/i
+      );
+      if (limitationsInline) {
+        const v = String(limitationsInline[1] || "").trim();
+        if (v) {
+          // Allow "None specified" to be displayed
+          if (!/^none$/i.test(v)) item.notCovered.push(v);
+          mode = "";
+        } else {
           mode = "notCovered";
         }
         continue;
@@ -209,6 +223,10 @@ const parseItemSections = (text) => {
         continue;
       }
       if (/^What.?s not covered\b/i.test(base)) {
+        mode = "notCovered";
+        continue;
+      }
+      if (/^Limitations\s*\/\s*not covered\b/i.test(base)) {
         mode = "notCovered";
         continue;
       }
@@ -453,23 +471,31 @@ export const ItemizedFinalAnswer = ({ text = "", title = "Final Answer", asCard 
                 ) : null}
                 {it.related && it.related.trim() ? (
                   <div className="row">
-                    <div className="k">Related</div>
+                    <div className="k">
+                      <strong>Related</strong>
+                    </div>
                     <div className="v">{it.related}</div>
                   </div>
                 ) : null}
-                {it.situation && it.situation.trim() ? (
-                  <div className="row">
-                    <div className="k">Situation</div>
-                    <div className="v">{it.situation}</div>
-                  </div>
-                ) : null}
               </div>
+
+              {/* Situation section with enhanced styling */}
+              {it.situation && it.situation.trim() ? (
+                <div className="ifa_situation">
+                  <div className="h">
+                    <strong>Situation</strong>
+                  </div>
+                  <div className="content">{it.situation}</div>
+                </div>
+              ) : null}
 
               {(it.covered?.length || it.notCovered?.length) ? (
                 <div className="ifa_split">
                   {it.covered?.length ? (
                     <div className="col">
-                      <div className="h">What’s covered</div>
+                      <div className="h">
+                        <strong>What's covered</strong>
+                      </div>
                       <ul>
                         {it.covered.map((x, i) => (
                           <li key={i}>{x}</li>
@@ -478,8 +504,10 @@ export const ItemizedFinalAnswer = ({ text = "", title = "Final Answer", asCard 
                     </div>
                   ) : null}
                   {it.notCovered?.length ? (
-                    <div className="col">
-                      <div className="h">Limitations / not covered</div>
+                    <div className="col ifa_limitations">
+                      <div className="h">
+                        <strong>Limitations / not covered</strong>
+                      </div>
                       <ul>
                         {it.notCovered.map((x, i) => (
                           <li key={i}>{x}</li>
@@ -492,7 +520,9 @@ export const ItemizedFinalAnswer = ({ text = "", title = "Final Answer", asCard 
 
               {it.why?.length ? (
                 <div className="ifa_why">
-                  <div className="h">Why</div>
+                  <div className="h">
+                    <strong>Why</strong>
+                  </div>
                   <ul>
                     {it.why.map((x, i) => (
                       <li key={i}>{x}</li>
@@ -503,7 +533,9 @@ export const ItemizedFinalAnswer = ({ text = "", title = "Final Answer", asCard 
 
               {it.nextSteps?.length ? (
                 <div className="ifa_next">
-                  <div className="h">Next steps</div>
+                  <div className="h">
+                    <strong>Next steps</strong>
+                  </div>
                   <ul>
                     {it.nextSteps.map((x, i) => (
                       <li key={i}>{x}</li>
@@ -515,12 +547,6 @@ export const ItemizedFinalAnswer = ({ text = "", title = "Final Answer", asCard 
           );
         })}
       </div>
-
-      {parsed.overallNextSteps ? (
-        <div className="ifa_overall_next">
-          <StructuredCaseText text={parsed.overallNextSteps} />
-        </div>
-      ) : null}
     </div>
   );
 };
