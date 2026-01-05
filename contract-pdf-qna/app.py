@@ -3,7 +3,17 @@
 import os
 import asyncio
 from dotenv import load_dotenv
-from flask import Flask, request, jsonify, make_response, Response, stream_with_context, session
+from flask import (
+    Flask,
+    request,
+    jsonify,
+    make_response,
+    Response,
+    stream_with_context,
+    session,
+    g,
+    has_request_context,
+)
 from flask_socketio import SocketIO, emit, join_room, disconnect
 from pymongo import MongoClient, ReturnDocument
 from datetime import datetime
@@ -73,7 +83,7 @@ except ImportError:
 
 # Safe import of monitoring_module - handle missing dependencies gracefully
 # try:
-from monitoring_module import q_monitor, tracer, llm_trace_to_jaeger
+from monitoring_module import q_monitor, tracer, llm_trace_to_otel
 # except ImportError as e:
 #     print(f"Warning: Could not import monitoring_module: {e}")
 #     print("Monitoring features will be disabled. The app will continue to run.")
@@ -91,7 +101,7 @@ from monitoring_module import q_monitor, tracer, llm_trace_to_jaeger
 #         def __getattr__(self, name):
 #             return self
 #     tracer = DummyTracer()
-#     def llm_trace_to_jaeger(*args, **kwargs):
+#     def llm_trace_to_otel(*args, **kwargs):
 #         pass
 
 from token_module import token_calculator, CallbackHandler
@@ -100,7 +110,26 @@ import threading
 # Using new LangChain memory API - InMemoryChatMessageHistory
 # Note: This is only used to store previous Q&A for standalone prompt, not used in chains
 memory1 = InMemoryChatMessageHistory()
-handler = CallbackHandler()
+
+
+def get_langchain_handler() -> CallbackHandler:
+    """
+    Return exactly one LangChain callback handler per request.
+
+    - If called outside a request context, returns a fresh handler instance.
+    """
+    try:
+        if has_request_context():
+            existing = getattr(g, "_langchain_handler", None)
+            if existing is None:
+                existing = CallbackHandler()
+                g._langchain_handler = existing
+            return existing
+    except Exception:
+        pass
+    return CallbackHandler()
+
+
 load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret")
@@ -499,7 +528,7 @@ def fetch_user_by_mobile(mobile_number: str) -> str:
         return f"Error fetching user details: {str(e)}"
 
 
-def input_prompt(entered_query, qa, llm):
+def input_prompt(entered_query, qa, llm, handler: CallbackHandler):
     # Retriever chain as Tool for agent
     knowledge_base_tool = Tool(
         name="Knowledge Base",
@@ -562,7 +591,7 @@ def input_prompt(entered_query, qa, llm):
 
     agent.agent.llm_chain.prompt = new_prompt
 
-    response = agent({"input": entered_query},callbacks=[handler])
+    response = agent.invoke({"input": entered_query}, config={"callbacks": [handler]})
     return response
 
 
@@ -1551,7 +1580,8 @@ Return the final JSON array and nothing else.
         # Run agent with transcript
         agent_input = f"Extract relevant customer questions from this transcript:\n\n{transcript_content}"
         print(f"DEBUG: Running agent with transcript length: {len(transcript_content)} characters")
-        response = agent.invoke({"input": agent_input})
+        handler = get_langchain_handler()
+        response = agent.invoke({"input": agent_input}, config={"callbacks": [handler]})
         
         print(f"DEBUG: Agent response keys: {response.keys()}")
         print(f"DEBUG: Agent output: {response.get('output', '')[:200]}")
@@ -1808,7 +1838,7 @@ Answer format:
         elif gpt_model == "Infer":
             print("[CHUNKS] process_single_transcript_question: building QA chain (Infer)")
             qa = RetrievalQA.from_chain_type(llm=llm, retriever=retriever, verbose=True)
-            agent_response = input_prompt(enriched_query, qa, llm)
+            agent_response = input_prompt(enriched_query, qa, llm, handler)
             answer = agent_response["output"]
             print(
                 "[CHUNKS] process_single_transcript_question: agent_response received "
@@ -2011,6 +2041,7 @@ def process_live_copilot_question(
         llm2 = ChatOpenAI(temperature=0.0, model="gpt-4o")
         
         # Call the existing INFER implementation
+        handler = get_langchain_handler()
         result = process_single_transcript_question(
             question=question,
             contract_type=contract_type,
@@ -2170,7 +2201,7 @@ def before_request():
 
 @app.route("/feedback", methods=["POST"])
 def feedback():
-    with tracer.start_span('api/feedback'):
+    with tracer.start_as_current_span("api/feedback"):
         authorization_header = request.headers.get("Authorization")
 
         # case 5: missing token
@@ -2278,8 +2309,8 @@ def calls_transcripts():
 @app.route("/start", methods=["POST"])
 def start():
     try:
-        with tracer.start_span('api/start') as parent0:
-            with tracer.start_span('authorization', child_of=parent0):
+        with tracer.start_as_current_span("api/start") as parent0:
+            with tracer.start_as_current_span("authorization"):
                 start_time = time()
                 authorization_header = request.headers.get("Authorization")
 
@@ -2292,7 +2323,7 @@ def start():
                     if token_data[1] == 401 or token_data[1] == 403:
                         return (token_data[0].get_json()), token_data[1]
             
-            with tracer.start_span('data-fetching', child_of=parent0):
+            with tracer.start_as_current_span("data-fetching"):
                 data = request.get_json()
                 if not data:
                     return jsonify({"error": "Request body is missing or invalid"}), 400
@@ -2305,6 +2336,9 @@ def start():
                 selected_plan_norm = normalize_plan_for_milvus(contract_type_norm, selected_plan)
                 gpt_model = data.get("gptModel")
                 entered_query = data.get("enteredQuery")
+
+                # Exactly one handler per request (used for all LangChain invocations in this request)
+                handler = get_langchain_handler()
                 
                 # Validate required fields
                 if not all([contract_type, selected_plan, selected_state, gpt_model, entered_query]):
@@ -2338,7 +2372,7 @@ def start():
                     f"selected_plan={selected_plan!r}->{selected_plan_norm!r}, "
                     f"collection={selected_collection_name!r}"
                 )
-            with tracer.start_span('vector_db-initialization', child_of=parent0):
+            with tracer.start_as_current_span("vector_db-initialization"):
                 # Selecting collection dynamically
                 vector_db1: Milvus = Milvus(
                     embed,
@@ -2351,13 +2385,13 @@ def start():
             relevant_documents = ""
 
             if gpt_model == "Search":
-                with tracer.start_span('Search', child_of=parent0) as parent1:
-                    with tracer.start_span('llm-retriever-initialization', child_of=parent1):
+                with tracer.start_as_current_span("Search") as parent1:
+                    with tracer.start_as_current_span("llm-retriever-initialization"):
                         llm2 = ChatOpenAI(temperature=0.0, model="ft:gpt-3.5-turbo-0613:mindstix::8YYD56aA")
                         llm = ChatOpenAI(temperature=0.0, model="gpt-4o")
                         retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
                     
-                    with tracer.start_span('memory_update', child_of=parent1):
+                    with tracer.start_as_current_span("memory_update"):
                         memory1.clear()
                         question1 = ""
                         answer1 = ""
@@ -2371,7 +2405,7 @@ def start():
                                     memory1.add_message(HumanMessage(content=question1))
                                     memory1.add_message(AIMessage(content=answer1))
 
-                    with tracer.start_span('standalone-prompt-chain', child_of=parent1) as p:
+                    with tracer.start_as_current_span("standalone-prompt-chain") as p:
                         standalone_prompt = ChatPromptTemplate.from_template(
                         """
                         Act as an expert in question rephrasing and create a standalone question in its own language by analyzing previous question, answer to the previous question and current question.
@@ -2414,19 +2448,13 @@ def start():
                             config={"callbacks": [handler]},
                         )
                         print(standalone_result)
-                        res1, tok1 = handler.infi()
-                        llm_trace_to_jaeger(res1, p.span_id, p.trace_id)
-                        a = threading.Thread(target=token_calculator, args=(tok1,))
-                        a.start()
 
                         print(f"time taken for standalone = {time() - start}")
 
-                    with tracer.start_span('q_monitor', child_of=parent1) as parentq:
-                        t = threading.Thread(target=q_monitor, args=(parentq,entered_query,))
-                        t.start()
-                        # q_monitor(parentq,entered_query)
+                    # Run prompt-monitoring in background (child span created inside monitoring thread)
+                    threading.Thread(target=q_monitor, args=(parent1, entered_query)).start()
 
-                    with tracer.start_span('llm-RetrievalQA-chain', child_of=parent1) as q:
+                    with tracer.start_as_current_span("llm-RetrievalQA-chain") as q:
                         # Creating a prompt template
                         prompt_template = """
 
@@ -2465,12 +2493,13 @@ def start():
                             config={"callbacks": [handler]},
                         )
                         agent_resp = qa_resp["result"] if isinstance(qa_resp, dict) else qa_resp
-                        res2, tok2 = handler.infi()
-                        llm_trace_to_jaeger(res2, q.span_id, q.trace_id)
-                        b = threading.Thread(target=token_calculator, args=(tok2,))
-                        b.start()
+
+                    # After ALL LangChain work completes: export exactly once.
+                    res_all, tok_all = handler.infi()
+                    llm_trace_to_otel(res_all, parent1)
+                    threading.Thread(target=token_calculator, args=(tok_all,)).start()
                     
-                    with tracer.start_span('relevant_documents', child_of=parent1):
+                    with tracer.start_as_current_span("relevant_documents"):
                         print(
                             "[CHUNKS] /start(Search): calling relevant_docs for entered_query "
                             f"'{str(entered_query)[:200]}'"
@@ -2482,14 +2511,14 @@ def start():
                         )
 
             elif gpt_model == "Infer":
-                with tracer.start_span('Infer', child_of=parent0) as parent1:
-                    with tracer.start_span('llm-retriever-initialization', child_of=parent1):
+                with tracer.start_as_current_span("Infer") as parent1:
+                    with tracer.start_as_current_span("llm-retriever-initialization"):
                         llm3 = ChatOpenAI(temperature=0.0, model="ft:gpt-3.5-turbo-0613:mindstix::8YYD56aA")
                         llm = ChatOpenAI(temperature=0.0, model='gpt-4o')
                         llm2 = ChatOpenAI(temperature=0.0, model='gpt-4o')
                         retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
                         
-                    with tracer.start_span('memory_update', child_of=parent1):
+                    with tracer.start_as_current_span("memory_update"):
                         memory1.clear()
                         question1 = ""
                         answer1 = ""
@@ -2503,7 +2532,7 @@ def start():
                                     memory1.add_message(HumanMessage(content=question1))
                                     memory1.add_message(AIMessage(content=answer1))
 
-                    with tracer.start_span('standalone-prompt-chain', child_of=parent1) as p:
+                    with tracer.start_as_current_span("standalone-prompt-chain") as p:
                         standalone_prompt = ChatPromptTemplate.from_template(
                             """
                             Identify if the current question is related to previous question and answer and Create a standalone question in its own language by analyzing previous question, answer to the previous question and current question.
@@ -2539,27 +2568,26 @@ def start():
                         start = int(time())
                         standalone_chain = standalone_prompt | llm3 | StrOutputParser()
 
-                        standalone_result = standalone_chain.invoke({"input": entered_query})
+                        standalone_result = standalone_chain.invoke(
+                            {"input": entered_query},
+                            config={"callbacks": [handler]},
+                        )
                         print(standalone_result)
-                        res1, tok1 = handler.infi()
-                        llm_trace_to_jaeger(res1, p.span_id, p.trace_id)
-                        a = threading.Thread(target=token_calculator, args=(tok1,))
-                        a.start()
 
-                    with tracer.start_span('q_monitor', child_of=parent1) as parentq:
-                        t = threading.Thread(target=q_monitor, args=(parentq,entered_query,))
-                        t.start()
+                    # Run prompt-monitoring in background (child span created inside monitoring thread)
+                    threading.Thread(target=q_monitor, args=(parent1, entered_query)).start()
 
-                    with tracer.start_span('llm-RetrievalQA-chain', child_of=parent1) as q:
+                    with tracer.start_as_current_span("llm-RetrievalQA-chain") as q:
                         qa = RetrievalQA.from_chain_type(llm=llm2, retriever=retriever, verbose=True)
-                        agent_response = input_prompt(standalone_result, qa, llm)
+                        agent_response = input_prompt(standalone_result, qa, llm, handler)
                         agent_resp = agent_response["output"]
-                        res2, tok2 = handler.infi()
-                        llm_trace_to_jaeger(res2, q.span_id, q.trace_id)
-                        b = threading.Thread(target=token_calculator, args=(tok2,))
-                        b.start()
+
+                    # After ALL LangChain work completes: export exactly once.
+                    res_all, tok_all = handler.infi()
+                    llm_trace_to_otel(res_all, parent1)
+                    threading.Thread(target=token_calculator, args=(tok_all,)).start()
                     
-                    with tracer.start_span('relevant_documents', child_of=parent1):
+                    with tracer.start_as_current_span("relevant_documents"):
                         knowledge_base_thoughts = [
                             item[0].tool_input
                             for item in agent_response["intermediate_steps"]
@@ -2584,7 +2612,7 @@ def start():
             else:
                 return jsonify({"error": f"Invalid gpt_model: {gpt_model}. Must be 'Search' or 'Infer'"}), 400
 
-            with tracer.start_span('output-formating', child_of=parent0):
+            with tracer.start_as_current_span("output-formating"):
                 # Validate that we have a response
                 if agent_resp is None:
                     return jsonify({"error": "Invalid gpt_model. Must be 'Search' or 'Infer'"}), 400
@@ -2752,7 +2780,7 @@ def calls_start():
 
 @app.route("/history", methods=["GET"])
 def chat_history():
-    with tracer.start_span('api/history'):
+    with tracer.start_as_current_span("api/history"):
         authorization_header = request.headers.get("Authorization")
 
         if authorization_header is None:
@@ -2841,7 +2869,7 @@ def authorize_conversation_answer():
       - status (optional): 'inactive' | 'active' (defaults to 'inactive')
     """
     try:
-        with tracer.start_span("api/conversation/authorize"):
+        with tracer.start_as_current_span("api/conversation/authorize"):
             authorization_header = request.headers.get("Authorization")
 
             if authorization_header is None:
@@ -2928,7 +2956,7 @@ def update_conversation_status():
       - status: 'active' | 'inactive'
     """
     try:
-        with tracer.start_span('api/conversation/status'):
+        with tracer.start_as_current_span("api/conversation/status"):
             authorization_header = request.headers.get("Authorization")
 
             if authorization_header is None:
@@ -2977,7 +3005,7 @@ def update_conversation_status():
 
 @app.route("/sidebar", methods=["GET"])
 def sidebar_history():
-    with tracer.start_span('api/sidebar'):
+    with tracer.start_as_current_span("api/sidebar"):
         authorization_header = request.headers.get("Authorization")
 
         if authorization_header is None:
@@ -3048,7 +3076,7 @@ def sidebar_history():
 
 @app.route("/delete", methods=["DELETE"])
 def delete_conversation():
-    with tracer.start_span('api/delete'):
+    with tracer.start_as_current_span("api/delete"):
         authorization_header = request.headers.get("Authorization")
 
         if authorization_header is None:
@@ -3072,7 +3100,7 @@ def delete_conversation():
 
 @app.route("/edit-conversation-name", methods=["PATCH"])
 def edit_name():
-    with tracer.start_span('api/edit-conversation-name'):
+    with tracer.start_as_current_span("api/edit-conversation-name"):
         authorization_header = request.headers.get("Authorization")
 
         if authorization_header is None:
@@ -3107,7 +3135,7 @@ def edit_name():
 
 @app.route("/referred-clauses", methods=["GET"])
 def referred_clauses():
-    with tracer.start_span('api/referred-clauses'):
+    with tracer.start_as_current_span("api/referred-clauses"):
         authorization_header = request.headers.get("Authorization")
 
         if authorization_header is None:
@@ -3188,7 +3216,7 @@ def list_transcripts():
     - q (str, optional): Alias for 'search' parameter
     """
     try:
-        with tracer.start_span('api/transcripts'):
+        with tracer.start_as_current_span("api/transcripts"):
             authorization_header = request.headers.get("Authorization")
             
             if authorization_header is None:
@@ -3288,7 +3316,7 @@ def list_transcripts():
 def get_transcript_content(filename):
     """Fetch transcript file content from GCS bucket"""
     try:
-        with tracer.start_span('api/transcripts/content'):
+        with tracer.start_as_current_span("api/transcripts/content"):
             # Authorization
             authorization_header = request.headers.get("Authorization")
             
@@ -3547,7 +3575,7 @@ def transcript_dialogue():
       }
     """
     try:
-        with tracer.start_span("api/transcripts/dialogue"):
+        with tracer.start_as_current_span("api/transcripts/dialogue"):
             # Authorization
             authorization_header = request.headers.get("Authorization")
             if authorization_header is None:
@@ -3623,7 +3651,7 @@ def update_transcript_status():
       - status: 'active' | 'inactive'
     """
     try:
-        with tracer.start_span('api/transcripts/status'):
+        with tracer.start_as_current_span("api/transcripts/status"):
             authorization_header = request.headers.get("Authorization")
 
             if authorization_header is None:
@@ -3696,7 +3724,7 @@ def list_transcript_conversations():
       }
     """
     try:
-        with tracer.start_span('api/transcripts/conversations'):
+        with tracer.start_as_current_span("api/transcripts/conversations"):
             authorization_header = request.headers.get("Authorization")
 
             if authorization_header is None:
@@ -4269,6 +4297,8 @@ def process_transcript_stream():
             total_latency = 0.0
             now_ts = datetime.utcnow()
 
+            handler = get_langchain_handler()
+
             # Process each question and stream immediately
             for idx, question_obj in enumerate(questions):
                 question_text = question_obj.get("question", "")
@@ -4536,12 +4566,12 @@ def process_transcript_stream():
 def process_transcript():
     """Process transcript: fetch from GCP, extract questions, and get answers"""
     try:
-        with tracer.start_span('api/transcripts/process') as parent0:
+        with tracer.start_as_current_span("api/transcripts/process") as parent0:
             start_time = time()
             extraction_warning = None
             
             # Authorization
-            with tracer.start_span('authorization', child_of=parent0):
+            with tracer.start_as_current_span("authorization"):
                 authorization_header = request.headers.get("Authorization")
                 
                 if authorization_header is None:
@@ -4553,7 +4583,7 @@ def process_transcript():
                         return (token_data[0].get_json()), token_data[1]
             
             # Get request data
-            with tracer.start_span('data-fetching', child_of=parent0):
+            with tracer.start_as_current_span("data-fetching"):
                 data = request.get_json()
                 if not data:
                     return jsonify({"error": "Request body is missing or invalid"}), 400
@@ -4737,7 +4767,7 @@ def process_transcript():
                 )
             
             # Read transcript from GCP bucket
-            with tracer.start_span('download-transcript', child_of=parent0):
+            with tracer.start_as_current_span("download-transcript"):
                 if not gcs_fs:
                     return jsonify({"error": "GCP Storage not configured or unavailable"}), 500
                 
@@ -4765,7 +4795,7 @@ def process_transcript():
             # Extract questions
             questions = []
             if extract_questions:
-                with tracer.start_span('extract-questions', child_of=parent0):
+                with tracer.start_as_current_span("extract-questions"):
                     llm_extract = ChatOpenAI(temperature=0.0, model="gpt-4o")
                     # Try direct extraction first (more reliable), then agent if needed
                     print(f"DEBUG: Attempting direct extraction first...")
@@ -4797,7 +4827,7 @@ def process_transcript():
                     return jsonify({"error": "No questions provided"}), 400
             
             # Initialize vector DB and LLM
-            with tracer.start_span('vector_db-initialization', child_of=parent0):
+            with tracer.start_as_current_span("vector_db-initialization"):
                 collection_mapping = {
                     "RE": {
                         "ShieldEssential": f"{milvus_state}_RE_ShieldEssential",
@@ -4845,7 +4875,9 @@ def process_transcript():
             total_latency = 0
             confidences = []
             
-            with tracer.start_span('process-questions', child_of=parent0):
+            handler = get_langchain_handler()
+
+            with tracer.start_as_current_span("process-questions"):
                 for question_obj in questions:
                     question_text = question_obj.get("question", "")
                     question_id = question_obj.get("questionId", f"q{len(results) + 1}")
@@ -4964,7 +4996,7 @@ def process_transcript():
             # and only skip items that have no question text at all.
             final_summary_text = ""
             try:
-                with tracer.start_span('final-summary', child_of=parent0):
+                with tracer.start_as_current_span("final-summary"):
                     llm_summary = ChatOpenAI(temperature=0.0, model="gpt-4o")
                     qa_lines = []
                     for r in results or []:
@@ -5168,19 +5200,19 @@ def process_transcript_internal():
     - Stores results into chats_<user_email> same as normal flow
     """
     try:
-        with tracer.start_span('api/internal/transcripts/process') as parent0:
+        with tracer.start_as_current_span("api/internal/transcripts/process") as parent0:
             start_time = time()
             extraction_warning = None
 
             # --- Internal auth (simple shared secret) ---
-            with tracer.start_span('internal-auth', child_of=parent0):
+            with tracer.start_as_current_span("internal-auth"):
                 expected = os.getenv("INTERNAL_PROCESS_SECRET")
                 got = request.headers.get("X-Internal-Auth")
                 if not expected or got != expected:
                     return jsonify({"error": "unauthorized"}), 401
 
             # --- Request body ---
-            with tracer.start_span('data-fetching', child_of=parent0):
+            with tracer.start_as_current_span("data-fetching"):
                 data = request.get_json()
                 if not data:
                     return jsonify({"error": "Request body is missing or invalid"}), 400
@@ -5212,7 +5244,7 @@ def process_transcript_internal():
             transcript_id = transcript_file_name.replace(".json", "").replace(".txt", "")
 
             # --- Resolve user email from mappings ---
-            with tracer.start_span('resolve-email', child_of=parent0):
+            with tracer.start_as_current_span("resolve-email"):
                 user_email = None
 
                 # (A) Best: resolve from sessions mapping (contactId -> email)
@@ -5416,7 +5448,7 @@ def process_transcript_internal():
             # If you refactor process_transcript() into a shared helper, internal will just pass user_email.
             #
             # For now, do a minimal change: keep your code continuation here.
-            with tracer.start_span('download-transcript', child_of=parent0):
+            with tracer.start_as_current_span("download-transcript"):
                 if not gcs_fs:
                     return jsonify({"error": "GCP Storage not configured or unavailable"}), 500
                 
@@ -5444,7 +5476,7 @@ def process_transcript_internal():
             # Extract questions
             questions = []
             if extract_questions:
-                with tracer.start_span('extract-questions', child_of=parent0):
+                with tracer.start_as_current_span("extract-questions"):
                     llm_extract = ChatOpenAI(temperature=0.0, model="gpt-4o")
                     # Try direct extraction first (more reliable), then agent if needed
                     print(f"DEBUG: Attempting direct extraction first...")
@@ -5476,7 +5508,7 @@ def process_transcript_internal():
                     return jsonify({"error": "No questions provided"}), 400
             
             # Initialize vector DB and LLM
-            with tracer.start_span('vector_db-initialization', child_of=parent0):
+            with tracer.start_as_current_span("vector_db-initialization"):
                 collection_mapping = {
                     "RE": {
                         "ShieldEssential": f"{milvus_state}_RE_ShieldEssential",
@@ -5524,7 +5556,9 @@ def process_transcript_internal():
             total_latency = 0
             confidences = []
             
-            with tracer.start_span('process-questions', child_of=parent0):
+            handler = get_langchain_handler()
+
+            with tracer.start_as_current_span("process-questions"):
                 for question_obj in questions:
                     question_text = question_obj.get("question", "")
                     question_id = question_obj.get("questionId", f"q{len(results) + 1}")
@@ -5643,7 +5677,7 @@ def process_transcript_internal():
             # and only skip items that have no question text at all.
             final_summary_text = ""
             try:
-                with tracer.start_span('final-summary', child_of=parent0):
+                with tracer.start_as_current_span("final-summary"):
                     llm_summary = ChatOpenAI(temperature=0.0, model="gpt-4o")
                     qa_lines = []
                     for r in results or []:

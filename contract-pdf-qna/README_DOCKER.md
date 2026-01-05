@@ -9,6 +9,15 @@ This folder can be containerized with Docker so it runs consistently across OSes
 
 Provide configuration via environment variables instead.
 
+### Tracing (OpenTelemetry -> Jaeger via OTLP/HTTP)
+
+The backend reports traces via **OpenTelemetry** and exports them to Jaeger over **OTLP/HTTP** (no UDP/agent).
+
+Set:
+- `OTEL_SERVICE_NAME` (default: `claims-service`)
+- `OTEL_EXPORTER_OTLP_ENDPOINT` (default: `http://jaeger:4318`)
+- `OTEL_EXPORTER_OTLP_PROTOCOL` (default: `http/protobuf`)
+
 ### Build + run (Docker)
 
 ```bash

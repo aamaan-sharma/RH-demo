@@ -9,7 +9,15 @@ from google.oauth2 import service_account
 from google.cloud import bigquery
 from datetime import datetime
 import closest
-from jaeger_client import Config, span, span_context, constants
+import atexit
+import os
+from typing import Any, Dict, Iterable, Optional
+
+from opentelemetry import trace
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from sentence_transformers import SentenceTransformer, util
 import json
 from pathlib import Path
@@ -31,25 +39,50 @@ ontopic_embed = [model.encode(i) for i in ontopic]
 offtopic_embed = [model.encode(i) for i in offtopic]
 
 
-def init_tracer(service_name):
-    config = Config(
-        config={
-            'sampler': {'type': 'const', 'param': 1},
-            'logging': True,
-        },
-        service_name=service_name,
+_TRACER = None
+
+
+def init_tracer():
+    global _TRACER
+    if _TRACER:
+        return _TRACER
+
+    service_name = os.getenv("OTEL_SERVICE_NAME", "claims-service")
+    endpoint = os.getenv(
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "http://jaeger:4318",
     )
-    return config.initialize_tracer()
+
+    resource = Resource.create({"service.name": service_name})
+
+    provider = TracerProvider(resource=resource)
+    trace.set_tracer_provider(provider)
+
+    exporter = OTLPSpanExporter(endpoint=f"{endpoint}/v1/traces")
+    provider.add_span_processor(BatchSpanProcessor(exporter))
+
+    _TRACER = trace.get_tracer(service_name)
+    return _TRACER
 
 
-tracer = init_tracer('AHS Customer Rep Copilot')
+tracer = init_tracer()
+
+
+@atexit.register
+def _shutdown_tracer():
+    # Best-effort shutdown (flushes span processors once at process exit).
+    try:
+        provider = trace.get_tracer_provider()
+        if hasattr(provider, "shutdown"):
+            provider.shutdown()
+    except Exception:
+        pass
 
 
 #credentials = service_account.Credentials.from_service_account_file(
 #    r'bigquery.json',
 #    scopes=['https://www.googleapis.com/auth/bigquery']
 #)
-import os
 from google.oauth2 import service_account
 BQ_CRED_PATH = os.getenv(
     "GOOGLE_APPLICATION_CREDENTIALS",
@@ -79,7 +112,8 @@ text_schema = udf_schema()
 
 
 def func_Binsert(parent1, dicts,prompt):
-    with tracer.start_span('func_Binsert', child_of=parent1) as child2:
+    ctx = trace.set_span_in_context(parent1) if parent1 else None
+    with tracer.start_as_current_span("func_Binsert", context=ctx):
         # Get the current time
         current_time = datetime.now()
 
@@ -120,13 +154,15 @@ def func_Binsert(parent1, dicts,prompt):
 
 
 def closest_t(child1, question):
-    with tracer.start_span('closest', child_of=child1) as child1_1:
+    ctx = trace.set_span_in_context(child1) if child1 else None
+    with tracer.start_as_current_span("closest", context=ctx):
         topic = closest.classify_topic(closest.arr,question,closest.Embed)
         return topic
 
 
 def score_calculator(child1, question):
-    with tracer.start_span('score_calculator', child_of=child1) as child1_2:
+    ctx = trace.set_span_in_context(child1) if child1 else None
+    with tracer.start_as_current_span("score_calculator", context=ctx):
         dicts = {}
        #results = why.log({"prompt": question}, schema = text_schema)
         results = why.log(
@@ -146,7 +182,8 @@ def score_calculator(child1, question):
 
 
 def ontopic_fun(child1, query):
-    with tracer.start_span('ontopic_fun', child_of=child1) as child1_3:
+    ctx = trace.set_span_in_context(child1) if child1 else None
+    with tracer.start_as_current_span("ontopic_fun", context=ctx):
         query_embedding = model.encode(query)
         val = -10
         for i in ontopic_embed:
@@ -156,7 +193,8 @@ def ontopic_fun(child1, query):
         return float(val)
 
 def offtopic_fun(child1, query):
-    with tracer.start_span('offtopic_fun', child_of=child1) as child1_4:
+    ctx = trace.set_span_in_context(child1) if child1 else None
+    with tracer.start_as_current_span("offtopic_fun", context=ctx):
         query_embedding = model.encode(query)
         val = -10
         for i in offtopic_embed:
@@ -167,7 +205,8 @@ def offtopic_fun(child1, query):
 
 
 def security_scores(parent1, question):
-    with tracer.start_span('security_scores', child_of=parent1) as child1:
+    ctx = trace.set_span_in_context(parent1) if parent1 else None
+    with tracer.start_as_current_span("security_scores", context=ctx) as child1:
 
         dicts = {}
         
@@ -189,17 +228,78 @@ def q_monitor(parent1, question):
     # Guard against empty / bad input
     if not question or not isinstance(question, str):
         return
-    dicts = security_scores(parent1,question)
-    func_Binsert(parent1,dicts,question)
+    ctx = trace.set_span_in_context(parent1) if parent1 else None
+    # Give the monitor thread its own span; deterministic lifecycle inside the thread.
+    with tracer.start_as_current_span("q_monitor", context=ctx) as span:
+        dicts = security_scores(span, question)
+        func_Binsert(span, dicts, question)
 
 
-def llm_trace_to_jaeger(data, span_id, trace_id):
-    # trace_id = random.getrandbits(64)
-    for x in data[::-1]:
-        if x['parent_run_id'] is not None:
-            context = span_context.SpanContext(trace_id = trace_id,span_id = x['run_id'].int & 0xFFFFFFFFFFFFFFFF,parent_id=x['parent_run_id'].int & 0xFFFFFFFFFFFFFFFF,flags = 1)
+def llm_trace_to_otel(data: Iterable[Dict[str, Any]], parent_span=None) -> None:
+    """
+    Recreate a LangChain run tree as OpenTelemetry spans, exported once after aggregation.
+
+    - Keeps one "aggregation at end" call site (see app.py)
+    - Ensures parent/child relationships via OpenTelemetry context propagation
+    - Preserves timing (start/end) using epoch seconds -> nanoseconds
+    """
+    if not data:
+        return
+
+    # Sort so parents are likely created before children (best-effort).
+    items = list(data)
+    items.sort(key=lambda x: (x.get("start_time") is None, x.get("start_time") or 0))
+
+    spans_by_run_id: Dict[Any, Any] = {}
+    root_ctx = trace.set_span_in_context(parent_span) if parent_span else None
+
+    for item in items:
+        name = (item.get("chain_name") or "langchain").strip()
+        run_id = item.get("run_id")
+        parent_run_id = item.get("parent_run_id")
+
+        if parent_run_id is not None and parent_run_id in spans_by_run_id:
+            parent_ctx = trace.set_span_in_context(spans_by_run_id[parent_run_id])
         else:
-            context = span_context.SpanContext(trace_id = trace_id,span_id = x['run_id'].int & 0xFFFFFFFFFFFFFFFF,parent_id=span_id,flags = 1)
-        
-        a = span.Span(context=context,tracer=tracer, operation_name=x["chain_name"], start_time=x["start_time"])
-        a.finish(finish_time = x['end_time'])
+            parent_ctx = root_ctx
+
+        start_s = item.get("start_time")
+        end_s = item.get("end_time")
+        start_ns = int(start_s * 1_000_000_000) if isinstance(start_s, (int, float)) else None
+        end_ns = int(end_s * 1_000_000_000) if isinstance(end_s, (int, float)) else None
+
+        span_cm = tracer.start_as_current_span(
+            name,
+            context=parent_ctx,
+            start_time=start_ns,
+            end_on_exit=False,
+        )
+        span_obj = span_cm.__enter__()
+        try:
+            # Helpful attributes for debugging / correlating back to LangChain.
+            if run_id is not None:
+                span_obj.set_attribute("langchain.run_id", str(run_id))
+            if parent_run_id is not None:
+                span_obj.set_attribute("langchain.parent_run_id", str(parent_run_id))
+            if item.get("latency") is not None:
+                try:
+                    span_obj.set_attribute("langchain.latency_s", float(item["latency"]))
+                except Exception:
+                    pass
+
+            if run_id is not None:
+                spans_by_run_id[run_id] = span_obj
+        finally:
+            # End span with recorded end_time if present.
+            try:
+                if end_ns is not None:
+                    span_obj.end(end_time=end_ns)
+                else:
+                    span_obj.end()
+                span_cm.__exit__(None, None, None)
+            except Exception:
+                # Never let tracing break the request.
+                try:
+                    span_cm.__exit__(None, None, None)
+                except Exception:
+                    pass

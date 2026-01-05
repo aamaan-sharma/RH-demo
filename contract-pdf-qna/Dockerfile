@@ -23,7 +23,10 @@ COPY . /app
 EXPOSE 8001
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+# Fix Windows CRLF line endings in shell scripts (prevents `/usr/bin/env: 'sh\r': No such file or directory`)
+RUN find /app -maxdepth 2 -type f -name "*.sh" -exec sed -i 's/\r$//' {} + \
+  && sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
+  && chmod +x /usr/local/bin/docker-entrypoint.sh
 
 ENTRYPOINT ["docker-entrypoint.sh"]
 
