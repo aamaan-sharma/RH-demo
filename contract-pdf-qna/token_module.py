@@ -182,7 +182,10 @@ class CallbackHandler(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> None:
-        llm_name = serialized.get("name", serialized.get("id", ["<unknown>"])[-1])
+        if serialized is None:
+            llm_name = "<unknown>"
+        else:
+            llm_name = serialized.get("name") or (serialized.get("id")[-1] if serialized.get("id") else "<unknown>")
         self.append_to_list("chain_name", llm_name,run_id, parent_run_id )
 
 
@@ -190,6 +193,8 @@ class CallbackHandler(BaseCallbackHandler):
         run_id: UUID,
         parent_run_id: Optional[UUID] = None, **kwargs: Any) -> None:
         # Calculate and track the request latency.
+        if not self.client:
+            return  # No matching start event, skip processing
         last_dict = self.client[-1]  # Retrieve the last dictionary in the list
         latency = time.time() - last_dict['time']
         self.client.remove(last_dict)
@@ -218,7 +223,10 @@ class CallbackHandler(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None, **kwargs: Any
     ) -> None:
         """Do nothing when LLM chain starts."""
-        chain_name = serialized.get("name", serialized.get("id", ["<unknown>"])[-1])
+        if serialized is None:
+            chain_name = "<unknown>"
+        else:
+            chain_name = serialized.get("name") or (serialized.get("id")[-1] if serialized.get("id") else "<unknown>")
         self.append_to_list("chain_name", chain_name,run_id, parent_run_id )
 
         pass
@@ -227,6 +235,8 @@ class CallbackHandler(BaseCallbackHandler):
         run_id: UUID,
         parent_run_id: Optional[UUID] = None, **kwargs: Any) -> None:
         """Do nothing when LLM chain ends."""
+        if not self.client:
+            return  # No matching start event, skip processing
         last_dict = self.client[-1]  # Retrieve the last dictionary in the list
         latency = time.time() - last_dict['time']
         self.client.remove(last_dict)
@@ -259,7 +269,8 @@ class CallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> None:
         """Do nothing when tool ends."""
-        
+        if not self.client:
+            return  # No matching start event, skip processing
         last_dict = self.client[-1]  # Retrieve the last dictionary in the list
         latency = time.time() - last_dict['time']
         self.client.remove(last_dict)
@@ -291,7 +302,8 @@ class CallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         """Run when Retriever ends running."""
-        
+        if not self.client:
+            return  # No matching start event, skip processing
         last_dict = self.client[-1]  # Retrieve the last dictionary in the list
         latency = time.time() - last_dict['time']
         self.client.remove(last_dict)
