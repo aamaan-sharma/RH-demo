@@ -2455,44 +2455,54 @@ def start():
                     threading.Thread(target=q_monitor, args=(parent1, entered_query)).start()
 
                     with tracer.start_as_current_span("llm-RetrievalQA-chain") as q:
-                        # Creating a prompt template
-                        prompt_template = """
+                        with tracer.start_as_current_span("prompt_construction"):
+                            # Creating a prompt template
+                            prompt_template = """
 
-                        You are assisting a customer care executive. Your role is to review the contract’s contextual information given in the context below.
+                            You are assisting a customer care executive. Your role is to review the contract’s contextual information given in the context below.
 
-                        {context}
+                            {context}
 
-                        Answer the given user inquiry based on context above as truthfully as possible, providing in-depth explanations together with answers to the inquiries.
-                        You may rephrase the final response to make it concise and sound more human-like, but do not go out of context and do not lose important details and meaning.
+                            Answer the given user inquiry based on context above as truthfully as possible, providing in-depth explanations together with answers to the inquiries.
+                            You may rephrase the final response to make it concise and sound more human-like, but do not go out of context and do not lose important details and meaning.
 
-                        You'll be asked about repairs, coverage policy and service questions about home appliances, home fixtures, home care, repairs/replacement and cleaning, and also about the renewal, cancellation or refund policies in the contract, whether a certain service is covered under the contract and similar context.
+                            You'll be asked about repairs, coverage policy and service questions about home appliances, home fixtures, home care, repairs/replacement and cleaning, and also about the renewal, cancellation or refund policies in the contract, whether a certain service is covered under the contract and similar context.
 
-                        The contract context given will have information about contractual details, terms and conditions, renewals, cancellation, refund and service request policies, the coverage limits, limitation and exclusion policies. You will need to use and infer from all the information available in context to analyze and then respond with the final answer.
+                            The contract context given will have information about contractual details, terms and conditions, renewals, cancellation, refund and service request policies, the coverage limits, limitation and exclusion policies. You will need to use and infer from all the information available in context to analyze and then respond with the final answer.
 
-                        If the question is about a square feet limit, make sure to compare the numerical values properly. 
-                        For example,
-                        Question: "will my 800 square feet guest house be covered?"
-                        The answer to this question will be No, as the square feet limit for guest houses is 750 and 800 is greater than 750.
+                            If the question is about a square feet limit, make sure to compare the numerical values properly. 
+                            For example,
+                            Question: "will my 800 square feet guest house be covered?"
+                            The answer to this question will be No, as the square feet limit for guest houses is 750 and 800 is greater than 750.
 
-                        If the inquiry is unrelated to home repair and service, answer with "I don't have the information to answer this question.". For example, questions like "Tell me about space.", "Write a poem for me.", "Where can I buy a refrigerator?", "Hi! How are you?", etc. are out of context.
+                            If the inquiry is unrelated to home repair and service, answer with "I don't have the information to answer this question.". For example, questions like "Tell me about space.", "Write a poem for me.", "Where can I buy a refrigerator?", "Hi! How are you?", etc. are out of context.
 
-                        Always include the appliance name in the answer and provide in depth information.
+                            Always include the appliance name in the answer and provide in depth information.
 
-                        Make the answer as short as possible with in depth information.
+                            Make the answer as short as possible with in depth information.
 
-                        Question: """ + standalone_result + """
-                        Answer: """
+                            Question: """ + standalone_result + """
+                            Answer: """
 
-                        PROMPT = PromptTemplate(template=prompt_template, input_variables=["context"])
-                        chain_type_kwargs = {"prompt": PROMPT}
-                        qa = RetrievalQA.from_chain_type(llm=llm, retriever=retriever, verbose=True,
-                                                        chain_type_kwargs=chain_type_kwargs)
+                            PROMPT = PromptTemplate(template=prompt_template, input_variables=["context"])
+                            chain_type_kwargs = {"prompt": PROMPT}
+                            qa = RetrievalQA.from_chain_type(
+                                llm=llm,
+                                retriever=retriever,
+                                verbose=True,
+                                chain_type_kwargs=chain_type_kwargs,
+                            )
 
-                        qa_resp = qa.invoke(
-                            {"query": standalone_result},
-                            config={"callbacks": [handler]},
-                        )
-                        agent_resp = qa_resp["result"] if isinstance(qa_resp, dict) else qa_resp
+                        # NOTE: RetrievalQA does retrieval + LLM internally; we keep behavior unchanged
+                        # and attribute the combined latency under this phase.
+                        with tracer.start_as_current_span("llm_call"):
+                            qa_resp = qa.invoke(
+                                {"query": standalone_result},
+                                config={"callbacks": [handler]},
+                            )
+
+                        with tracer.start_as_current_span("response_postprocessing"):
+                            agent_resp = qa_resp["result"] if isinstance(qa_resp, dict) else qa_resp
 
                     # After ALL LangChain work completes: export exactly once.
                     res_all, tok_all = handler.infi()
@@ -2500,15 +2510,16 @@ def start():
                     threading.Thread(target=token_calculator, args=(tok_all,)).start()
                     
                     with tracer.start_as_current_span("relevant_documents"):
-                        print(
-                            "[CHUNKS] /start(Search): calling relevant_docs for entered_query "
-                            f"'{str(entered_query)[:200]}'"
-                        )
-                        relevant_documents = relevant_docs(entered_query, retriever=retriever)
-                        print(
-                            "[CHUNKS] /start(Search): relevant_documents built "
-                            f"len={len(relevant_documents)}"
-                        )
+                        with tracer.start_as_current_span("context_retrieval"):
+                            print(
+                                "[CHUNKS] /start(Search): calling relevant_docs for entered_query "
+                                f"'{str(entered_query)[:200]}'"
+                            )
+                            relevant_documents = relevant_docs(entered_query, retriever=retriever)
+                            print(
+                                "[CHUNKS] /start(Search): relevant_documents built "
+                                f"len={len(relevant_documents)}"
+                            )
 
             elif gpt_model == "Infer":
                 with tracer.start_as_current_span("Infer") as parent1:
@@ -2578,9 +2589,14 @@ def start():
                     threading.Thread(target=q_monitor, args=(parent1, entered_query)).start()
 
                     with tracer.start_as_current_span("llm-RetrievalQA-chain") as q:
-                        qa = RetrievalQA.from_chain_type(llm=llm2, retriever=retriever, verbose=True)
-                        agent_response = input_prompt(standalone_result, qa, llm, handler)
-                        agent_resp = agent_response["output"]
+                        with tracer.start_as_current_span("prompt_construction"):
+                            qa = RetrievalQA.from_chain_type(llm=llm2, retriever=retriever, verbose=True)
+
+                        with tracer.start_as_current_span("llm_call"):
+                            agent_response = input_prompt(standalone_result, qa, llm, handler)
+
+                        with tracer.start_as_current_span("response_postprocessing"):
+                            agent_resp = agent_response["output"]
 
                     # After ALL LangChain work completes: export exactly once.
                     res_all, tok_all = handler.infi()
@@ -2588,27 +2604,29 @@ def start():
                     threading.Thread(target=token_calculator, args=(tok_all,)).start()
                     
                     with tracer.start_as_current_span("relevant_documents"):
-                        knowledge_base_thoughts = [
-                            item[0].tool_input
-                            for item in agent_response["intermediate_steps"]
-                            if item[0].tool == 'Knowledge Base'
-                        ]
-                        print(
-                            "[CHUNKS] /start(Infer): knowledge_base_thoughts_count="
-                            f"{len(knowledge_base_thoughts)}"
-                        )
-                        relevant_documents = ""
-                        for idx, action_input in enumerate(knowledge_base_thoughts):
+                        with tracer.start_as_current_span("context_retrieval"):
+                            knowledge_base_thoughts = [
+                                item[0].tool_input
+                                for item in agent_response["intermediate_steps"]
+                                if item[0].tool == 'Knowledge Base'
+                            ]
                             print(
-                                "[CHUNKS] /start(Infer): calling relevant_docs for KB thought "
-                                f"index={idx}, input_preview='{str(action_input)[:200]}'"
+                                "[CHUNKS] /start(Infer): knowledge_base_thoughts_count="
+                                f"{len(knowledge_base_thoughts)}"
                             )
-                            rd = relevant_docs(action_input, retriever)
-                            print(
-                                "[CHUNKS] /start(Infer): returned from relevant_docs "
-                                f"index={idx}, len={len(rd)}"
-                            )
-                            relevant_documents += rd
+                            relevant_documents = ""
+                            # NOTE: keep a single phase span around the loop to avoid per-iteration noise.
+                            for idx, action_input in enumerate(knowledge_base_thoughts):
+                                print(
+                                    "[CHUNKS] /start(Infer): calling relevant_docs for KB thought "
+                                    f"index={idx}, input_preview='{str(action_input)[:200]}'"
+                                )
+                                rd = relevant_docs(action_input, retriever)
+                                print(
+                                    "[CHUNKS] /start(Infer): returned from relevant_docs "
+                                    f"index={idx}, len={len(rd)}"
+                                )
+                                relevant_documents += rd
             else:
                 return jsonify({"error": f"Invalid gpt_model: {gpt_model}. Must be 'Search' or 'Infer'"}), 400
 

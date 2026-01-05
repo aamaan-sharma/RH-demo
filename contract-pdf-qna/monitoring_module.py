@@ -257,6 +257,7 @@ def llm_trace_to_otel(data: Iterable[Dict[str, Any]], parent_span=None) -> None:
         name = (item.get("chain_name") or "langchain").strip()
         run_id = item.get("run_id")
         parent_run_id = item.get("parent_run_id")
+        attrs = item.get("attrs") or {}
 
         if parent_run_id is not None and parent_run_id in spans_by_run_id:
             parent_ctx = trace.set_span_in_context(spans_by_run_id[parent_run_id])
@@ -286,6 +287,19 @@ def llm_trace_to_otel(data: Iterable[Dict[str, Any]], parent_span=None) -> None:
                     span_obj.set_attribute("langchain.latency_s", float(item["latency"]))
                 except Exception:
                     pass
+
+            # Attach any extra callback-derived attributes (tool name/input/output, etc.)
+            if isinstance(attrs, dict):
+                for k, v in attrs.items():
+                    if v is None:
+                        continue
+                    try:
+                        if isinstance(v, (bool, int, float, str)):
+                            span_obj.set_attribute(str(k), v)
+                        else:
+                            span_obj.set_attribute(str(k), str(v)[:1000])
+                    except Exception:
+                        pass
 
             if run_id is not None:
                 spans_by_run_id[run_id] = span_obj

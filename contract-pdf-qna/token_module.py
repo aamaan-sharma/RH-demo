@@ -143,12 +143,16 @@ class CallbackHandler(BaseCallbackHandler):
         run_id: UUID,
         parent_run_id: Optional[UUID] = None,
         is_ts: bool = True,
+        attrs: Optional[Dict[str, Any]] = None,
     ) -> None:
         
         if is_ts:
             payload = {
                 "time": time.time(),
-                key: value
+                key: value,
+                "run_id": run_id,
+                "parent_run_id": parent_run_id,
+                "attrs": attrs or {},
             }
             
             self.client.append(payload)
@@ -159,7 +163,8 @@ class CallbackHandler(BaseCallbackHandler):
                 'start_time': start_time,
                 'end_time': start_time + value,
                 "run_id":run_id,
-                "parent_run_id":parent_run_id
+                "parent_run_id":parent_run_id,
+                "attrs": attrs or {},
             }
 
             self.result_list.append(payload)
@@ -244,7 +249,18 @@ class CallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> None:
         """Do nothing when tool starts."""
-        self.append_to_list("chain_name", "on_tool_start",run_id, parent_run_id )
+        tool_name = serialized.get("name", serialized.get("id", ["<unknown>"])[-1])
+        self.append_to_list(
+            "chain_name",
+            tool_name,
+            run_id,
+            parent_run_id,
+            attrs={
+                "langchain.kind": "tool",
+                "langchain.tool.name": str(tool_name),
+                "langchain.tool.input_preview": (input_str or "")[:500],
+            },
+        )
 
         pass
 
@@ -263,7 +279,21 @@ class CallbackHandler(BaseCallbackHandler):
         last_dict = self.client[-1]  # Retrieve the last dictionary in the list
         latency = time.time() - last_dict['time']
         self.client.remove(last_dict)
-        self.append_to_list(last_dict['chain_name'], latency,last_dict['time'],run_id, parent_run_id , is_ts=False)
+        prior_attrs = last_dict.get("attrs") or {}
+        end_attrs = dict(prior_attrs)
+        try:
+            end_attrs["langchain.tool.output_len"] = len(output or "")
+        except Exception:
+            pass
+        self.append_to_list(
+            last_dict['chain_name'],
+            latency,
+            last_dict['time'],
+            run_id,
+            parent_run_id,
+            is_ts=False,
+            attrs=end_attrs,
+        )
 
         pass
 
