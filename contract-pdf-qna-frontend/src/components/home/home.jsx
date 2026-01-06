@@ -61,6 +61,8 @@ const Home = ({ bearerToken, setBearerToken }) => {
   const [finalSummary, setFinalSummary] = useState("");
   const [authorizedFinalAnswer, setAuthorizedFinalAnswer] = useState("");
   const [authorizedApprovedAt, setAuthorizedApprovedAt] = useState(null);
+  const [caseDisposition, setCaseDisposition] = useState("");
+  const [caseClosedAt, setCaseClosedAt] = useState(null);
   const [conversationStatus, setConversationStatus] = useState("active");
   const [callsTranscriptName, setCallsTranscriptName] = useState("");
   const [callsGenerationStage, setCallsGenerationStage] = useState("idle"); // idle | generating | done
@@ -931,6 +933,8 @@ const Home = ({ bearerToken, setBearerToken }) => {
         );
         setAuthorizedApprovedAt(resp?.data?.authorizedApprovedAt || null);
         setConversationStatus((resp?.data?.status || "active").toLowerCase());
+        setCaseDisposition(resp?.data?.caseDisposition || "");
+        setCaseClosedAt(resp?.data?.closedAt || null);
 
         if (!shouldBlockForProcessing) {
           setCallsGenerationStage("done");
@@ -971,7 +975,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
       };
     });
 
-  const handleApproveCase = () => {
+  const handleApproveCase = (reviewComments = "") => {
     if (!conversationId) return;
     if (!authorizedFinalAnswer?.trim()) return;
     setIsApprovingCase(true);
@@ -979,9 +983,12 @@ const Home = ({ bearerToken, setBearerToken }) => {
       .patch(`${API_BASE_URL}/conversation/authorize?conversation-id=${conversationId}`, {
         authorizedFinalAnswer: authorizedFinalAnswer,
         status: "inactive",
+        reviewComments: reviewComments || "",
       })
       .then((resp) => {
         setConversationStatus("inactive");
+        setCaseDisposition(resp?.data?.caseDisposition || "approved");
+        setCaseClosedAt(resp?.data?.closedAt || new Date().toISOString());
         setAuthorizedApprovedAt(resp?.data?.authorizedApprovedAt || new Date().toISOString());
         setIsReviewApproveOpen(false);
         setJustApproved(true);
@@ -999,15 +1006,18 @@ const Home = ({ bearerToken, setBearerToken }) => {
       });
   };
 
-  const handleRejectCase = () => {
+  const handleRejectCase = (reviewComments = "") => {
     if (!conversationId) return;
     setIsRejectingCase(true);
     axios
-      .patch(`${API_BASE_URL}/conversation/status?conversation-id=${conversationId}`, {
-        status: "inactive",
+      .patch(`${API_BASE_URL}/conversation/close?conversation-id=${conversationId}`, {
+        disposition: "rejected",
+        reviewComments: reviewComments || "",
       })
-      .then(() => {
+      .then((resp) => {
         setConversationStatus("inactive");
+        setCaseDisposition(resp?.data?.caseDisposition || "rejected");
+        setCaseClosedAt(resp?.data?.closedAt || new Date().toISOString());
         setIsReviewApproveOpen(false);
         setJustRejected(true);
         // Signal sidebar to immediately move this case into "Closed" (optimistic UX).
@@ -1051,7 +1061,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
 
     if (input === "") return;
 
-    // Do not allow chatting on a closed case.
+    // Do not allow chatting on a closed Claims/Calls case.
     if (isCallsMode && conversationId && conversationStatus === "inactive") {
       return;
     }
@@ -1063,37 +1073,40 @@ const Home = ({ bearerToken, setBearerToken }) => {
       return;
     }
 
-    if (
-      selectedState === "State" &&
-      selectedContract === "Contract Type" &&
-      selectedPlan === "Plan"
-    ) {
-      setError("state contract plan");
-      return;
-    }
-    if (selectedState === "State" && selectedContract === "Contract Type") {
-      setError("state contract");
-      return;
-    }
-    if (selectedState === "State" && selectedPlan === "Plan") {
-      setError("state plan");
-      return;
-    }
-    if (selectedContract === "Contract Type" && selectedPlan === "Plan") {
-      setError("contract plan");
-      return;
-    }
-    if (selectedState === "State") {
-      setError("state");
-      return;
-    }
-    if (selectedContract === "Contract Type") {
-      setError("contract");
-      return;
-    }
-    if (selectedPlan === "Plan") {
-      setError("plan");
-      return;
+    // Search/Infer require contract filters; Claims follow-ups should work from case context alone.
+    if (!isCallsMode) {
+      if (
+        selectedState === "State" &&
+        selectedContract === "Contract Type" &&
+        selectedPlan === "Plan"
+      ) {
+        setError("state contract plan");
+        return;
+      }
+      if (selectedState === "State" && selectedContract === "Contract Type") {
+        setError("state contract");
+        return;
+      }
+      if (selectedState === "State" && selectedPlan === "Plan") {
+        setError("state plan");
+        return;
+      }
+      if (selectedContract === "Contract Type" && selectedPlan === "Plan") {
+        setError("contract plan");
+        return;
+      }
+      if (selectedState === "State") {
+        setError("state");
+        return;
+      }
+      if (selectedContract === "Contract Type") {
+        setError("contract");
+        return;
+      }
+      if (selectedPlan === "Plan") {
+        setError("plan");
+        return;
+      }
     }
 
     setError("");
@@ -1135,10 +1148,9 @@ const Home = ({ bearerToken, setBearerToken }) => {
         setInput("");
         return;
       }
-      const callsUnderlyingModel = chats?.[0]?.underlying_model || "Search";
-      const apiUrl = `${API_BASE_URL}/start?conversation-id=${conversationId}`;
+      const apiUrl = `${API_BASE_URL}/claims/followup?conversation-id=${conversationId}`;
       axios
-        .post(apiUrl, { ...requestBody, gptModel: callsUnderlyingModel })
+        .post(apiUrl, { enteredQuery: input })
         .then((response) => {
           if (viewKeyRef.current !== viewKeyAtSubmit) return;
           setServerError(null);
@@ -1162,8 +1174,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
                 entered_query: input,
                 response: response.data.aiResponse,
                 chat_id: response.data.chatId,
-                underlying_model: callsUnderlyingModel,
-                source: "user",
+                gpt_model: "Calls",
               },
             ]);
           }
@@ -1195,7 +1206,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
             });
             lastFailedRequestRef.current = { 
               type: "calls-chat",
-              requestBody: { ...requestBody, gptModel: callsUnderlyingModel },
+              requestBody: { enteredQuery: input },
               apiUrl,
               input,
             };
@@ -1483,6 +1494,20 @@ const Home = ({ bearerToken, setBearerToken }) => {
                             >
                               {conversationStatus === "inactive" ? "Closed" : "Open"}
                             </div>
+                            {caseDisposition ? (
+                              <div
+                                className={`disposition_badge ${
+                                  String(caseDisposition).toLowerCase() === "approved"
+                                    ? "approved"
+                                    : String(caseDisposition).toLowerCase() === "rejected"
+                                      ? "rejected"
+                                      : "neutral"
+                                }`}
+                                title={`Disposition: ${caseDisposition}`}
+                              >
+                                {String(caseDisposition).toUpperCase()}
+                              </div>
+                            ) : null}
                             <button
                               type="button"
                               className="review_approve_button"
@@ -1525,7 +1550,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
                       ) : (callsGenerationStage === "done" || conversationStatus === "inactive") ? (
                         <div className="subtle_hint">
                           {(() => {
-                            const ts = authorizedApprovedAt || callsGeneratedAt;
+                            const ts = caseClosedAt || authorizedApprovedAt || callsGeneratedAt;
                             if (!ts) return null;
                             const label =
                               conversationStatus === "inactive" ? "Closed" : "Generated";
@@ -1577,7 +1602,9 @@ const Home = ({ bearerToken, setBearerToken }) => {
           </div>
           <div
             className={`inpufield_wrapper ${
-              isCallsMode && conversationId && conversationStatus === "inactive" ? "disabled" : ""
+              isCallsMode && conversationId && conversationStatus === "inactive"
+                ? "disabled"
+                : ""
             }`}
           >
             {isCallsMode && conversationId === "" ? (
@@ -1712,6 +1739,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
           isRejecting={isRejectingCase}
           isClosed={conversationStatus === "inactive"}
           userName={loggedInUserName}
+          caseDisposition={caseDisposition}
         />
 
         {justApproved ? (
