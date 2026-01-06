@@ -2,7 +2,7 @@
 # Test script for Live Copilot Webhook
 # This script sends sample transcripts to test the copilot integration
 
-BASE_URL="${1:-http://localhost:8001}"
+BASE_URL="${1:-http://localhost:5000}"
 
 echo "=== Testing Live Copilot Webhook Integration ==="
 echo "Backend URL: $BASE_URL"

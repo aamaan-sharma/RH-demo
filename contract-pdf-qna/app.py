@@ -282,6 +282,21 @@ def normalize_state_for_milvus(selected_state: str) -> str:
 
 CORS(app, resources={r"/*": {"origins": "*"}})
 
+@app.route("/health", methods=["GET"])
+def health():
+    """
+    Lightweight liveness endpoint.
+    Returns 200 if the Flask process is running and able to serve requests.
+    """
+    payload = {
+        "status": "ok",
+        "service": "contract-pdf-qna",
+        "time": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    }
+    resp = make_response(jsonify(payload), 200)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
 mongo_client = MongoClient(MONGO_URI, unicode_decode_error_handler='ignore')
 db = mongo_client["FrontDoorDB"]
 db2 = mongo_client[os.getenv("MONGO_DB_NAME")]
@@ -6756,7 +6771,7 @@ def on_copilot_disable(data):
 
 if __name__ == "__main__":
     # use_reloader=False to avoid Windows socket errors during reload
-    port = int(os.getenv("PORT", "8001"))
+    port = int(os.getenv("PORT", "5000"))
     debug = str(os.getenv("FLASK_DEBUG", "0")).lower() in ("1", "true", "yes")
 
     # Flask-SocketIO blocks Werkzeug in production by default; allow it if we ever
