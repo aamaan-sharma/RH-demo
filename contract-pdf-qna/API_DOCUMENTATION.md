@@ -26,6 +26,14 @@ http://localhost:5000
 
 ## Authentication
 
+### Health Check (No Auth)
+
+Use this endpoint to verify the backend process is up and serving requests.
+
+**Endpoint:** `GET /health` (alias: `GET /healthz`)
+
+**Response:** `200 OK`
+
 All API endpoints require authentication using a JWT Bearer token.
 
 ### Header Format
