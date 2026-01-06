@@ -2802,6 +2802,8 @@ def chat_history():
             "selectedPlan": docs.get("selected_plan"),
             "selectedState": docs.get("selected_state"),
             "status": docs.get("status", "active"),
+            # Transcript conversations can be mid-processing; expose this so the UI can show a loader.
+            "processing": bool(docs.get("processing", False)),
             "chats": chats,
             "createdAt": (
                 (docs.get("created_at").isoformat() + "Z")
@@ -3011,6 +3013,7 @@ def sidebar_history():
                 "status": 1,
                 "updated_at": 1,
                 "transcript_id": 1,
+                "processing": 1,
             },
         )
 
@@ -3036,6 +3039,8 @@ def sidebar_history():
                     "status": (doc.get("status") or "active"),
                     "updatedAt": (doc.get("updated_at").isoformat() + "Z") if doc.get("updated_at") else None,
                     "transcriptId": doc.get("transcript_id"),
+                    # Only relevant for Claims/Calls (transcript conversations)
+                    "processing": bool(doc.get("processing", False)) if conv_mode == "Calls" else False,
                 }
             )
 
@@ -3751,6 +3756,98 @@ def list_transcript_conversations():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/transcripts/conversation/stub", methods=["POST"])
+def create_transcript_conversation_stub():
+    """Create a processing transcript conversation stub early so the sidebar can show it immediately.
+
+    Body:
+      - transcriptFileName (str, required)
+      - contractType (str, required)
+      - selectedPlan (str, required)
+      - selectedState (str, required)
+      - gptModel (optional): "Search" | "Infer" (underlying model)
+      - newConversation (optional, bool): default false
+      - conversationName (optional, str)
+    """
+    try:
+        with tracer.start_span("api/transcripts/conversation/stub"):
+            authorization_header = request.headers.get("Authorization")
+            if authorization_header is None:
+                return jsonify({"message": "Token is missing"}), 401
+
+            if authorization_header:
+                token_data = token_process(authorization_header)
+                if token_data[1] == 401 or token_data[1] == 403:
+                    return (token_data[0].get_json()), token_data[1]
+
+            user_email = token_data[0]["email"]
+            data = request.get_json() or {}
+            transcript_file_name = data.get("transcriptFileName") or data.get("fileName")
+            contract_type = data.get("contractType")
+            selected_plan = data.get("selectedPlan")
+            selected_state = data.get("selectedState")
+            gpt_model = data.get("gptModel", "Search")
+            new_conversation = bool(data.get("newConversation", False))
+            requested_conversation_name = data.get("conversationName")
+
+            if not transcript_file_name:
+                return jsonify({"error": "transcriptFileName is required"}), 400
+            if not all([contract_type, selected_plan, selected_state]):
+                return jsonify({"error": "contractType, selectedPlan, selectedState are required"}), 400
+
+            transcript_id = transcript_file_name.replace(".json", "").replace(".txt", "")
+
+            qna_collection_user = f"chats_{user_email}"
+            qna_collection = db[qna_collection_user]
+
+            now_ts = datetime.utcnow()
+            status_doc = qna_collection.find_one(
+                {"doc_type": "transcript_status", "transcript_id": transcript_id},
+                {"_id": 0, "status": 1},
+            )
+            transcript_status = (status_doc or {}).get("status") or "active"
+
+            base_name = (requested_conversation_name or transcript_file_name or "").strip() or transcript_id
+            if new_conversation:
+                existing_count = qna_collection.count_documents(
+                    {"doc_type": "transcript_conversation", "transcript_id": transcript_id}
+                )
+                conv_name = base_name if existing_count == 0 else f"{base_name} ({existing_count + 1})"
+            else:
+                conv_name = base_name
+
+            stub = {
+                "doc_type": "transcript_conversation",
+                "conversation_mode": "Calls",
+                "underlying_model": gpt_model,
+                "conversation_name": conv_name,
+                "transcript_id": transcript_id,
+                "contract_type": contract_type,
+                "selected_plan": selected_plan,
+                "selected_state": selected_state,
+                "query_time": now_ts,
+                "updated_at": now_ts,
+                "status": transcript_status,
+                "processing": True,
+                "chats": [],
+            }
+            inserted = qna_collection.insert_one(stub)
+            conv_doc_id = inserted.inserted_id
+
+            return jsonify(
+                {
+                    "conversationId": str(conv_doc_id),
+                    "conversationName": conv_name,
+                    "status": transcript_status,
+                    "processing": True,
+                    "transcriptId": transcript_id,
+                    "transcriptFileName": transcript_file_name,
+                }
+            ), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 def _sse(event: str, data: dict) -> str:
     """Format a Server-Sent Event (SSE) message."""
     try:
@@ -4053,19 +4150,65 @@ def process_transcript_stream():
 
             transcript_id = transcript_file_name.replace(".json", "").replace(".txt", "")
 
-            yield _sse(
-                "status",
-                {
-                    "stage": "started",
-                    "transcriptId": transcript_id,
-                    "transcriptFileName": transcript_file_name,
-                    "gptModel": gpt_model,
-                },
-            )
-
             # Mongo handles (same collection as /transcripts/process)
             qna_collection_user = f"chats_{user_email}"
             qna_collection = db[qna_collection_user]
+
+            # If frontend already created a Mongo stub, reuse it so sidebar updates first.
+            requested_conversation_id = data.get("conversationId") or data.get("conversation_id")
+            if requested_conversation_id:
+                try:
+                    conv_doc_id = ObjectId(str(requested_conversation_id))
+                    existing = qna_collection.find_one({"_id": conv_doc_id}) or {}
+                    if existing.get("doc_type") != "transcript_conversation":
+                        yield _sse("error", {"error": "Invalid conversationId for transcript processing"})
+                        return
+                    # Ensure processing is marked true and keep metadata consistent.
+                    now_ts = datetime.utcnow()
+                    qna_collection.update_one(
+                        {"_id": conv_doc_id},
+                        {
+                            "$set": {
+                                "processing": True,
+                                "updated_at": now_ts,
+                                "conversation_mode": "Calls",
+                                "underlying_model": gpt_model,
+                                "transcript_id": transcript_id,
+                                "contract_type": contract_type,
+                                "selected_plan": selected_plan,
+                                "selected_state": selected_state,
+                            }
+                        },
+                    )
+                    conv_name = existing.get("conversation_name") or requested_conversation_name or transcript_file_name
+                    transcript_status = (existing.get("status") or "active")
+                    # Emit started AFTER confirming stub exists.
+                    yield _sse(
+                        "status",
+                        {
+                            "stage": "started",
+                            "transcriptId": transcript_id,
+                            "transcriptFileName": transcript_file_name,
+                            "gptModel": gpt_model,
+                            "conversationId": str(conv_doc_id),
+                            "conversationName": conv_name,
+                            "status": transcript_status,
+                        },
+                    )
+                    yield _sse(
+                        "status",
+                        {
+                            "stage": "conversation_created",
+                            "conversationId": str(conv_doc_id),
+                            "conversationName": conv_name,
+                            "status": transcript_status,
+                        },
+                    )
+                    # Ensure we don't prematurely return via the cached fast-path for this stub.
+                    force_reprocess = True
+                except Exception:
+                    yield _sse("error", {"error": "Invalid conversationId"})
+                    return
 
             # Cache fast-path: if exists and not force, stream cached answers immediately
             existing_conv = None
@@ -4133,33 +4276,56 @@ def process_transcript_stream():
             else:
                 conv_name = base_name
 
-            stub = {
-                "doc_type": "transcript_conversation",
-                "conversation_mode": "Calls",
-                "underlying_model": gpt_model,
-                "conversation_name": conv_name,
-                "transcript_id": transcript_id,
-                "contract_type": contract_type,
-                "selected_plan": selected_plan,
-                "selected_state": selected_state,
-                "query_time": now_ts,
-                "updated_at": now_ts,
-                "status": transcript_status,
-                "processing": True,
-                "chats": [],
-            }
-            inserted = qna_collection.insert_one(stub)
-            conv_doc_id = inserted.inserted_id
-
-            yield _sse(
-                "status",
-                {
-                    "stage": "conversation_created",
-                    "conversationId": str(conv_doc_id),
-                    "conversationName": conv_name,
+            # Create / update the processing stub (if frontend didn't already create one).
+            if conv_doc_id is None:
+                stub = {
+                    "doc_type": "transcript_conversation",
+                    "conversation_mode": "Calls",
+                    "underlying_model": gpt_model,
+                    "conversation_name": conv_name,
+                    "transcript_id": transcript_id,
+                    "contract_type": contract_type,
+                    "selected_plan": selected_plan,
+                    "selected_state": selected_state,
+                    "query_time": now_ts,
+                    "updated_at": now_ts,
                     "status": transcript_status,
-                },
-            )
+                    "processing": True,
+                    "chats": [],
+                }
+                inserted = qna_collection.insert_one(stub)
+                conv_doc_id = inserted.inserted_id
+
+                # Emit a "started" status only AFTER the Mongo stub exists, so the UI can refresh the sidebar
+                # and show the in-progress (yellow) case immediately.
+                yield _sse(
+                    "status",
+                    {
+                        "stage": "started",
+                        "transcriptId": transcript_id,
+                        "transcriptFileName": transcript_file_name,
+                        "gptModel": gpt_model,
+                        "conversationId": str(conv_doc_id),
+                        "conversationName": conv_name,
+                        "status": transcript_status,
+                    },
+                )
+
+                yield _sse(
+                    "status",
+                    {
+                        "stage": "conversation_created",
+                        "conversationId": str(conv_doc_id),
+                        "conversationName": conv_name,
+                        "status": transcript_status,
+                    },
+                )
+            else:
+                # Frontend stub exists: mark it as processing before continuing.
+                qna_collection.update_one(
+                    {"_id": conv_doc_id},
+                    {"$set": {"processing": True, "updated_at": now_ts}},
+                )
 
             # Read transcript from GCS
             if not gcs_fs:
@@ -4589,9 +4755,38 @@ def process_transcript():
             qna_collection_user = f"chats_{user_email}"
             qna_collection = db[qna_collection_user]
 
+            # If frontend already created a Mongo stub, reuse it (ensures sidebar updates first).
+            requested_conversation_id = data.get("conversationId") or data.get("conversation_id")
+            if requested_conversation_id:
+                try:
+                    conv_doc_id = ObjectId(str(requested_conversation_id))
+                    existing = qna_collection.find_one({"_id": conv_doc_id}) or {}
+                    if existing.get("doc_type") != "transcript_conversation":
+                        return jsonify({"error": "Invalid conversationId for transcript processing"}), 400
+                    # Ensure we don't return cached payload for a newly-created stub.
+                    force_reprocess = True
+                    now_ts = datetime.utcnow()
+                    qna_collection.update_one(
+                        {"_id": conv_doc_id},
+                        {
+                            "$set": {
+                                "processing": True,
+                                "updated_at": now_ts,
+                                "conversation_mode": "Calls",
+                                "underlying_model": gpt_model,
+                                "transcript_id": transcript_id,
+                                "contract_type": contract_type,
+                                "selected_plan": selected_plan,
+                                "selected_state": selected_state,
+                            }
+                        },
+                    )
+                except Exception:
+                    return jsonify({"error": "Invalid conversationId"}), 400
+
             # If we have already processed this transcript for this user, return the cached conversation.
             existing_conv = None
-            conv_doc_id = None
+            # conv_doc_id may be pre-set above when frontend created a stub
             conv_name = None
             if not new_conversation:
                 # Pick the most recently updated conversation for this transcript (if any)

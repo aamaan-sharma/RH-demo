@@ -38,6 +38,7 @@ const CaseReviewApprovePopup = ({
   isOpen,
   onClose,
   onApprove,
+  onReject,
   caseId,
   transcriptName,
   caseName,
@@ -47,6 +48,7 @@ const CaseReviewApprovePopup = ({
   authorizedAnswer = "",
   setAuthorizedAnswer,
   isApproving = false,
+  isRejecting = false,
   isClosed = false,
   userName = "",
 }) => {
@@ -59,11 +61,18 @@ const CaseReviewApprovePopup = ({
     if (isOpen) setComments("");
   }, [isOpen]);
 
-  const canProceed =
+  const canApprove =
     !isClosed &&
     !isApproving &&
+    !isRejecting &&
     typeof onApprove === "function" &&
     Boolean((authorizedAnswer || aiFinalDraft || "").trim());
+
+  const canReject =
+    !isClosed &&
+    !isApproving &&
+    !isRejecting &&
+    typeof onReject === "function";
 
   return (
     <div className="case_review_backdrop" role="dialog" aria-modal="true">
@@ -103,7 +112,7 @@ const CaseReviewApprovePopup = ({
           </div>
 
           <div className="section">
-            <div className="section_title">Final authorized answer</div>
+            <div className="section_title">Final analyzed answer</div>
             <div className="hint">
               This is the structured summary you will proceed with and forward.
             </div>
@@ -136,12 +145,21 @@ const CaseReviewApprovePopup = ({
           </button>
           <button
             type="button"
-            className="primary"
-            onClick={onApprove}
-            disabled={!canProceed}
+            className="danger"
+            onClick={onReject}
+            disabled={!canReject}
             title={isClosed ? "Case is already closed." : ""}
           >
-            {isApproving ? "Proceeding…" : "Proceed & Close Case"}
+            {isRejecting ? "Rejecting…" : "Reject & Proceed"}
+          </button>
+          <button
+            type="button"
+            className="primary"
+            onClick={onApprove}
+            disabled={!canApprove}
+            title={isClosed ? "Case is already closed." : ""}
+          >
+            {isApproving ? "Approving…" : "Approve & Proceed"}
           </button>
         </div>
       </div>

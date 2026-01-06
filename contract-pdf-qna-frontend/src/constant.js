@@ -96,7 +96,7 @@ export const inferPrompts = [
     icon: clockIcon,
     questions: [
       {
-        text: "I purchased a plan from AHS just 5 days ago, and now I want to repair the microwave because it is creating too much noise. Can I get this repair done?",
+        text: "I purchased a plan just 5 days ago, and now I want to repair the microwave because it is creating too much noise. Can I get this repair done?",
       },
     ],
   },

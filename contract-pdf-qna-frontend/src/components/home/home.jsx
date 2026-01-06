@@ -31,6 +31,10 @@ const Home = ({ bearerToken, setBearerToken }) => {
   const conversationId = location.pathname.split("/")[2]
     ? location.pathname.split("/")[2]
     : "";
+  // Prevent stale async completions (chat requests / transcript processing) from overwriting the UI
+  // after the user navigates to a different conversation or mode.
+  const viewKeyRef = useRef(0);
+  const callsStreamAbortRef = useRef(null);
   const [chats, setChats] = useState([]);
   const [userEmail, setUserEmail] = useState("");
   const [gptModel, setGptModelState] = useState("Search"); // "Search" | "Infer" | "Calls"
@@ -66,6 +70,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
   const [callsTotalQuestions, setCallsTotalQuestions] = useState(0);
   const [callsAnsweredCount, setCallsAnsweredCount] = useState(0);
   const [callsClaimDecision, setCallsClaimDecision] = useState(null);
+  const [isCallsProcessing, setIsCallsProcessing] = useState(false);
   const [sidebarRefreshTick, setSidebarRefreshTick] = useState(0);
   const [isCheckingExistingTranscriptConversation, setIsCheckingExistingTranscriptConversation] =
     useState(false);
@@ -74,12 +79,30 @@ const Home = ({ bearerToken, setBearerToken }) => {
   const [loggedInUserName, setLoggedInUserName] = useState("");
   const [isReviewApproveOpen, setIsReviewApproveOpen] = useState(false);
   const [isApprovingCase, setIsApprovingCase] = useState(false);
+  const [isRejectingCase, setIsRejectingCase] = useState(false);
   const [justApproved, setJustApproved] = useState(false);
+  const [justRejected, setJustRejected] = useState(false);
   const [recentlyClosedConversationId, setRecentlyClosedConversationId] = useState("");
   const transcriptSearchDebounceRef = useRef(null);
   // Error state for 500 status codes
   const [serverError, setServerError] = useState(null); // { type: 'chat' | 'transcript' | 'sidebar' | 'conversation', retryFn: function }
   const lastFailedRequestRef = useRef(null); // Store last failed request details for retry
+  // Avoid UI flicker: when we navigate to /conversation/:id right after creating/answering,
+  // we already have the chats in memory, so skip the immediate /history refetch + chat reset once.
+  const skipNextHistoryFetchRef = useRef(null);
+
+  useEffect(() => {
+    // Any navigation or mode switch invalidates in-flight async updates.
+    viewKeyRef.current += 1;
+    // Abort any in-progress transcript stream so it can't update the newly opened conversation.
+    try {
+      if (callsStreamAbortRef.current) callsStreamAbortRef.current.abort();
+    } catch (e) {
+      // ignore
+    } finally {
+      callsStreamAbortRef.current = null;
+    }
+  }, [conversationId, gptModel, isCallsMode]);
 
   useEffect(() => {
     // Pull display name from the Google login payload stored by SideBar.
@@ -250,6 +273,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
 
   const startNewCallsConversation = (transcript, opts = {}) => {
     if (!transcript) return;
+    const viewKeyAtStart = viewKeyRef.current;
 
     // Prefer metadata coming from the transcripts service; abort if missing
     const contractType =
@@ -295,22 +319,46 @@ const Home = ({ bearerToken, setBearerToken }) => {
     setCallsGenerationStage("generating");
     setCallsActiveStep("extract");
     setCallsGeneratedAt(null);
-    setCallsProgressText("Starting transcript processing…");
+    setCallsProgressText("Creating case…");
     setCallsTotalQuestions(0);
     setCallsAnsweredCount(0);
     setCallsClaimDecision(null);
     setChats([]);
     setFinalSummary("");
     setIsTranscriptModalOpen(false);
-    // Trigger sidebar refresh shortly after the backend receives the request (it now creates a processing stub early).
-    setTimeout(() => setSidebarRefreshTick((t) => t + 1), 600);
+
+    let stubConversationId = "";
+    const createStub = async () => {
+      try {
+        const resp = await axios.post(`${TRANSCRIPTS_API_BASE_URL}/transcripts/conversation/stub`, {
+          transcriptFileName: transcript.id,
+          contractType,
+          selectedPlan: planName,
+          selectedState: stateName,
+          gptModel: requestBody.gptModel,
+          newConversation: Boolean(opts?.newConversation),
+          conversationName: transcript.name || transcript.id,
+        });
+        stubConversationId = resp?.data?.conversationId || "";
+        if (stubConversationId) {
+          requestBody.conversationId = stubConversationId;
+          // Sidebar should show the in-progress case immediately (yellow dot).
+          setSidebarRefreshTick((t) => t + 1);
+        }
+      } catch (e) {
+        // Fail open: the stream endpoint will create the stub if this call fails.
+        stubConversationId = "";
+      }
+    };
 
     const runNonStreamingFallback = () => {
+      if (viewKeyRef.current !== viewKeyAtStart) return;
       setCallsActiveStep("answer");
       setCallsProgressText("Generating answers…");
       axios
         .post(`${TRANSCRIPTS_API_BASE_URL}/transcripts/process`, requestBody)
         .then((response) => {
+          if (viewKeyRef.current !== viewKeyAtStart) return;
           const conversationIdFromApi = response?.data?.conversationId || "";
           const questions = response?.data?.questions || [];
           const apiFinalSummary = response?.data?.finalSummary || "";
@@ -368,6 +416,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
           }
         })
         .catch((error) => {
+          if (viewKeyRef.current !== viewKeyAtStart) return;
           const status = error?.response?.status;
           setCallsGenerationStage("idle");
           setCallsProgressText("");
@@ -407,8 +456,15 @@ const Home = ({ bearerToken, setBearerToken }) => {
         return;
       }
 
+      // Ensure Mongo stub exists BEFORE heavy processing begins so sidebar updates first.
+      await createStub();
+      if (viewKeyRef.current !== viewKeyAtStart) return;
+      setCallsProgressText("Starting transcript processing…");
+
       const streamUrl = `${TRANSCRIPTS_API_BASE_URL}/transcripts/process/stream`;
       let conversationIdFromStream = "";
+      const abortController = new AbortController();
+      callsStreamAbortRef.current = abortController;
 
       try {
         const resp = await fetch(streamUrl, {
@@ -418,6 +474,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
             Authorization: "Bearer " + token,
           },
           body: JSON.stringify(requestBody),
+          signal: abortController.signal,
         });
 
         if (!resp.ok) {
@@ -445,6 +502,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
         let buffer = "";
 
         const appendChat = (q) => {
+          if (viewKeyRef.current !== viewKeyAtStart) return;
           const chunks = q.relevantChunks || [];
           const isFinal = q.questionId === "final_answer";
           setChats((prev) => [
@@ -464,6 +522,14 @@ const Home = ({ bearerToken, setBearerToken }) => {
         };
 
         while (true) {
+          if (viewKeyRef.current !== viewKeyAtStart) {
+            try {
+              abortController.abort();
+            } catch (e) {
+              // ignore
+            }
+            break;
+          }
           const { value, done } = await reader.read();
           if (done) break;
 
@@ -494,16 +560,24 @@ const Home = ({ bearerToken, setBearerToken }) => {
             }
 
             if (eventType === "status") {
+              if (viewKeyRef.current !== viewKeyAtStart) continue;
               const stage = payload?.stage;
               if (stage === "started") {
                 setCallsActiveStep("extract");
                 setCallsProgressText("Starting transcript processing…");
+                // If backend included a conversationId (new processing path), refresh sidebar immediately
+                // so the in-progress case shows up with the correct (yellow) status dot.
+                if (payload?.conversationId) {
+                  setSidebarRefreshTick((t) => t + 1);
+                }
               }
               if (stage === "conversation_created") {
                 conversationIdFromStream = payload?.conversationId || "";
                 setConversationStatus((payload?.status || "active").toLowerCase());
                 setCallsActiveStep("extract");
                 setCallsProgressText("Preparing workspace…");
+                // Now that the backend has created/updated the Mongo stub, refresh sidebar so it appears immediately.
+                setSidebarRefreshTick((t) => t + 1);
               }
               if (stage === "cached") {
                 // Cached path: answers will stream quickly; still show activity.
@@ -512,6 +586,8 @@ const Home = ({ bearerToken, setBearerToken }) => {
                 setConversationStatus((payload?.status || "active").toLowerCase());
                 setCallsActiveStep("answer");
                 setCallsProgressText("Loading cached results…");
+                // Ensure cached/in-progress conversations are visible in sidebar.
+                setSidebarRefreshTick((t) => t + 1);
               }
               if (stage === "transcript_loading") {
                 setCallsActiveStep("extract");
@@ -556,6 +632,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
                 setCallsProgressText(label);
               }
             } else if (eventType === "answer") {
+              if (viewKeyRef.current !== viewKeyAtStart) continue;
               appendChat(payload || {});
               setCallsAnsweredCount((prev) => {
                 const next = (prev || 0) + 1;
@@ -575,12 +652,15 @@ const Home = ({ bearerToken, setBearerToken }) => {
                 return next;
               });
             } else if (eventType === "final") {
+              if (viewKeyRef.current !== viewKeyAtStart) continue;
               setFinalSummary(payload?.finalSummary || "");
               setCallsActiveStep("final");
               setCallsProgressText("Final summary ready. Finishing…");
             } else if (eventType === "claimDecision") {
+              if (viewKeyRef.current !== viewKeyAtStart) continue;
               setCallsClaimDecision(payload || null);
             } else if (eventType === "done") {
+              if (viewKeyRef.current !== viewKeyAtStart) continue;
               setCallsGenerationStage("done");
               setCallsActiveStep("final");
               setCallsProgressText("");
@@ -596,6 +676,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
           }
         }
       } catch (err) {
+        if (viewKeyRef.current !== viewKeyAtStart) return;
         console.error("Streaming transcript processing failed, falling back:", err);
         const status = err?.response?.status || (err?.message?.includes("500") ? 500 : null);
         if (status === 500 && !serverError) {
@@ -611,6 +692,10 @@ const Home = ({ bearerToken, setBearerToken }) => {
           });
         }
         runNonStreamingFallback();
+      } finally {
+        if (callsStreamAbortRef.current === abortController) {
+          callsStreamAbortRef.current = null;
+        }
       }
     };
 
@@ -654,6 +739,14 @@ const Home = ({ bearerToken, setBearerToken }) => {
 
   useEffect(() => {
     if (conversationId !== "") {
+      if (
+        skipNextHistoryFetchRef.current &&
+        String(skipNextHistoryFetchRef.current) === String(conversationId)
+      ) {
+        skipNextHistoryFetchRef.current = null;
+        setIsLoadingConversation(false);
+        return;
+      }
       setIsLoadingConversation(true);
       // Avoid showing stale content while switching conversations from history.
       setChats([]);
@@ -675,6 +768,14 @@ const Home = ({ bearerToken, setBearerToken }) => {
           setSelectedPlan(response.data.selectedPlan);
           setFinalSummary(response.data.finalSummary || "");
           setCallsClaimDecision(response?.data?.claimDecision || null);
+          const isProcessing = Boolean(response?.data?.processing);
+          const hasFinal = Boolean((response?.data?.finalSummary || "").trim());
+          const shouldBlockForProcessing = isProcessing || (Boolean(response?.data?.transcriptId || response?.data?.transcriptMetadata) && !hasFinal);
+          setIsCallsProcessing(shouldBlockForProcessing);
+          if (shouldBlockForProcessing) {
+            setCallsProgressText("Analyzing transcript…");
+            setCallsActiveStep("final");
+          }
           setAuthorizedFinalAnswer(
             response.data.authorizedFinalAnswer || response.data.finalSummary || ""
           );
@@ -688,7 +789,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
             "";
           if (transcriptNameFromApi) {
             setCallsTranscriptName(transcriptNameFromApi);
-            setCallsGenerationStage("done");
+            setCallsGenerationStage(shouldBlockForProcessing ? "generating" : "done");
             // If backend doesn't supply timestamps, fall back to "now" so the UI can still show something.
             if (!response.data.updatedAt && !response.data.createdAt) {
               setCallsGeneratedAt(new Date().toISOString());
@@ -728,6 +829,14 @@ const Home = ({ bearerToken, setBearerToken }) => {
                     setSelectedPlan(response.data.selectedPlan);
                     setFinalSummary(response.data.finalSummary || "");
                     setCallsClaimDecision(response?.data?.claimDecision || null);
+                    const isProcessing = Boolean(response?.data?.processing);
+                    const hasFinal = Boolean((response?.data?.finalSummary || "").trim());
+                    const shouldBlockForProcessing = isProcessing || (Boolean(response?.data?.transcriptId || response?.data?.transcriptMetadata) && !hasFinal);
+                    setIsCallsProcessing(shouldBlockForProcessing);
+                    if (shouldBlockForProcessing) {
+                      setCallsProgressText("Analyzing transcript…");
+                      setCallsActiveStep("final");
+                    }
                     setAuthorizedFinalAnswer(
                       response.data.authorizedFinalAnswer || response.data.finalSummary || ""
                     );
@@ -740,7 +849,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
                       "";
                     if (transcriptNameFromApi) {
                       setCallsTranscriptName(transcriptNameFromApi);
-                      setCallsGenerationStage("done");
+                      setCallsGenerationStage(shouldBlockForProcessing ? "generating" : "done");
                       if (!response.data.updatedAt && !response.data.createdAt) {
                         setCallsGeneratedAt(new Date().toISOString());
                       }
@@ -781,9 +890,69 @@ const Home = ({ bearerToken, setBearerToken }) => {
       setCallsGenerationStage("idle");
       setCallsClaimDecision(null);
       setCallsGeneratedAt(null);
+      setIsCallsProcessing(false);
       setIsLoadingConversation(false);
     }
   }, [conversationId]);
+
+  // If a transcript conversation is still processing (cloud analysis), keep showing the loader and
+  // poll /history until processing is false and finalSummary is available.
+  useEffect(() => {
+    if (!isCallsMode) return;
+    if (!conversationId) return;
+    if (!callsTranscriptName) return;
+    if (!isCallsProcessing) return;
+    if (isLoadingConversation) return;
+
+    const viewKeyAtStart = viewKeyRef.current;
+    let cancelled = false;
+
+    const poll = async () => {
+      if (cancelled) return;
+      if (viewKeyRef.current !== viewKeyAtStart) return;
+      try {
+        const resp = await axios.get(`${API_BASE_URL}/history?conversation-id=${conversationId}`);
+        if (cancelled) return;
+        if (viewKeyRef.current !== viewKeyAtStart) return;
+
+        const isProcessing = Boolean(resp?.data?.processing);
+        const hasFinal = Boolean((resp?.data?.finalSummary || "").trim());
+        const shouldBlockForProcessing =
+          isProcessing ||
+          (Boolean(resp?.data?.transcriptId || resp?.data?.transcriptMetadata) && !hasFinal);
+
+        setIsCallsProcessing(shouldBlockForProcessing);
+        // Always keep chats up-to-date while processing (ChatGPT-style incremental updates).
+        setChats(resp?.data?.chats || []);
+        setFinalSummary(resp?.data?.finalSummary || "");
+        setCallsClaimDecision(resp?.data?.claimDecision || null);
+        setAuthorizedFinalAnswer(
+          resp?.data?.authorizedFinalAnswer || resp?.data?.finalSummary || ""
+        );
+        setAuthorizedApprovedAt(resp?.data?.authorizedApprovedAt || null);
+        setConversationStatus((resp?.data?.status || "active").toLowerCase());
+
+        if (!shouldBlockForProcessing) {
+          setCallsGenerationStage("done");
+          setCallsProgressText("");
+          // Ensure sidebar dot flips from yellow->green as soon as processing completes.
+          setSidebarRefreshTick((t) => t + 1);
+          return;
+        }
+        setCallsGenerationStage("generating");
+        setCallsProgressText("Analyzing transcript…");
+      } catch (e) {
+        // Ignore transient errors while polling.
+      }
+      setTimeout(poll, 1200);
+    };
+
+    const t = setTimeout(poll, 700);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [isCallsMode, conversationId, callsTranscriptName, isCallsProcessing, isLoadingConversation]);
 
   const extractedQuestionsForReview = (chats || [])
     .filter((c) => {
@@ -830,6 +999,31 @@ const Home = ({ bearerToken, setBearerToken }) => {
       });
   };
 
+  const handleRejectCase = () => {
+    if (!conversationId) return;
+    setIsRejectingCase(true);
+    axios
+      .patch(`${API_BASE_URL}/conversation/status?conversation-id=${conversationId}`, {
+        status: "inactive",
+      })
+      .then(() => {
+        setConversationStatus("inactive");
+        setIsReviewApproveOpen(false);
+        setJustRejected(true);
+        // Signal sidebar to immediately move this case into "Closed" (optimistic UX).
+        setRecentlyClosedConversationId(conversationId);
+        setSidebarRefreshTick((t) => t + 1);
+        setTimeout(() => setJustRejected(false), 2500);
+        setTimeout(() => setRecentlyClosedConversationId(""), 3500);
+      })
+      .catch((err) => {
+        console.error("Error rejecting case:", err);
+      })
+      .finally(() => {
+        setIsRejectingCase(false);
+      });
+  };
+
   useEffect(() => {
     const chatContainer = chatRef.current;
     if (chatContainer) {
@@ -849,6 +1043,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
   }, []);
 
   const handleInputSubmit = () => {
+    const viewKeyAtSubmit = viewKeyRef.current;
     if (!getIdToken()) {
       setError("login");
       return;
@@ -923,9 +1118,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
     }
 
     if (!isCallsMode && conversationId === "") {
-      setChats([{ entered_query: input, response: "Loading Response", source: "user" }]);
-      let path = `/c/`;
-      navigate(path);
+      // Keep the current UI in-place while generating; do NOT navigate to /c/ (it causes a reset/flicker).
     }
 
     let requestBody = {
@@ -947,6 +1140,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
       axios
         .post(apiUrl, { ...requestBody, gptModel: callsUnderlyingModel })
         .then((response) => {
+          if (viewKeyRef.current !== viewKeyAtSubmit) return;
           setServerError(null);
           if (
             response.data.message === "Token is invalid" ||
@@ -975,6 +1169,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
           }
         })
         .catch((error) => {
+          if (viewKeyRef.current !== viewKeyAtSubmit) return;
           const status = error?.response?.status;
           const errorMessage = status === 500 
             ? "An error occurred while processing your request. Please try again."
@@ -1016,6 +1211,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
       axios
         .post(apiUrl, requestBody)
         .then((response) => {
+          if (viewKeyRef.current !== viewKeyAtSubmit) return;
           setServerError(null);
           if (
             response.data.message === "Token is invalid" ||
@@ -1040,12 +1236,15 @@ const Home = ({ bearerToken, setBearerToken }) => {
                 source: "user",
               },
             ]);
-            let path = `/conversation/${response.data.conversationId}`;
-
-            navigate(path);
+            const nextId = response?.data?.conversationId;
+            if (nextId) {
+              skipNextHistoryFetchRef.current = String(nextId);
+              navigate(`/conversation/${nextId}`);
+            }
           }
         })
         .catch((error) => {
+          if (viewKeyRef.current !== viewKeyAtSubmit) return;
           const status = error?.response?.status;
           const errorMessage = status === 500 
             ? "An error occurred while processing your request. Please try again."
@@ -1243,12 +1442,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
                 ref={chatRef}
               >
                 <>
-                  {isLoadingConversation ? (
-                    <div className="conversation_loading" aria-live="polite">
-                      <span className="mini_spinner" aria-hidden="true" />
-                      <div className="text">Loading conversation…</div>
-                    </div>
-                  ) : serverError?.type === "conversation" ? (
+                  {serverError?.type === "conversation" ? (
                     <div className="conversation_error">
                       <div className="error_text">Failed to load conversation. Please try again.</div>
                       <TryAgainButton
@@ -1483,11 +1677,15 @@ const Home = ({ bearerToken, setBearerToken }) => {
           }}
         />
 
-        {isCheckingExistingTranscriptConversation ? (
+        {(isCheckingExistingTranscriptConversation || isLoadingConversation) ? (
           <div className="blocking_overlay" role="dialog" aria-modal="true">
             <div className="blocking_card">
               <div className="spinner" aria-hidden="true" />
-              <div className="text">Checking existing conversations…</div>
+              <div className="text">
+                {isCheckingExistingTranscriptConversation
+                  ? "Checking existing conversations…"
+                  : "Loading conversation…"}
+              </div>
             </div>
           </div>
         ) : null}
@@ -1496,6 +1694,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
           isOpen={isReviewApproveOpen}
           onClose={() => setIsReviewApproveOpen(false)}
           onApprove={handleApproveCase}
+          onReject={handleRejectCase}
           caseId={conversationId}
           transcriptName={callsTranscriptName}
           // Case ID in the popup should match exactly what comes from GCS (raw filename).
@@ -1510,6 +1709,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
           authorizedAnswer={authorizedFinalAnswer}
           setAuthorizedAnswer={setAuthorizedFinalAnswer}
           isApproving={isApprovingCase}
+          isRejecting={isRejectingCase}
           isClosed={conversationStatus === "inactive"}
           userName={loggedInUserName}
         />
@@ -1517,6 +1717,11 @@ const Home = ({ bearerToken, setBearerToken }) => {
         {justApproved ? (
           <div className="case_thankyou_toast" role="status" aria-live="polite">
             Thank you, case forwarded.
+          </div>
+        ) : null}
+        {justRejected ? (
+          <div className="case_thankyou_toast" role="status" aria-live="polite">
+            Case rejected &amp; closed.
           </div>
         ) : null}
       </div>

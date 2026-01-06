@@ -5,10 +5,13 @@ import "./itemizedFinalAnswer.scss";
 const ITEM_START_RE = /^Item\s*#?\s*:?\s*(\d+)\b/i;
 const ITEM_START_WITH_TITLE_RE = /^Item\s*#?\s*(\d+)\s*:\s*(.+)$/i;
 
-const stripMdStrong = (s) => {
-  const t = String(s || "").trim();
-  // Handles lines like "**Item: 1**" or "**Overall Next Steps:**"
-  return t.replace(/^\*\*/, "").replace(/\*\*$/, "").trim();
+const stripMdDecorators = (s) => {
+  let t = String(s || "").trim();
+  // Strip markdown heading / quote prefixes like "### " or "> "
+  t = t.replace(/^#{1,6}\s*/g, "").replace(/^>\s*/g, "").trim();
+  // Strip bold wrappers like "**Item: 1**" or "**Overall Next Steps:**"
+  t = t.replace(/^\*\*/, "").replace(/\*\*$/, "").trim();
+  return t;
 };
 
 const normalizeDecision = (s) => {
@@ -30,11 +33,34 @@ const parseItemSections = (text) => {
   const raw = String(text || "").replace(/\r\n/g, "\n");
   const lines = raw.split("\n");
   const starts = [];
+  let isSingleItemFallback = false;
+
+  // Heuristic: Some LLM outputs contain a single item without numbering, e.g.
+  // "Item: Unknown" + bullet key/value lines. In that case, treat the whole text as one item.
+  const looksLikeSingleItem = () => {
+    const keyRe =
+      /^(Item|Type|Related|Situation|Decision|Amounts|Why|Next steps?|What.?s covered|What.?s not covered|Limitations\s*\/\s*not covered)\s*:/i;
+    let hits = 0;
+    for (const ln of lines) {
+      const probe = stripMdDecorators(ln).replace(/^[-•*]\s+/, "").trim();
+      if (keyRe.test(probe)) hits += 1;
+      if (hits >= 2) return true;
+    }
+    return false;
+  };
+
   for (let i = 0; i < lines.length; i++) {
-    const probe = stripMdStrong(lines[i]);
+    const probe = stripMdDecorators(lines[i]);
     if (ITEM_START_RE.test(probe)) starts.push(i);
   }
-  if (starts.length === 0) return { items: [], overall: "" };
+  if (starts.length === 0) {
+    if (looksLikeSingleItem()) {
+      starts.push(0);
+      isSingleItemFallback = true;
+    } else {
+      return { items: [], overall: "" };
+    }
+  }
 
   const sections = [];
   for (let i = 0; i < starts.length; i++) {
@@ -45,7 +71,7 @@ const parseItemSections = (text) => {
 
   const items = sections.map((secLines) => {
     const item = {
-      itemNo: "",
+      itemNo: isSingleItemFallback ? "1" : "",
       title: "",
       name: "",
       type: "",
@@ -68,7 +94,7 @@ const parseItemSections = (text) => {
       const currentIndent = indentMatch ? indentMatch[1].length : 0;
       const isNestedBullet = currentIndent > 2 && /^\s+[-•*]\s+/.test(ln);
       
-      let t = stripMdStrong(ln);
+      let t = stripMdDecorators(ln);
       if (!t) continue;
 
       const isBullet = /^[-•*]\s+/.test(t);
@@ -306,7 +332,7 @@ const parseItemSections = (text) => {
   let overallNextSteps = "";
   try {
     const tailIdx = lines.findIndex((l) =>
-      /^Overall Next Steps?\b/i.test(stripMdStrong(l).replace(/:$/, ""))
+      /^Overall Next Steps?\b/i.test(stripMdDecorators(l).replace(/:$/, ""))
     );
     if (tailIdx >= 0) {
       overallNextSteps = lines.slice(tailIdx).join("\n").trim();
