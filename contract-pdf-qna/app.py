@@ -1280,7 +1280,7 @@ def filter_relevant_customer_questions(questions: List[Dict]) -> List[Dict]:
     return filtered_questions
 
 
-def extract_relevant_customer_questions(transcript_content: str, llm) -> List[Dict]:
+def extract_relevant_customer_questions(transcript_content: str, llm, handler=None) -> List[Dict]:
     """
     Extract only relevant atomic questions asked by end customers from transcript.
     Focuses on coverage lookup, damage repair, and customer problems.
@@ -1381,7 +1381,13 @@ Transcript:
     extraction_chain = extraction_prompt | llm | StrOutputParser()
     
     try:
-        result = extraction_chain.invoke({"transcript": transcript_content})
+        if handler:
+            result = extraction_chain.invoke(
+                {"transcript": transcript_content},
+                config={"callbacks": [handler]},
+            )
+        else:
+            result = extraction_chain.invoke({"transcript": transcript_content})
         # Clean the result - remove markdown code blocks if present
         result = re.sub(r'```json\n?', '', result)
         result = re.sub(r'```\n?', '', result)
@@ -1406,7 +1412,7 @@ Transcript:
         return []
 
 
-def extract_questions_with_agent(transcript_content: str, llm) -> List[Dict]:
+def extract_questions_with_agent(transcript_content: str, llm, handler=None) -> List[Dict]:
     """
     Extract relevant customer questions from transcript using an agent-based approach.
     Uses the same extraction prompt and filtering logic as extract_relevant_customer_questions()
@@ -1645,8 +1651,10 @@ Return the final JSON array and nothing else.
         # Run agent with transcript
         agent_input = f"Extract relevant customer questions from this transcript:\n\n{transcript_content}"
         print(f"DEBUG: Running agent with transcript length: {len(transcript_content)} characters")
-        handler = get_langchain_handler()
-        response = agent.invoke({"input": agent_input}, config={"callbacks": [handler]})
+        if handler:
+            response = agent.invoke({"input": agent_input}, config={"callbacks": [handler]})
+        else:
+            response = agent.invoke({"input": agent_input})
         
         print(f"DEBUG: Agent response keys: {response.keys()}")
         print(f"DEBUG: Agent output: {response.get('output', '')[:200]}")
@@ -2033,6 +2041,7 @@ def process_live_copilot_question(
     selected_plan: str,
     selected_state: str,
     transcript_context: str = "",
+    handler=None,
 ) -> Dict:
     """
     Wrapper for Live Copilot to use the existing INFER implementation.
@@ -2105,8 +2114,9 @@ def process_live_copilot_question(
         llm = ChatOpenAI(temperature=0.0, model="gpt-4o")
         llm2 = ChatOpenAI(temperature=0.0, model="gpt-4o")
         
-        # Call the existing INFER implementation
-        handler = get_langchain_handler()
+        # Use provided handler when available (so /webhook can aggregate into one trace),
+        # otherwise fall back to one-per-request handler behavior.
+        handler = handler or get_langchain_handler()
         result = process_single_transcript_question(
             question=question,
             contract_type=contract_type,
@@ -2307,6 +2317,8 @@ def feedback():
 
 @app.route("/calls/transcripts", methods=["GET"])
 def calls_transcripts():
+    with tracer.start_as_current_span("api/calls/transcripts") as parent0:
+        _span_set_attr(parent0, "app.mode", "Calls")
     authorization_header = request.headers.get("Authorization")
 
     if authorization_header is None:
@@ -2331,13 +2343,14 @@ def calls_transcripts():
 
     skip = (page - 1) * page_size
 
-    total = calls_transcripts_collection.count_documents(query)
-    cursor = (
-        calls_transcripts_collection.find(query)
-        .sort("created_at", -1)
-        .skip(skip)
-        .limit(page_size)
-    )
+    with tracer.start_as_current_span("context_retrieval"):
+        total = calls_transcripts_collection.count_documents(query)
+        cursor = (
+            calls_transcripts_collection.find(query)
+            .sort("created_at", -1)
+            .skip(skip)
+            .limit(page_size)
+        )
 
     items = []
     for doc in cursor:
@@ -2824,6 +2837,8 @@ def start():
 @app.route("/calls/start", methods=["POST"])
 def calls_start():
     try:
+        with tracer.start_as_current_span("api/calls/start") as parent0:
+            _span_set_attr(parent0, "app.mode", "Calls")
         authorization_header = request.headers.get("Authorization")
 
         if authorization_header is None:
@@ -2858,9 +2873,10 @@ def calls_start():
             return jsonify({"error": "Calls conversationId is required"}), 400
 
         try:
-            calls_conversation = calls_conversations_collection.find_one(
-                {"_id": ObjectId(conversation_id), "user_email": user_email}
-            )
+            with tracer.start_as_current_span("context_retrieval"):
+                calls_conversation = calls_conversations_collection.find_one(
+                    {"_id": ObjectId(conversation_id), "user_email": user_email}
+                )
         except Exception:
             calls_conversation = None
 
@@ -2877,18 +2893,19 @@ def calls_start():
             "chat_timestamp": query_time,
         }
 
-        calls_conversations_collection.update_one(
-            {"_id": ObjectId(conversation_id)},
-            {
-                "$push": {"chats": chat},
-                "$set": {
-                    "contract_type": contract_type,
-                    "selected_plan": selected_plan,
-                    "selected_state": selected_state,
-                    "updated_at": query_time,
+        with tracer.start_as_current_span("response_postprocessing"):
+            calls_conversations_collection.update_one(
+                {"_id": ObjectId(conversation_id)},
+                {
+                    "$push": {"chats": chat},
+                    "$set": {
+                        "contract_type": contract_type,
+                        "selected_plan": selected_plan,
+                        "selected_state": selected_state,
+                        "updated_at": query_time,
+                    },
                 },
-            },
-        )
+            )
 
         output_json = {
             "aiResponse": chat["response"],
@@ -3923,7 +3940,12 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {payload}\n\n"
 
 
-def generate_claim_decision_from_chunks(chunks: List[str], llm=None, claims_context: List[Dict] = None) -> Dict:
+def generate_claim_decision_from_chunks(
+    chunks: List[str],
+    llm=None,
+    claims_context: List[Dict] = None,
+    handler=None,
+) -> Dict:
     """
     Produce a single claim authorization decision grounded ONLY in provided policy chunks.
 
@@ -4038,7 +4060,10 @@ Policy chunks (verbatim):
 
         chain = prompt | llm | StrOutputParser()
         chunks_blob = "\n\n---\n\n".join(cleaned[:12])
-        raw = (chain.invoke({"chunks": chunks_blob, "claims": claims_blob}) or "").strip()
+        if handler:
+            raw = (chain.invoke({"chunks": chunks_blob, "claims": claims_blob}, config={"callbacks": [handler]}) or "").strip()
+        else:
+            raw = (chain.invoke({"chunks": chunks_blob, "claims": claims_blob}) or "").strip()
         raw = re.sub(r"```json\\n?", "", raw)
         raw = re.sub(r"```\\n?", "", raw)
         raw = raw.strip()
@@ -4702,7 +4727,7 @@ def process_transcript_stream():
 def process_transcript():
     """Process transcript: fetch from GCP, extract questions, and get answers"""
     try:
-        with tracer.start_as_current_span("api/transcripts/process") as parent0:
+        with tracer.start_as_current_span("claims.transcript.process") as parent0:
             start_time = time()
             extraction_warning = None
             
@@ -4748,6 +4773,8 @@ def process_transcript():
                     }), 400
             
             user_email = token_data[0]["email"]
+            # Exactly one handler per transcript processing request (used for all LangChain invocations).
+            handler = get_langchain_handler()
             transcript_id = transcript_file_name.replace(".json", "").replace(".txt", "")
 
             # Use the existing per-user chat collection (same as Search/Infer) for transcript conversations.
@@ -4935,12 +4962,12 @@ def process_transcript():
                     llm_extract = ChatOpenAI(temperature=0.0, model="gpt-4o")
                     # Try direct extraction first (more reliable), then agent if needed
                     print(f"DEBUG: Attempting direct extraction first...")
-                    questions = extract_relevant_customer_questions(transcript_text, llm_extract)
+                    questions = extract_relevant_customer_questions(transcript_text, llm_extract, handler=handler)
                     
                     # If direct extraction fails, try agent-based extraction
                     if not questions or len(questions) == 0:
                         print(f"DEBUG: Direct extraction returned no questions, trying agent-based extraction...")
-                        questions = extract_questions_with_agent(transcript_text, llm_extract)
+                        questions = extract_questions_with_agent(transcript_text, llm_extract, handler=handler)
                     
                     if not questions:
                         print(f"ERROR: No questions extracted from transcript '{transcript_file_name}'")
@@ -5011,20 +5038,34 @@ def process_transcript():
             total_latency = 0
             confidences = []
             
-            handler = get_langchain_handler()
+            # handler already created once near the top of this request
+            # Claims/Calls transcript processing context
+            _span_set_attr(parent0, "app.mode", "Claims")
+            _span_set_attr(parent0, "claims.underlying_model", gpt_model)
+            _span_set_attr(parent0, "langchain.agent.used", gpt_model == "Infer")
+            if gpt_model == "Infer":
+                _span_set_attr(parent0, "langchain.agent.type", "CHAT_CONVERSATIONAL_REACT_DESCRIPTION")
+            _span_set_attr(parent0, "langchain.a2a.used", False)
 
             with tracer.start_as_current_span("process-questions"):
                 for question_obj in questions:
                     question_text = question_obj.get("question", "")
                     question_id = question_obj.get("questionId", f"q{len(results) + 1}")
-                    
+
                     result = process_single_transcript_question(
-                        question_text, contract_type, selected_plan, 
-                        selected_state, gpt_model, vector_db1, llm, llm2, 
-                        retriever, handler,
+                        question_text,
+                        contract_type,
+                        selected_plan,
+                        selected_state,
+                        gpt_model,
+                        vector_db1,
+                        llm,
+                        llm2,
+                        retriever,
+                        handler,
                         transcript_context=question_obj.get("context", ""),
                     )
-                    
+
                     result["questionId"] = question_id
                     result["question"] = question_text
                     result["context"] = question_obj.get("context", "")
@@ -5068,11 +5109,11 @@ def process_transcript():
                         )
                     except Exception as e:
                         print(f"[CHUNKS] /transcripts/process: unable to log chunk detail: {e}")
-                    
+
                     if "error" not in result:
                         confidences.append(result.get("confidence", 0.0))
                         total_latency += result.get("latency", 0.0)
-                    
+
                     results.append(result)
             
             # Calculate summary
@@ -5122,7 +5163,9 @@ def process_transcript():
                             "situation": (r.get("context") or ""),
                         }
                     )
-                claim_decision = generate_claim_decision_from_chunks(deduped, claims_context=claims_context)
+                claim_decision = generate_claim_decision_from_chunks(
+                    deduped, claims_context=claims_context, handler=handler
+                )
                 response["claimDecision"] = claim_decision
             except Exception as e:
                 print(f"Warning: unable to generate claimDecision: {e}")
@@ -5191,7 +5234,14 @@ def process_transcript():
                             ),
                         )
                         summary_chain = summary_prompt | llm_summary | StrOutputParser()
-                        final_summary_text = summary_chain.invoke({"qa_blob": qa_blob}).strip()
+                        final_summary_text = (
+                            summary_chain.invoke(
+                                {"qa_blob": qa_blob},
+                                config={"callbacks": [handler]},
+                            ).strip()
+                            if handler
+                            else summary_chain.invoke({"qa_blob": qa_blob}).strip()
+                        )
             except Exception as e:
                 print(f"Warning: failed to generate final transcript summary: {e}")
 
@@ -5313,6 +5363,17 @@ def process_transcript():
                 f"questions={len(results)}, total_chunks={total_chunks}"
             )
 
+            # Export LangChain spans exactly once for this transcript processing request.
+            try:
+                res_all, tok_all = handler.infi()
+                totals = _aggregate_token_usage(tok_all)
+                _span_set_attr(parent0, "langchain.tokens.prompt_total", totals.get("prompt_tokens", 0))
+                _span_set_attr(parent0, "langchain.tokens.completion_total", totals.get("completion_tokens", 0))
+                _span_set_attr(parent0, "langchain.tokens.total", totals.get("total_tokens", 0))
+                llm_trace_to_otel(res_all, parent0)
+            except Exception:
+                pass
+
             return jsonify(response), 200
             
     except Exception as e:
@@ -5336,7 +5397,7 @@ def process_transcript_internal():
     - Stores results into chats_<user_email> same as normal flow
     """
     try:
-        with tracer.start_as_current_span("api/internal/transcripts/process") as parent0:
+        with tracer.start_as_current_span("claims.transcript.process") as parent0:
             start_time = time()
             extraction_warning = None
 
@@ -5378,6 +5439,16 @@ def process_transcript_internal():
                     }), 400
 
             transcript_id = transcript_file_name.replace(".json", "").replace(".txt", "")
+            # Exactly one handler per internal transcript event (used for all LangChain invocations).
+            handler = get_langchain_handler()
+            _span_set_attr(parent0, "app.mode", "Claims")
+            _span_set_attr(parent0, "claims.underlying_model", gpt_model)
+            _span_set_attr(parent0, "claims.transcript_id", transcript_id)
+            _span_set_attr(parent0, "live.claim_id", transcript_id)
+            _span_set_attr(parent0, "langchain.agent.used", gpt_model == "Infer")
+            if gpt_model == "Infer":
+                _span_set_attr(parent0, "langchain.agent.type", "CHAT_CONVERSATIONAL_REACT_DESCRIPTION")
+            _span_set_attr(parent0, "langchain.a2a.used", False)
 
             # --- Resolve user email from mappings ---
             with tracer.start_as_current_span("resolve-email"):
@@ -5616,12 +5687,12 @@ def process_transcript_internal():
                     llm_extract = ChatOpenAI(temperature=0.0, model="gpt-4o")
                     # Try direct extraction first (more reliable), then agent if needed
                     print(f"DEBUG: Attempting direct extraction first...")
-                    questions = extract_relevant_customer_questions(transcript_text, llm_extract)
+                    questions = extract_relevant_customer_questions(transcript_text, llm_extract, handler=handler)
                     
                     # If direct extraction fails, try agent-based extraction
                     if not questions or len(questions) == 0:
                         print(f"DEBUG: Direct extraction returned no questions, trying agent-based extraction...")
-                        questions = extract_questions_with_agent(transcript_text, llm_extract)
+                        questions = extract_questions_with_agent(transcript_text, llm_extract, handler=handler)
                     
                     if not questions:
                         print(f"ERROR: No questions extracted from transcript '{transcript_file_name}'")
@@ -5803,7 +5874,9 @@ def process_transcript_internal():
                             "situation": (r.get("context") or ""),
                         }
                     )
-                claim_decision = generate_claim_decision_from_chunks(deduped, claims_context=claims_context)
+                claim_decision = generate_claim_decision_from_chunks(
+                    deduped, claims_context=claims_context, handler=handler
+                )
                 response["claimDecision"] = claim_decision
             except Exception as e:
                 print(f"Warning: unable to generate claimDecision: {e}")
@@ -5872,7 +5945,14 @@ def process_transcript_internal():
                             ),
                         )
                         summary_chain = summary_prompt | llm_summary | StrOutputParser()
-                        final_summary_text = summary_chain.invoke({"qa_blob": qa_blob}).strip()
+                        final_summary_text = (
+                            summary_chain.invoke(
+                                {"qa_blob": qa_blob},
+                                config={"callbacks": [handler]},
+                            ).strip()
+                            if handler
+                            else summary_chain.invoke({"qa_blob": qa_blob}).strip()
+                        )
             except Exception as e:
                 print(f"Warning: failed to generate final transcript summary: {e}")
 
@@ -5994,6 +6074,17 @@ def process_transcript_internal():
                 f"questions={len(results)}, total_chunks={total_chunks}"
             )
 
+            # Export LangChain spans exactly once for this internal transcript processing request.
+            try:
+                res_all, tok_all = handler.infi()
+                totals = _aggregate_token_usage(tok_all)
+                _span_set_attr(parent0, "langchain.tokens.prompt_total", totals.get("prompt_tokens", 0))
+                _span_set_attr(parent0, "langchain.tokens.completion_total", totals.get("completion_tokens", 0))
+                _span_set_attr(parent0, "langchain.tokens.total", totals.get("total_tokens", 0))
+                llm_trace_to_otel(res_all, parent0)
+            except Exception:
+                pass
+
             return jsonify(response), 200
 
     except Exception as e:
@@ -6008,97 +6099,119 @@ def process_transcript_internal():
 
 @app.route("/webhook", methods=["POST"])
 def transcript_event():
-    # simple shared-secret auth
-    # auth = request.headers.get("authorization", "")
-    # if auth != f"Bearer {os.getenv('FLASK_AUTH_TOKEN')}":
-    #     return {"error": "unauthorized"}, 401
+    with tracer.start_as_current_span("live_call.event") as parent0:
+        # simple shared-secret auth
+        # auth = request.headers.get("authorization", "")
+        # if auth != f"Bearer {os.getenv('FLASK_AUTH_TOKEN')}":
+        #     return {"error": "unauthorized"}, 401
 
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "invalid payload"}), 400
-    
-    session_id = data.get("sessionId")
-    if not session_id:
-        return jsonify({"error": "sessionId is required"}), 400
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "invalid payload"}), 400
+        
+        session_id = data.get("sessionId")
+        if not session_id:
+            return jsonify({"error": "sessionId is required"}), 400
 
-    # Deduplication: Check if this exact transcript already exists
-    dedup_query = {
-        "sessionId": data.get("sessionId"),
-        "speaker": data.get("speaker"),
-        "text": data.get("text"),
-        "beginOffsetMillis": data.get("beginOffsetMillis"),
-        "endOffsetMillis": data.get("endOffsetMillis"),
-    }
-    
-    existing = transcripts_collection.find_one(dedup_query)
-    if existing:
-        # Already received this transcript, skip logging and storing
-        return jsonify({"ok": True, "duplicate": True}), 200
+        include_payloads = _flag_enabled("OTEL_TRACE_INCLUDE_PAYLOADS", "0")
+        preview_chars = int(os.getenv("OTEL_TRACE_PAYLOAD_PREVIEW_CHARS", "500") or "500")
+        _span_set_attr(parent0, "app.mode", "Live")
+        _span_set_attr(parent0, "langchain.a2a.used", False)
+        _span_set_attr(parent0, "live.session_id", str(session_id))
+        _span_set_attr(parent0, "live.claim_id", str(data.get("contactId") or ""))
+        _span_set_attr(parent0, "live.speaker", str(data.get("speaker") or ""))
+        if include_payloads:
+            _span_set_attr(parent0, "live.text_preview", _trace_preview(data.get("text") or "", preview_chars))
 
-    transcript_doc = {
-        "sessionId": data["sessionId"],
-        "contactId": data.get("contactId"),
-        "speaker": data.get("speaker"),
-        "text": data.get("text"),
-        "isPartial": data.get("isPartial", True),
-        "beginOffsetMillis": data.get("beginOffsetMillis"),
-        "endOffsetMillis": data.get("endOffsetMillis"),
-        "createdAt": data.get("createdAt")
-    }
+        # Exactly one handler per request/event (used for all LangChain invocations in this webhook call)
+        handler = get_langchain_handler()
 
-    transcripts_collection.insert_one(transcript_doc)
+        # Deduplication: Check if this exact transcript already exists
+        dedup_query = {
+            "sessionId": data.get("sessionId"),
+            "speaker": data.get("speaker"),
+            "text": data.get("text"),
+            "beginOffsetMillis": data.get("beginOffsetMillis"),
+            "endOffsetMillis": data.get("endOffsetMillis"),
+        }
+        
+        with tracer.start_as_current_span("context_retrieval"):
+            existing = transcripts_collection.find_one(dedup_query)
+        if existing:
+            # Already received this transcript, skip logging and storing
+            return jsonify({"ok": True, "duplicate": True}), 200
 
-    # broadcast to UI via websocket
-    # 🔥 LOG TRANSCRIPT EVENT
-    print("🔴 TRANSCRIPT RECEIVED:", json.dumps(data, indent=2))
-    socketio.emit("transcript_update", data)
-    socketio.emit("transcript_update", data, room=data["sessionId"])
+        transcript_doc = {
+            "sessionId": data["sessionId"],
+            "contactId": data.get("contactId"),
+            "speaker": data.get("speaker"),
+            "text": data.get("text"),
+            "isPartial": data.get("isPartial", True),
+            "beginOffsetMillis": data.get("beginOffsetMillis"),
+            "endOffsetMillis": data.get("endOffsetMillis"),
+            "createdAt": data.get("createdAt")
+        }
 
-    # ========== LIVE COPILOT: Real-time AI suggestions ==========
-    # Process through Live Copilot if:
-    # 1. Module is available
-    # 2. Feature flag is enabled
-    # 3. Session has copilot enabled (via copilot_enable from UI)
-    # 4. Transcript is complete (not partial)
-    if (
-        LIVE_COPILOT_AVAILABLE
-        and _flag_enabled("ENABLE_LIVE_COPILOT", "0")
-        and not data.get("isPartial", True)
-    ):
-        try:
-            # Build copilot payload with session context
-            # Include phone, state, plan, contractType from transcript payload
-            copilot_payload = {
-                "sessionId": session_id,
-                "contactId": data.get("contactId"),
-                "speaker": data.get("speaker"),
-                "text": data.get("text"),
-                "isPartial": data.get("isPartial", False),
-                "beginOffsetMillis": data.get("beginOffsetMillis"),
-                "endOffsetMillis": data.get("endOffsetMillis"),
-                # New fields from transcript for session context
-                # Support both 'phoneNumber' (Amazon Connect) and 'phone' keys
-                "phoneNumber": data.get("phoneNumber") or data.get("phone"),
-                "state": data.get("state"),
-                "contractType": data.get("contractType"),
-                "plan": data.get("plan"),
-            }
-            
-            # Call Live Copilot to process transcript
-            copilot_result = handle_transcript_event(copilot_payload)
-            
-            if copilot_result:
-                print("🟢 COPILOT SUGGESTION:", json.dumps(copilot_result, indent=2, default=str))
-                # Emit suggestion to UI
-                socketio.emit("suggestion_update", copilot_result)
-                socketio.emit("suggestion_update", copilot_result, room=session_id)
-        except Exception as e:
-            print(f"⚠️ Copilot processing error (non-blocking): {e}")
-            import traceback
-            traceback.print_exc()
-    # =============================================================
+        with tracer.start_as_current_span("response_postprocessing"):
+            transcripts_collection.insert_one(transcript_doc)
 
-    return jsonify({"ok": True}), 200
+        # broadcast to UI via websocket
+        # 🔥 LOG TRANSCRIPT EVENT
+        print("🔴 TRANSCRIPT RECEIVED:", json.dumps(data, indent=2))
+        socketio.emit("transcript_update", data)
+        socketio.emit("transcript_update", data, room=data["sessionId"])
+
+        # ========== LIVE COPILOT: Real-time AI suggestions ==========
+        if (
+            LIVE_COPILOT_AVAILABLE
+            and _flag_enabled("ENABLE_LIVE_COPILOT", "0")
+            and not data.get("isPartial", True)
+        ):
+            with tracer.start_as_current_span("response_postprocessing") as copilot_span:
+                # May be false in fallback; tool/LLM spans still provide detail.
+                _span_set_attr(copilot_span, "langchain.agent.used", True)
+                _span_set_attr(copilot_span, "langchain.agent.type", "CHAT_CONVERSATIONAL_REACT_DESCRIPTION")
+                _span_set_attr(copilot_span, "langchain.a2a.used", False)
+                try:
+                    # Build copilot payload with session context
+                    copilot_payload = {
+                        "sessionId": session_id,
+                        "contactId": data.get("contactId"),
+                        "speaker": data.get("speaker"),
+                        "text": data.get("text"),
+                        "isPartial": data.get("isPartial", False),
+                        "beginOffsetMillis": data.get("beginOffsetMillis"),
+                        "endOffsetMillis": data.get("endOffsetMillis"),
+                        "phoneNumber": data.get("phoneNumber") or data.get("phone"),
+                        "state": data.get("state"),
+                        "contractType": data.get("contractType"),
+                        "plan": data.get("plan"),
+                    }
+                    
+                    copilot_result = handle_transcript_event(copilot_payload, handler=handler)
+                    
+                    if copilot_result:
+                        print("🟢 COPILOT SUGGESTION:", json.dumps(copilot_result, indent=2, default=str))
+                        socketio.emit("suggestion_update", copilot_result)
+                        socketio.emit("suggestion_update", copilot_result, room=session_id)
+                except Exception as e:
+                    print(f"⚠️ Copilot processing error (non-blocking): {e}")
+                    import traceback
+                    traceback.print_exc()
+                finally:
+                    # Export LangChain spans exactly once for this webhook event
+                    try:
+                        res_all, tok_all = handler.infi()
+                        totals = _aggregate_token_usage(tok_all)
+                        _span_set_attr(copilot_span, "langchain.tokens.prompt_total", totals.get("prompt_tokens", 0))
+                        _span_set_attr(copilot_span, "langchain.tokens.completion_total", totals.get("completion_tokens", 0))
+                        _span_set_attr(copilot_span, "langchain.tokens.total", totals.get("total_tokens", 0))
+                        llm_trace_to_otel(res_all, copilot_span)
+                    except Exception:
+                        pass
+        # =============================================================
+
+        return jsonify({"ok": True}), 200
 
 @socketio.on("connect")
 def on_connect(auth):

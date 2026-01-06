@@ -169,6 +169,95 @@ class CallbackHandler(BaseCallbackHandler):
 
             self.result_list.append(payload)
 
+    def _pop_start_event(self, run_id: UUID):
+        """
+        Best-effort: remove and return the start-event record for a given run_id.
+        This handler must never throw; ordering is not guaranteed across LangChain callbacks.
+        """
+        try:
+            if not self.client or run_id is None:
+                return None
+            for idx in range(len(self.client) - 1, -1, -1):
+                item = self.client[idx]
+                try:
+                    if isinstance(item, dict) and item.get("run_id") == run_id:
+                        return self.client.pop(idx)
+                except Exception:
+                    continue
+        except Exception:
+            return None
+        return None
+
+    def _safe_str(self, v: Any) -> str:
+        try:
+            return str(v) if v is not None else ""
+        except Exception:
+            return ""
+
+    def _name_from_serialized(self, serialized: Any) -> str:
+        """
+        Best-effort name derivation from LangChain callback 'serialized' payload.
+        This must never throw.
+        """
+        try:
+            if not isinstance(serialized, dict):
+                return ""
+            n = serialized.get("name")
+            if isinstance(n, str) and n.strip():
+                return n.strip()
+            # Common LangChain shape: id is a list like [..., "ChatPromptTemplate"]
+            sid = serialized.get("id")
+            if isinstance(sid, (list, tuple)) and sid:
+                last = sid[-1]
+                last_s = self._safe_str(last).strip()
+                if last_s:
+                    return last_s
+            # Sometimes 'lc' / 'type' metadata exists
+            t = serialized.get("type") or serialized.get("_type")
+            t_s = self._safe_str(t).strip()
+            return t_s
+        except Exception:
+            return ""
+
+    def _name_from_kwargs(self, kwargs: Dict[str, Any]) -> str:
+        try:
+            if not isinstance(kwargs, dict):
+                return ""
+            for k in ("name", "run_name", "chain_name", "tool_name"):
+                v = kwargs.get(k)
+                s = self._safe_str(v).strip()
+                if s:
+                    return s
+            return ""
+        except Exception:
+            return ""
+
+    def _name_from_inputs(self, inputs: Any) -> str:
+        """
+        Last-resort heuristic to avoid '<unknown>' when LangChain doesn't provide names.
+        Keep this lightweight and stable.
+        """
+        try:
+            if not isinstance(inputs, dict):
+                return ""
+            keys = set(inputs.keys())
+            if keys == {"chunks", "claims"}:
+                return "claim_decision_chain"
+            if keys == {"qa_blob"}:
+                return "final_summary_chain"
+            if keys.issuperset({"question", "chunks"}):
+                return "rag_chain"
+            if "transcript" in keys:
+                return "transcript_chain"
+            return ""
+        except Exception:
+            return ""
+
+    def _derive_name(self, serialized: Any, inputs: Any, kwargs: Dict[str, Any], default: str) -> str:
+        name = self._name_from_serialized(serialized) or self._name_from_kwargs(kwargs) or self._name_from_inputs(inputs)
+        name = (name or "").strip()
+        return name if name else default
+
     def infi(self):
         temp_result_list = self.result_list  
         temp_token_usage = self.token_usage
@@ -199,13 +288,16 @@ class CallbackHandler(BaseCallbackHandler):
         except Exception:
             preview_chars = 500
 
-        llm_name = serialized.get("name", serialized.get("id", ["<unknown>"])[-1])
+        llm_name = self._derive_name(serialized, None, kwargs, "llm")
         attrs: Dict[str, Any] = {
             "langchain.kind": "llm",
             "langchain.llm.name": str(llm_name),
         }
         if include_payloads and prompts:
-            attrs["langchain.llm.prompt_preview"] = (prompts[0] or "")[:preview_chars]
+            try:
+                attrs["langchain.llm.prompt_preview"] = (prompts[0] or "")[:preview_chars]
+            except Exception:
+                pass
 
         # Note: append_to_list captures start time internally; we still pass run_id correctly.
         self.append_to_list("chain_name", llm_name, time.time(), run_id, parent_run_id, attrs=attrs)
@@ -215,9 +307,13 @@ class CallbackHandler(BaseCallbackHandler):
         run_id: UUID,
         parent_run_id: Optional[UUID] = None, **kwargs: Any) -> None:
         # Calculate and track the request latency.
-        last_dict = self.client[-1]  # Retrieve the last dictionary in the list
-        latency = time.time() - last_dict['time']
-        self.client.remove(last_dict)
+        last_dict = self._pop_start_event(run_id)
+        if not isinstance(last_dict, dict) or "time" not in last_dict:
+            return
+        try:
+            latency = time.time() - float(last_dict.get("time") or time.time())
+        except Exception:
+            latency = 0.0
         include_payloads = (os.getenv("OTEL_TRACE_INCLUDE_PAYLOADS", "0") or "").strip().lower() in (
             "1",
             "true",
@@ -235,16 +331,25 @@ class CallbackHandler(BaseCallbackHandler):
         if include_payloads:
             # Best-effort: capture the first generation text as a preview.
             try:
-                if response.generations and response.generations[0] and getattr(response.generations[0][0], "text", None) is not None:
-                    end_attrs["langchain.llm.response_preview"] = (response.generations[0][0].text or "")[:preview_chars]
+                if (
+                    response
+                    and getattr(response, "generations", None)
+                    and response.generations
+                    and response.generations[0]
+                    and getattr(response.generations[0][0], "text", None) is not None
+                ):
+                    end_attrs["langchain.llm.response_preview"] = (response.generations[0][0].text or "")[
+                        :preview_chars
+                    ]
             except Exception:
                 pass
 
         # Token usage (when provided by the LLM wrapper).
         try:
-            if (response.llm_output is not None) and isinstance(response.llm_output, Dict):
-                token_usage = response.llm_output.get("token_usage")
-                model_name = response.llm_output.get("model_name")
+            llm_output = getattr(response, "llm_output", None)
+            if (llm_output is not None) and isinstance(llm_output, Dict):
+                token_usage = llm_output.get("token_usage")
+                model_name = llm_output.get("model_name")
                 if isinstance(token_usage, dict):
                     if "prompt_tokens" in token_usage:
                         end_attrs["langchain.llm.tokens.prompt"] = int(token_usage["prompt_tokens"])
@@ -258,9 +363,9 @@ class CallbackHandler(BaseCallbackHandler):
             pass
 
         self.append_to_list(
-            last_dict['chain_name'],
+            last_dict.get('chain_name') or "<unknown>",
             latency,
-            last_dict['time'],
+            last_dict.get('time') or time.time(),
             run_id,
             parent_run_id,
             is_ts=False,
@@ -268,16 +373,20 @@ class CallbackHandler(BaseCallbackHandler):
         )
 
         # Track token usage (for non-chat models).
-        if (response.llm_output is not None) and isinstance(response.llm_output, Dict):
-            token_usage = response.llm_output["token_usage"]
-            if token_usage is not None:
-                payload = {
-                "prompt_tokens": token_usage["prompt_tokens"],
-                "total_tokens": token_usage["total_tokens"],
-                'completion_tokens': token_usage["completion_tokens"],
-                'model_name': response.llm_output["model_name"]
-                }
-                self.token_usage.append(payload)
+        try:
+            llm_output = getattr(response, "llm_output", None)
+            if (llm_output is not None) and isinstance(llm_output, Dict):
+                token_usage = llm_output.get("token_usage")
+                if isinstance(token_usage, dict):
+                    payload = {
+                        "prompt_tokens": token_usage.get("prompt_tokens"),
+                        "total_tokens": token_usage.get("total_tokens"),
+                        "completion_tokens": token_usage.get("completion_tokens"),
+                        "model_name": llm_output.get("model_name"),
+                    }
+                    self.token_usage.append(payload)
+        except Exception:
+            pass
 
     
     def on_chain_start(
@@ -286,7 +395,7 @@ class CallbackHandler(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None, **kwargs: Any
     ) -> None:
         """Do nothing when LLM chain starts."""
-        chain_name = serialized.get("name", serialized.get("id", ["<unknown>"])[-1])
+        chain_name = self._derive_name(serialized, inputs, kwargs, "chain")
         include_payloads = (os.getenv("OTEL_TRACE_INCLUDE_PAYLOADS", "0") or "").strip().lower() in (
             "1",
             "true",
@@ -299,7 +408,7 @@ class CallbackHandler(BaseCallbackHandler):
         except Exception:
             preview_chars = 500
 
-        attrs: Dict[str, Any] = {"langchain.kind": "chain"}
+        attrs: Dict[str, Any] = {"langchain.kind": "chain", "langchain.chain.name": str(chain_name)}
         if include_payloads and isinstance(inputs, dict):
             try:
                 attrs["langchain.chain.inputs_preview"] = (json.dumps(inputs, default=str)[:preview_chars])
@@ -314,9 +423,13 @@ class CallbackHandler(BaseCallbackHandler):
         run_id: UUID,
         parent_run_id: Optional[UUID] = None, **kwargs: Any) -> None:
         """Do nothing when LLM chain ends."""
-        last_dict = self.client[-1]  # Retrieve the last dictionary in the list
-        latency = time.time() - last_dict['time']
-        self.client.remove(last_dict)
+        last_dict = self._pop_start_event(run_id)
+        if not isinstance(last_dict, dict) or "time" not in last_dict:
+            return
+        try:
+            latency = time.time() - float(last_dict.get("time") or time.time())
+        except Exception:
+            latency = 0.0
         include_payloads = (os.getenv("OTEL_TRACE_INCLUDE_PAYLOADS", "0") or "").strip().lower() in (
             "1",
             "true",
@@ -338,9 +451,9 @@ class CallbackHandler(BaseCallbackHandler):
                 end_attrs["langchain.chain.outputs_preview"] = str(outputs)[:preview_chars]
 
         self.append_to_list(
-            last_dict['chain_name'],
+            last_dict.get('chain_name') or "<unknown>",
             latency,
-            last_dict['time'],
+            last_dict.get('time') or time.time(),
             run_id,
             parent_run_id,
             is_ts=False,
@@ -359,7 +472,7 @@ class CallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> None:
         """Do nothing when tool starts."""
-        tool_name = serialized.get("name", serialized.get("id", ["<unknown>"])[-1])
+        tool_name = self._derive_name(serialized, None, kwargs, "tool")
         include_payloads = (os.getenv("OTEL_TRACE_INCLUDE_PAYLOADS", "0") or "").strip().lower() in (
             "1",
             "true",
@@ -399,9 +512,13 @@ class CallbackHandler(BaseCallbackHandler):
     ) -> None:
         """Do nothing when tool ends."""
         
-        last_dict = self.client[-1]  # Retrieve the last dictionary in the list
-        latency = time.time() - last_dict['time']
-        self.client.remove(last_dict)
+        last_dict = self._pop_start_event(run_id)
+        if not isinstance(last_dict, dict) or "time" not in last_dict:
+            return
+        try:
+            latency = time.time() - float(last_dict.get("time") or time.time())
+        except Exception:
+            latency = 0.0
         prior_attrs = last_dict.get("attrs") or {}
         end_attrs = dict(prior_attrs)
         try:
@@ -425,9 +542,9 @@ class CallbackHandler(BaseCallbackHandler):
             except Exception:
                 pass
         self.append_to_list(
-            last_dict['chain_name'],
+            last_dict.get('chain_name') or "<unknown>",
             latency,
-            last_dict['time'],
+            last_dict.get('time') or time.time(),
             run_id,
             parent_run_id,
             is_ts=False,
@@ -483,8 +600,20 @@ class CallbackHandler(BaseCallbackHandler):
     ) -> Any:
         """Run when Retriever ends running."""
         
-        last_dict = self.client[-1]  # Retrieve the last dictionary in the list
-        latency = time.time() - last_dict['time']
-        self.client.remove(last_dict)
-        self.append_to_list(last_dict['chain_name'], latency,last_dict['time'],run_id, parent_run_id , is_ts=False)
+        last_dict = self._pop_start_event(run_id)
+        if not isinstance(last_dict, dict) or "time" not in last_dict:
+            return
+        try:
+            latency = time.time() - float(last_dict.get("time") or time.time())
+        except Exception:
+            latency = 0.0
+        self.append_to_list(
+            last_dict.get("chain_name") or "VectorStoreRetriever",
+            latency,
+            last_dict.get("time") or time.time(),
+            run_id,
+            parent_run_id,
+            is_ts=False,
+            attrs=last_dict.get("attrs") or {},
+        )
         

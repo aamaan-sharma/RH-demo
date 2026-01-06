@@ -38,7 +38,7 @@ services:
       PORT: ${PORT:-8001}
 
       # ---- OpenTelemetry tracing (OTLP/HTTP -> Jaeger) ----
-      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-claims-service}
+      OTEL_SERVICE_NAME: "${OTEL_SERVICE_NAME:-Customer Representative Copilot}"
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4318}
       OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
        # 🔍 tracing payloads (opt-in)

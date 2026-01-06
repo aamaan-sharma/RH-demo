@@ -14,7 +14,7 @@ Provide configuration via environment variables instead.
 The backend reports traces via **OpenTelemetry** and exports them to Jaeger over **OTLP/HTTP** (no UDP/agent).
 
 Set:
-- `OTEL_SERVICE_NAME` (default: `claims-service`)
+- `OTEL_SERVICE_NAME` (default: `Customer Representative Copilot`)
 - `OTEL_EXPORTER_OTLP_ENDPOINT` (default: `http://jaeger:4318`)
 - `OTEL_EXPORTER_OTLP_PROTOCOL` (default: `http/protobuf`)
 

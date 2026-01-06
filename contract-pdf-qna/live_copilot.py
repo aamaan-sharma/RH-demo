@@ -13,6 +13,8 @@ from langchain_community.vectorstores import Milvus
 from langchain.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
+from monitoring_module import tracer
+
 
 # -------------------------------------------------------------------
 # INFER Integration: Import the wrapper from app.py
@@ -303,10 +305,14 @@ Transcript (most recent last):
 )
 
 
-def _extract_questions_llm(transcript: str) -> List[str]:
+def _extract_questions_llm(transcript: str, handler=None) -> List[str]:
     llm = ChatOpenAI(temperature=0.0, model=MODEL_SUGGEST)
     chain = _question_extract_prompt | llm | StrOutputParser()
-    raw = (chain.invoke({"transcript": transcript}) or "").strip()
+    with tracer.start_as_current_span("llm_call"):
+        if handler:
+            raw = (chain.invoke({"transcript": transcript}, config={"callbacks": [handler]}) or "").strip()
+        else:
+            raw = (chain.invoke({"transcript": transcript}) or "").strip()
     print(f"[LIVE_COPILOT_DEBUG] _extract_questions_llm raw LLM response: {raw[:500]}")
     
     # Clean markdown code blocks if present
@@ -413,12 +419,13 @@ def _lookup_user_by_phone(phone_candidates: List[str]) -> Optional[Dict[str, Any
         return None
     if not phone_candidates:
         return None
-    users = _get_mongo_client()["AHS"]["Users"]
-    for p in phone_candidates:
-        doc = users.find_one({"mobile": p})
-        if doc:
-            return doc
-    return users.find_one({"mobile": {"$in": phone_candidates}})
+    with tracer.start_as_current_span("context_retrieval"):
+        users = _get_mongo_client()["AHS"]["Users"]
+        for p in phone_candidates:
+            doc = users.find_one({"mobile": p})
+            if doc:
+                return doc
+        return users.find_one({"mobile": {"$in": phone_candidates}})
 
 
 def _normalize_customer_doc(doc: Dict[str, Any], phone: str) -> Dict[str, Any]:
@@ -579,10 +586,14 @@ Return ONLY valid JSON in exactly this schema:\n
 )
 
 
-def _call_intent_llm(transcript: str) -> Dict[str, Any]:
+def _call_intent_llm(transcript: str, handler=None) -> Dict[str, Any]:
     llm = ChatOpenAI(temperature=0.0, model=MODEL_INTENT)
     chain = _intent_prompt | llm | StrOutputParser()
-    raw = (chain.invoke({"transcript": transcript}) or "").strip()
+    with tracer.start_as_current_span("llm_call"):
+        if handler:
+            raw = (chain.invoke({"transcript": transcript}, config={"callbacks": [handler]}) or "").strip()
+        else:
+            raw = (chain.invoke({"transcript": transcript}) or "").strip()
     try:
         return json.loads(raw)
     except Exception:
@@ -629,7 +640,7 @@ Return ONLY JSON:\n
 )
 
 
-def _simple_rag_answer(question: str, customer: Dict[str, Any]) -> Dict[str, Any]:
+def _simple_rag_answer(question: str, customer: Dict[str, Any], handler=None) -> Dict[str, Any]:
     """
     Simple RAG implementation - fallback when INFER wrapper is not available.
     Uses direct Milvus similarity search + LLM summarization.
@@ -641,7 +652,8 @@ def _simple_rag_answer(question: str, customer: Dict[str, Any]) -> Dict[str, Any
         return {"error": "Missing plan context for Milvus collection"}
     vector_db = _get_vector_db(collection)
     # Similarity search then summarize with LLM
-    docs = vector_db.similarity_search(question, k=6)
+    with tracer.start_as_current_span("context_retrieval"):
+        docs = vector_db.similarity_search(question, k=6)
     chunks = []
     for d in docs:
         content = getattr(d, "page_content", "") or ""
@@ -651,7 +663,17 @@ def _simple_rag_answer(question: str, customer: Dict[str, Any]) -> Dict[str, Any
         return {"answer": "I couldn't find relevant policy language for that question.", "citedChunks": []}
     llm = ChatOpenAI(temperature=0.0, model=MODEL_SUGGEST)
     chain = _rag_prompt | llm | StrOutputParser()
-    raw = (chain.invoke({"question": question, "chunks": "\n\n".join(chunks)}) or "").strip()
+    with tracer.start_as_current_span("llm_call"):
+        if handler:
+            raw = (
+                chain.invoke(
+                    {"question": question, "chunks": "\n\n".join(chunks)},
+                    config={"callbacks": [handler]},
+                )
+                or ""
+            ).strip()
+        else:
+            raw = (chain.invoke({"question": question, "chunks": "\n\n".join(chunks)}) or "").strip()
     try:
         obj = json.loads(raw)
         if isinstance(obj, dict) and obj.get("answer") is not None:
@@ -664,7 +686,7 @@ def _simple_rag_answer(question: str, customer: Dict[str, Any]) -> Dict[str, Any
     return {"answer": raw[:1200], "citedChunks": chunks[:1]}
 
 
-def _rag_answer(question: str, customer: Dict[str, Any]) -> Dict[str, Any]:
+def _rag_answer(question: str, customer: Dict[str, Any], handler=None) -> Dict[str, Any]:
     """
     Main RAG function - uses INFER wrapper if available, otherwise falls back to simple RAG.
     
@@ -696,6 +718,7 @@ def _rag_answer(question: str, customer: Dict[str, Any]) -> Dict[str, Any]:
                 selected_plan=plan,
                 selected_state=state,
                 transcript_context="",  # Could add more context here if needed
+                handler=handler,
             )
             
             # Transform result to match expected format
@@ -722,12 +745,12 @@ def _rag_answer(question: str, customer: Dict[str, Any]) -> Dict[str, Any]:
     
     # Fallback: use simple RAG implementation
     print(f"[LIVE_COPILOT] Using simple RAG fallback for question: '{question[:80]}...'")
-    result = _simple_rag_answer(question, customer)
+    result = _simple_rag_answer(question, customer, handler=handler)
     result["source"] = "simple_rag"
     return result
 
 
-def _diagnostics_steps(transcript: str) -> Dict[str, Any]:
+def _diagnostics_steps(transcript: str, handler=None) -> Dict[str, Any]:
     # Generic troubleshooting guidance without coverage promises
     prompt = ChatPromptTemplate.from_template(
         """
@@ -739,7 +762,11 @@ Transcript:\n
     )
     llm = ChatOpenAI(temperature=0.2, model=MODEL_SUGGEST)
     chain = prompt | llm | StrOutputParser()
-    raw = (chain.invoke({"transcript": transcript}) or "").strip()
+    with tracer.start_as_current_span("llm_call"):
+        if handler:
+            raw = (chain.invoke({"transcript": transcript}, config={"callbacks": [handler]}) or "").strip()
+        else:
+            raw = (chain.invoke({"transcript": transcript}) or "").strip()
     try:
         return json.loads(raw)
     except Exception:
@@ -808,21 +835,25 @@ def _call_suggest_llm(
     tool_result: Dict[str, Any],
     transcript: str,
     evidence: str,
+    handler=None,
 ) -> List[Dict[str, Any]]:
     # Debug: log the tool_result being passed to LLM
     print(f"[LIVE_COPILOT_DEBUG] _call_suggest_llm tool_result: {json.dumps(tool_result, default=str)[:500]}")
     
     llm = ChatOpenAI(temperature=0.2, model=MODEL_SUGGEST)
     chain = _suggest_prompt | llm | StrOutputParser()
-    raw = (chain.invoke(
-        {
+    with tracer.start_as_current_span("llm_call"):
+        inputs = {
             "intent": intent,
             "customer_verified": bool(customer_verified),
             "customer_context": json.dumps(customer_context or {}, default=str),
             "tool_result": json.dumps(tool_result or {}, default=str),
             "transcript": transcript,
         }
-    ) or "").strip()
+        if handler:
+            raw = (chain.invoke(inputs, config={"callbacks": [handler]}) or "").strip()
+        else:
+            raw = (chain.invoke(inputs) or "").strip()
     
     print(f"[LIVE_COPILOT_DEBUG] _call_suggest_llm raw response: {raw[:500]}")
     
@@ -862,7 +893,7 @@ def _call_suggest_llm(
 # -----------------------
 
 
-def handle_transcript_event(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def handle_transcript_event(payload: Dict[str, Any], handler=None) -> Optional[Dict[str, Any]]:
     session_id = _s(payload.get("sessionId"))
     speaker = _s(payload.get("speaker")).lower()
     text = _s(payload.get("text"))
@@ -883,35 +914,36 @@ def handle_transcript_event(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
     important_change = False
 
     # Fast-path: phone detection
-    phone_candidates = _extract_phone_candidates(text)
-    intent_obj: Dict[str, Any]
-    if speaker == "csr" and _looks_like_verification_request(text):
-        intent_obj = {
-            "intent": "CUSTOMER_IDENTIFICATION",
-            "confidence": 0.9,
-            "entities": {"phone": "", "question": ""},
-            "requiresVerification": True,
-            "evidenceQuote": text[:200],
-        }
-    elif phone_candidates:
-        intent_obj = {
-            "intent": "CUSTOMER_IDENTIFICATION",
-            "confidence": 0.95,
-            "entities": {
-                "phone": phone_candidates[0],
-                "appliance": "",
-                "symptom": "",
-                "money_amount": "",
-                "timeline": "",
-                "claimId": "",
-                "question": "",
-            },
-            "requiresVerification": True,
-            "evidenceQuote": text[:200],
-        }
-    else:
-        # Only call intent LLM when we are likely to emit (cooldown or meaningful change)
-        intent_obj = _call_intent_llm(transcript)
+    with tracer.start_as_current_span("intent_detection"):
+        phone_candidates = _extract_phone_candidates(text)
+        intent_obj: Dict[str, Any]
+        if speaker == "csr" and _looks_like_verification_request(text):
+            intent_obj = {
+                "intent": "CUSTOMER_IDENTIFICATION",
+                "confidence": 0.9,
+                "entities": {"phone": "", "question": ""},
+                "requiresVerification": True,
+                "evidenceQuote": text[:200],
+            }
+        elif phone_candidates:
+            intent_obj = {
+                "intent": "CUSTOMER_IDENTIFICATION",
+                "confidence": 0.95,
+                "entities": {
+                    "phone": phone_candidates[0],
+                    "appliance": "",
+                    "symptom": "",
+                    "money_amount": "",
+                    "timeline": "",
+                    "claimId": "",
+                    "question": "",
+                },
+                "requiresVerification": True,
+                "evidenceQuote": text[:200],
+            }
+        else:
+            # Only call intent LLM when we are likely to emit (cooldown or meaningful change)
+            intent_obj = _call_intent_llm(transcript, handler=handler)
 
     intent = _s(intent_obj.get("intent")) or "OTHER"
     confidence = float(intent_obj.get("confidence") or 0.0)
@@ -950,7 +982,8 @@ def handle_transcript_event(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
     print(f"[LIVE_COPILOT_DEBUG] speaker={speaker}, _should_extract_questions={_should_extract_questions(text)}, should_extract={should_extract}")
     
     if should_extract:
-        extracted = _extract_questions_llm(transcript)
+        with tracer.start_as_current_span("intent_detection"):
+            extracted = _extract_questions_llm(transcript, handler=handler)
         print(f"[LIVE_COPILOT_DEBUG] _extract_questions_llm returned: {extracted}")
         if not extracted:
             q1 = _s(entities.get("question"))
@@ -994,18 +1027,20 @@ def handle_transcript_event(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
     if can_rag and st.pending_questions:
         print(f"[LIVE_COPILOT_DEBUG] 🚀 Starting RAG processing for {len(st.pending_questions)} questions")
         answered_now = []
-        for item in list(st.pending_questions)[:2]:
-            k = _s(item.get("k"))
-            q = _s(item.get("q"))
-            if not k or not q:
-                continue
-            if k in st.answered:
-                continue
-            print(f"[LIVE_COPILOT_DEBUG] 🔍 Calling _rag_answer for question: '{q[:80]}...'")
-            res = _rag_answer(q, customer_ctx)
-            print(f"[LIVE_COPILOT_DEBUG] 📝 RAG result: answer_len={len(res.get('answer', ''))}, source={res.get('source', 'unknown')}")
-            st.answered[k] = {"ts": time(), **(res or {})}
-            answered_now.append({"question": q, "result": res})
+        # Avoid per-iteration spans: wrap the whole answering loop in one phase span.
+        with tracer.start_as_current_span("rag_answer"):
+            for item in list(st.pending_questions)[:2]:
+                k = _s(item.get("k"))
+                q = _s(item.get("q"))
+                if not k or not q:
+                    continue
+                if k in st.answered:
+                    continue
+                print(f"[LIVE_COPILOT_DEBUG] 🔍 Calling _rag_answer for question: '{q[:80]}...'")
+                res = _rag_answer(q, customer_ctx, handler=handler)
+                print(f"[LIVE_COPILOT_DEBUG] 📝 RAG result: answer_len={len(res.get('answer', ''))}, source={res.get('source', 'unknown')}")
+                st.answered[k] = {"ts": time(), **(res or {})}
+                answered_now.append({"question": q, "result": res})
         # Remove answered from pending
         if answered_now:
             st.pending_questions = [x for x in st.pending_questions if _s(x.get("k")) not in st.answered]
@@ -1014,20 +1049,23 @@ def handle_transcript_event(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
 
     # Add generic tools for problem statements (doesn't depend on plan context)
     if intent == "PROBLEM":
-        tool_result["diagnostics"] = _diagnostics_steps(transcript)
+        with tracer.start_as_current_span("response_postprocessing"):
+            tool_result["diagnostics"] = _diagnostics_steps(transcript, handler=handler)
 
     # Cooldown: allow bypass on meaningful changes (phone verified, new questions queued, new answers generated)
     if not _cooldown_ok(st) and not important_change:
         return None
 
-    cards = _call_suggest_llm(
-        intent=intent,
-        customer_verified=verified,
-        customer_context=customer_ctx,
-        tool_result=tool_result,
-        transcript=transcript,
-        evidence=evidence,
-    )
+    with tracer.start_as_current_span("response_postprocessing"):
+        cards = _call_suggest_llm(
+            intent=intent,
+            customer_verified=verified,
+            customer_context=customer_ctx,
+            tool_result=tool_result,
+            transcript=transcript,
+            evidence=evidence,
+            handler=handler,
+        )
 
     # Basic dedupe: don't spam identical cards repeatedly unless something important changed.
     fp = _fingerprint({"intent": intent, "customer": customer_ctx, "cards": cards})

@@ -47,7 +47,7 @@ def init_tracer():
     if _TRACER:
         return _TRACER
 
-    service_name = os.getenv("OTEL_SERVICE_NAME", "claims-service")
+    service_name = os.getenv("OTEL_SERVICE_NAME", "Customer Representative Copilot")
     endpoint = os.getenv(
         "OTEL_EXPORTER_OTLP_ENDPOINT",
         "http://jaeger:4318",
