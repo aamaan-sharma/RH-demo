@@ -39,6 +39,7 @@ import json
 import re
 from typing import List, Dict
 from pathlib import Path
+from opentelemetry import trace
 
 # Live Copilot for real-time AI suggestions during calls
 try:
@@ -106,6 +107,34 @@ from monitoring_module import q_monitor, tracer, llm_trace_to_otel
 
 from token_module import token_calculator, CallbackHandler
 import threading
+
+
+def _flag_enabled(var_name: str, default: str = "0") -> bool:
+    raw = (os.getenv(var_name, default) or "").strip().lower()
+    return raw in ("1", "true", "yes", "y", "on")
+
+
+def _trace_preview(val, limit: int = 500) -> str:
+    try:
+        s = val if isinstance(val, str) else str(val)
+        s = s.replace("\n", " ")
+        return s[: max(0, int(limit))]
+    except Exception:
+        return ""
+
+
+def _span_set_attr(span, key: str, value) -> None:
+    try:
+        if span is None:
+            return
+        if value is None:
+            return
+        if isinstance(value, (bool, int, float, str)):
+            span.set_attribute(key, value)
+        else:
+            span.set_attribute(key, _trace_preview(value, 1000))
+    except Exception:
+        pass
 
 # Using new LangChain memory API - InMemoryChatMessageHistory
 # Note: This is only used to store previous Q&A for standalone prompt, not used in chains
@@ -529,6 +558,13 @@ def fetch_user_by_mobile(mobile_number: str) -> str:
 
 
 def input_prompt(entered_query, qa, llm, handler: CallbackHandler):
+    include_payloads = _flag_enabled("OTEL_TRACE_INCLUDE_PAYLOADS", "0")
+    preview_chars = int(os.getenv("OTEL_TRACE_PAYLOAD_PREVIEW_CHARS", "500") or "500")
+
+    # Attach agent metadata to the current span (typically the "llm_call" phase span).
+    current_span = trace.get_current_span()
+    _span_set_attr(current_span, "langchain.agent.type", "CHAT_CONVERSATIONAL_REACT_DESCRIPTION")
+
     # Retriever chain as Tool for agent
     knowledge_base_tool = Tool(
         name="Knowledge Base",
@@ -550,6 +586,9 @@ def input_prompt(entered_query, qa, llm, handler: CallbackHandler):
     )
 
     tools = [knowledge_base_tool, user_lookup_tool]
+    _span_set_attr(current_span, "langchain.agent.tools", "Knowledge Base,User Lookup")
+    if include_payloads:
+        _span_set_attr(current_span, "langchain.agent.input_preview", _trace_preview(entered_query, preview_chars))
 
     current_time = time()
 
@@ -588,6 +627,8 @@ def input_prompt(entered_query, qa, llm, handler: CallbackHandler):
     )
 
     new_prompt = agent.agent.create_prompt(system_message=sys_msg, tools=tools)
+    if include_payloads:
+        _span_set_attr(current_span, "langchain.agent.system_prompt_preview", _trace_preview(sys_msg, preview_chars))
 
     agent.agent.llm_chain.prompt = new_prompt
 
@@ -2386,6 +2427,8 @@ def start():
 
             if gpt_model == "Search":
                 with tracer.start_as_current_span("Search") as parent1:
+                    _span_set_attr(parent1, "app.mode", "Search")
+                    _span_set_attr(parent1, "langchain.agent.used", False)
                     with tracer.start_as_current_span("llm-retriever-initialization"):
                         llm2 = ChatOpenAI(temperature=0.0, model="ft:gpt-3.5-turbo-0613:mindstix::8YYD56aA")
                         llm = ChatOpenAI(temperature=0.0, model="gpt-4o")
@@ -2406,6 +2449,8 @@ def start():
                                     memory1.add_message(AIMessage(content=answer1))
 
                     with tracer.start_as_current_span("standalone-prompt-chain") as p:
+                        include_payloads = _flag_enabled("OTEL_TRACE_INCLUDE_PAYLOADS", "0")
+                        preview_chars = int(os.getenv("OTEL_TRACE_PAYLOAD_PREVIEW_CHARS", "500") or "500")
                         standalone_prompt = ChatPromptTemplate.from_template(
                         """
                         Act as an expert in question rephrasing and create a standalone question in its own language by analyzing previous question, answer to the previous question and current question.
@@ -2447,6 +2492,9 @@ def start():
                             {"input": entered_query},
                             config={"callbacks": [handler]},
                         )
+                        if include_payloads:
+                            _span_set_attr(p, "langchain.prompt.input_preview", _trace_preview(entered_query, preview_chars))
+                            _span_set_attr(p, "langchain.prompt.output_preview", _trace_preview(standalone_result, preview_chars))
                         print(standalone_result)
 
                         print(f"time taken for standalone = {time() - start}")
@@ -2492,6 +2540,10 @@ def start():
                                 verbose=True,
                                 chain_type_kwargs=chain_type_kwargs,
                             )
+                            include_payloads = _flag_enabled("OTEL_TRACE_INCLUDE_PAYLOADS", "0")
+                            preview_chars = int(os.getenv("OTEL_TRACE_PAYLOAD_PREVIEW_CHARS", "500") or "500")
+                            if include_payloads:
+                                _span_set_attr(q, "langchain.retrievalqa.query_preview", _trace_preview(standalone_result, preview_chars))
 
                         # NOTE: RetrievalQA does retrieval + LLM internally; we keep behavior unchanged
                         # and attribute the combined latency under this phase.
@@ -2523,6 +2575,9 @@ def start():
 
             elif gpt_model == "Infer":
                 with tracer.start_as_current_span("Infer") as parent1:
+                    _span_set_attr(parent1, "app.mode", "Infer")
+                    _span_set_attr(parent1, "langchain.agent.used", True)
+                    _span_set_attr(parent1, "langchain.agent.type", "CHAT_CONVERSATIONAL_REACT_DESCRIPTION")
                     with tracer.start_as_current_span("llm-retriever-initialization"):
                         llm3 = ChatOpenAI(temperature=0.0, model="ft:gpt-3.5-turbo-0613:mindstix::8YYD56aA")
                         llm = ChatOpenAI(temperature=0.0, model='gpt-4o')
@@ -2544,6 +2599,8 @@ def start():
                                     memory1.add_message(AIMessage(content=answer1))
 
                     with tracer.start_as_current_span("standalone-prompt-chain") as p:
+                        include_payloads = _flag_enabled("OTEL_TRACE_INCLUDE_PAYLOADS", "0")
+                        preview_chars = int(os.getenv("OTEL_TRACE_PAYLOAD_PREVIEW_CHARS", "500") or "500")
                         standalone_prompt = ChatPromptTemplate.from_template(
                             """
                             Identify if the current question is related to previous question and answer and Create a standalone question in its own language by analyzing previous question, answer to the previous question and current question.
@@ -2583,6 +2640,9 @@ def start():
                             {"input": entered_query},
                             config={"callbacks": [handler]},
                         )
+                        if include_payloads:
+                            _span_set_attr(p, "langchain.prompt.input_preview", _trace_preview(entered_query, preview_chars))
+                            _span_set_attr(p, "langchain.prompt.output_preview", _trace_preview(standalone_result, preview_chars))
                         print(standalone_result)
 
                     # Run prompt-monitoring in background (child span created inside monitoring thread)

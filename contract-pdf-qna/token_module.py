@@ -187,8 +187,28 @@ class CallbackHandler(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> None:
+        include_payloads = (os.getenv("OTEL_TRACE_INCLUDE_PAYLOADS", "0") or "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "y",
+            "on",
+        )
+        try:
+            preview_chars = int(os.getenv("OTEL_TRACE_PAYLOAD_PREVIEW_CHARS", "500") or "500")
+        except Exception:
+            preview_chars = 500
+
         llm_name = serialized.get("name", serialized.get("id", ["<unknown>"])[-1])
-        self.append_to_list("chain_name", llm_name,run_id, parent_run_id )
+        attrs: Dict[str, Any] = {
+            "langchain.kind": "llm",
+            "langchain.llm.name": str(llm_name),
+        }
+        if include_payloads and prompts:
+            attrs["langchain.llm.prompt_preview"] = (prompts[0] or "")[:preview_chars]
+
+        # Note: append_to_list captures start time internally; we still pass run_id correctly.
+        self.append_to_list("chain_name", llm_name, time.time(), run_id, parent_run_id, attrs=attrs)
 
 
     def on_llm_end(self, response: LLMResult,*,
@@ -198,11 +218,37 @@ class CallbackHandler(BaseCallbackHandler):
         last_dict = self.client[-1]  # Retrieve the last dictionary in the list
         latency = time.time() - last_dict['time']
         self.client.remove(last_dict)
-        self.append_to_list(last_dict['chain_name'], latency,last_dict['time'],run_id, parent_run_id , is_ts=False)
-        prompt_response = []
-        for generations in response.generations:
-            for generation in generations:
-                prompt_response.append(generation.text)
+        include_payloads = (os.getenv("OTEL_TRACE_INCLUDE_PAYLOADS", "0") or "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "y",
+            "on",
+        )
+        try:
+            preview_chars = int(os.getenv("OTEL_TRACE_PAYLOAD_PREVIEW_CHARS", "500") or "500")
+        except Exception:
+            preview_chars = 500
+
+        prior_attrs = last_dict.get("attrs") or {}
+        end_attrs = dict(prior_attrs)
+        if include_payloads:
+            # Best-effort: capture the first generation text as a preview.
+            try:
+                if response.generations and response.generations[0] and getattr(response.generations[0][0], "text", None) is not None:
+                    end_attrs["langchain.llm.response_preview"] = (response.generations[0][0].text or "")[:preview_chars]
+            except Exception:
+                pass
+
+        self.append_to_list(
+            last_dict['chain_name'],
+            latency,
+            last_dict['time'],
+            run_id,
+            parent_run_id,
+            is_ts=False,
+            attrs=end_attrs,
+        )
 
         # Track token usage (for non-chat models).
         if (response.llm_output is not None) and isinstance(response.llm_output, Dict):
@@ -224,7 +270,26 @@ class CallbackHandler(BaseCallbackHandler):
     ) -> None:
         """Do nothing when LLM chain starts."""
         chain_name = serialized.get("name", serialized.get("id", ["<unknown>"])[-1])
-        self.append_to_list("chain_name", chain_name,run_id, parent_run_id )
+        include_payloads = (os.getenv("OTEL_TRACE_INCLUDE_PAYLOADS", "0") or "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "y",
+            "on",
+        )
+        try:
+            preview_chars = int(os.getenv("OTEL_TRACE_PAYLOAD_PREVIEW_CHARS", "500") or "500")
+        except Exception:
+            preview_chars = 500
+
+        attrs: Dict[str, Any] = {"langchain.kind": "chain"}
+        if include_payloads and isinstance(inputs, dict):
+            try:
+                attrs["langchain.chain.inputs_preview"] = (json.dumps(inputs, default=str)[:preview_chars])
+            except Exception:
+                attrs["langchain.chain.inputs_preview"] = (str(inputs)[:preview_chars])
+
+        self.append_to_list("chain_name", chain_name, time.time(), run_id, parent_run_id, attrs=attrs)
 
         pass
 
@@ -235,7 +300,35 @@ class CallbackHandler(BaseCallbackHandler):
         last_dict = self.client[-1]  # Retrieve the last dictionary in the list
         latency = time.time() - last_dict['time']
         self.client.remove(last_dict)
-        self.append_to_list(last_dict['chain_name'], latency,last_dict['time'],run_id, parent_run_id , is_ts=False)
+        include_payloads = (os.getenv("OTEL_TRACE_INCLUDE_PAYLOADS", "0") or "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "y",
+            "on",
+        )
+        try:
+            preview_chars = int(os.getenv("OTEL_TRACE_PAYLOAD_PREVIEW_CHARS", "500") or "500")
+        except Exception:
+            preview_chars = 500
+
+        prior_attrs = last_dict.get("attrs") or {}
+        end_attrs = dict(prior_attrs)
+        if include_payloads and isinstance(outputs, dict):
+            try:
+                end_attrs["langchain.chain.outputs_preview"] = json.dumps(outputs, default=str)[:preview_chars]
+            except Exception:
+                end_attrs["langchain.chain.outputs_preview"] = str(outputs)[:preview_chars]
+
+        self.append_to_list(
+            last_dict['chain_name'],
+            latency,
+            last_dict['time'],
+            run_id,
+            parent_run_id,
+            is_ts=False,
+            attrs=end_attrs,
+        )
 
         pass
 
@@ -250,15 +343,28 @@ class CallbackHandler(BaseCallbackHandler):
     ) -> None:
         """Do nothing when tool starts."""
         tool_name = serialized.get("name", serialized.get("id", ["<unknown>"])[-1])
+        include_payloads = (os.getenv("OTEL_TRACE_INCLUDE_PAYLOADS", "0") or "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "y",
+            "on",
+        )
+        try:
+            preview_chars = int(os.getenv("OTEL_TRACE_PAYLOAD_PREVIEW_CHARS", "500") or "500")
+        except Exception:
+            preview_chars = 500
+
         self.append_to_list(
             "chain_name",
             tool_name,
+            time.time(),
             run_id,
             parent_run_id,
             attrs={
                 "langchain.kind": "tool",
                 "langchain.tool.name": str(tool_name),
-                "langchain.tool.input_preview": (input_str or "")[:500],
+                "langchain.tool.input_preview": (input_str or "")[:preview_chars] if include_payloads else "",
             },
         )
 
@@ -285,6 +391,22 @@ class CallbackHandler(BaseCallbackHandler):
             end_attrs["langchain.tool.output_len"] = len(output or "")
         except Exception:
             pass
+        include_payloads = (os.getenv("OTEL_TRACE_INCLUDE_PAYLOADS", "0") or "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "y",
+            "on",
+        )
+        try:
+            preview_chars = int(os.getenv("OTEL_TRACE_PAYLOAD_PREVIEW_CHARS", "500") or "500")
+        except Exception:
+            preview_chars = 500
+        if include_payloads:
+            try:
+                end_attrs["langchain.tool.output_preview"] = (output or "")[:preview_chars]
+            except Exception:
+                pass
         self.append_to_list(
             last_dict['chain_name'],
             latency,
@@ -309,8 +431,30 @@ class CallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         """Run when Retriever starts running."""
-        
-        self.append_to_list("chain_name", "VectorStoreRetriever",run_id, parent_run_id )
+        include_payloads = (os.getenv("OTEL_TRACE_INCLUDE_PAYLOADS", "0") or "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "y",
+            "on",
+        )
+        try:
+            preview_chars = int(os.getenv("OTEL_TRACE_PAYLOAD_PREVIEW_CHARS", "500") or "500")
+        except Exception:
+            preview_chars = 500
+
+        attrs: Dict[str, Any] = {"langchain.kind": "retriever"}
+        if include_payloads:
+            attrs["langchain.retriever.query_preview"] = (query or "")[:preview_chars]
+
+        self.append_to_list(
+            "chain_name",
+            "VectorStoreRetriever",
+            time.time(),
+            run_id,
+            parent_run_id,
+            attrs=attrs,
+        )
    
     def on_retriever_end(
         self,
