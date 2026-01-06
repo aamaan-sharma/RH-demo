@@ -6,7 +6,7 @@ import "./header.scss";
 const Header = ({ userIconImage }) => {
   return (
     <div className="header_section">
-      <div className="title">AHS Customer Representative Copilot</div>
+      <div className="title">Customer Representative Copilot</div>
       <div className="icons">
         <img src={bellIcon} alt="notification icon"></img>
         <div className="user_icon">

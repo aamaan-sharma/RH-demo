@@ -14,6 +14,7 @@ const HistoryButton = ({
   conversationId,
   conversationMode,
   status,
+  processing = false,
   setGptModel,
   isActive = false,
   setIsActive,
@@ -86,9 +87,19 @@ const HistoryButton = ({
       {conversationMode === "Calls" ? (
         <div
           className={`status_dot ${
-            (status || "active").toLowerCase() === "inactive" ? "closed" : "open"
+            (status || "active").toLowerCase() === "inactive"
+              ? "closed"
+              : processing
+                ? "processing"
+                : "open"
           }`}
-          title={(status || "active").toLowerCase() === "inactive" ? "Closed" : "Open"}
+          title={
+            (status || "active").toLowerCase() === "inactive"
+              ? "Closed"
+              : processing
+                ? "Analyzing"
+                : "Open"
+          }
         />
       ) : null}
       {isEditActive ? (

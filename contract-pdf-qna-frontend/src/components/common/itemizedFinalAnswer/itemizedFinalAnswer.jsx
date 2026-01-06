@@ -5,10 +5,13 @@ import "./itemizedFinalAnswer.scss";
 const ITEM_START_RE = /^Item\s*#?\s*:?\s*(\d+)\b/i;
 const ITEM_START_WITH_TITLE_RE = /^Item\s*#?\s*(\d+)\s*:\s*(.+)$/i;
 
-const stripMdStrong = (s) => {
-  const t = String(s || "").trim();
-  // Handles lines like "**Item: 1**" or "**Overall Next Steps:**"
-  return t.replace(/^\*\*/, "").replace(/\*\*$/, "").trim();
+const stripMdDecorators = (s) => {
+  let t = String(s || "").trim();
+  // Strip markdown heading / quote prefixes like "### " or "> "
+  t = t.replace(/^#{1,6}\s*/g, "").replace(/^>\s*/g, "").trim();
+  // Strip bold wrappers like "**Item: 1**" or "**Overall Next Steps:**"
+  t = t.replace(/^\*\*/, "").replace(/\*\*$/, "").trim();
+  return t;
 };
 
 const normalizeDecision = (s) => {
@@ -30,11 +33,34 @@ const parseItemSections = (text) => {
   const raw = String(text || "").replace(/\r\n/g, "\n");
   const lines = raw.split("\n");
   const starts = [];
+  let isSingleItemFallback = false;
+
+  // Heuristic: Some LLM outputs contain a single item without numbering, e.g.
+  // "Item: Unknown" + bullet key/value lines. In that case, treat the whole text as one item.
+  const looksLikeSingleItem = () => {
+    const keyRe =
+      /^(Item|Type|Related|Situation|Decision|Amounts|Why|Next steps?|What.?s covered|What.?s not covered|Limitations\s*\/\s*not covered)\s*:/i;
+    let hits = 0;
+    for (const ln of lines) {
+      const probe = stripMdDecorators(ln).replace(/^[-•*]\s+/, "").trim();
+      if (keyRe.test(probe)) hits += 1;
+      if (hits >= 2) return true;
+    }
+    return false;
+  };
+
   for (let i = 0; i < lines.length; i++) {
-    const probe = stripMdStrong(lines[i]);
+    const probe = stripMdDecorators(lines[i]);
     if (ITEM_START_RE.test(probe)) starts.push(i);
   }
-  if (starts.length === 0) return { items: [], overall: "" };
+  if (starts.length === 0) {
+    if (looksLikeSingleItem()) {
+      starts.push(0);
+      isSingleItemFallback = true;
+    } else {
+      return { items: [], overall: "" };
+    }
+  }
 
   const sections = [];
   for (let i = 0; i < starts.length; i++) {
@@ -45,7 +71,7 @@ const parseItemSections = (text) => {
 
   const items = sections.map((secLines) => {
     const item = {
-      itemNo: "",
+      itemNo: isSingleItemFallback ? "1" : "",
       title: "",
       name: "",
       type: "",
@@ -68,7 +94,7 @@ const parseItemSections = (text) => {
       const currentIndent = indentMatch ? indentMatch[1].length : 0;
       const isNestedBullet = currentIndent > 2 && /^\s+[-•*]\s+/.test(ln);
       
-      let t = stripMdStrong(ln);
+      let t = stripMdDecorators(ln);
       if (!t) continue;
 
       const isBullet = /^[-•*]\s+/.test(t);
@@ -165,7 +191,21 @@ const parseItemSections = (text) => {
           if (!/^none$/i.test(v)) item.notCovered.push(v);
           mode = "";
         } else {
-          // "What’s not covered / limitations:" -> capture following bullets
+          mode = "notCovered";
+        }
+        continue;
+      }
+      // Handle "Limitations / not covered:" pattern
+      const limitationsInline = base.match(
+        /^Limitations\s*\/\s*not covered\s*:\s*(.*)$/i
+      );
+      if (limitationsInline) {
+        const v = String(limitationsInline[1] || "").trim();
+        if (v) {
+          // Allow "None specified" to be displayed
+          if (!/^none$/i.test(v)) item.notCovered.push(v);
+          mode = "";
+        } else {
           mode = "notCovered";
         }
         continue;
@@ -209,6 +249,10 @@ const parseItemSections = (text) => {
         continue;
       }
       if (/^What.?s not covered\b/i.test(base)) {
+        mode = "notCovered";
+        continue;
+      }
+      if (/^Limitations\s*\/\s*not covered\b/i.test(base)) {
         mode = "notCovered";
         continue;
       }
@@ -288,7 +332,7 @@ const parseItemSections = (text) => {
   let overallNextSteps = "";
   try {
     const tailIdx = lines.findIndex((l) =>
-      /^Overall Next Steps?\b/i.test(stripMdStrong(l).replace(/:$/, ""))
+      /^Overall Next Steps?\b/i.test(stripMdDecorators(l).replace(/:$/, ""))
     );
     if (tailIdx >= 0) {
       overallNextSteps = lines.slice(tailIdx).join("\n").trim();
@@ -453,23 +497,31 @@ export const ItemizedFinalAnswer = ({ text = "", title = "Final Answer", asCard 
                 ) : null}
                 {it.related && it.related.trim() ? (
                   <div className="row">
-                    <div className="k">Related</div>
+                    <div className="k">
+                      <strong>Related</strong>
+                    </div>
                     <div className="v">{it.related}</div>
                   </div>
                 ) : null}
-                {it.situation && it.situation.trim() ? (
-                  <div className="row">
-                    <div className="k">Situation</div>
-                    <div className="v">{it.situation}</div>
-                  </div>
-                ) : null}
               </div>
+
+              {/* Situation section with enhanced styling */}
+              {it.situation && it.situation.trim() ? (
+                <div className="ifa_situation">
+                  <div className="h">
+                    <strong>Situation</strong>
+                  </div>
+                  <div className="content">{it.situation}</div>
+                </div>
+              ) : null}
 
               {(it.covered?.length || it.notCovered?.length) ? (
                 <div className="ifa_split">
                   {it.covered?.length ? (
                     <div className="col">
-                      <div className="h">What’s covered</div>
+                      <div className="h">
+                        <strong>What's covered</strong>
+                      </div>
                       <ul>
                         {it.covered.map((x, i) => (
                           <li key={i}>{x}</li>
@@ -478,8 +530,10 @@ export const ItemizedFinalAnswer = ({ text = "", title = "Final Answer", asCard 
                     </div>
                   ) : null}
                   {it.notCovered?.length ? (
-                    <div className="col">
-                      <div className="h">Limitations / not covered</div>
+                    <div className="col ifa_limitations">
+                      <div className="h">
+                        <strong>Limitations / not covered</strong>
+                      </div>
                       <ul>
                         {it.notCovered.map((x, i) => (
                           <li key={i}>{x}</li>
@@ -492,7 +546,9 @@ export const ItemizedFinalAnswer = ({ text = "", title = "Final Answer", asCard 
 
               {it.why?.length ? (
                 <div className="ifa_why">
-                  <div className="h">Why</div>
+                  <div className="h">
+                    <strong>Why</strong>
+                  </div>
                   <ul>
                     {it.why.map((x, i) => (
                       <li key={i}>{x}</li>
@@ -503,7 +559,9 @@ export const ItemizedFinalAnswer = ({ text = "", title = "Final Answer", asCard 
 
               {it.nextSteps?.length ? (
                 <div className="ifa_next">
-                  <div className="h">Next steps</div>
+                  <div className="h">
+                    <strong>Next steps</strong>
+                  </div>
                   <ul>
                     {it.nextSteps.map((x, i) => (
                       <li key={i}>{x}</li>
@@ -515,12 +573,6 @@ export const ItemizedFinalAnswer = ({ text = "", title = "Final Answer", asCard 
           );
         })}
       </div>
-
-      {parsed.overallNextSteps ? (
-        <div className="ifa_overall_next">
-          <StructuredCaseText text={parsed.overallNextSteps} />
-        </div>
-      ) : null}
     </div>
   );
 };

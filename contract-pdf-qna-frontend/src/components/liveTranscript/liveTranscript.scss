@@ -23,8 +23,8 @@
 // =====================================
 
 .lt_left_ccp {
-  width: 340px;
-  flex: 0 0 340px;
+  width: 440px;
+  flex: 0 0 440px;
   padding: 16px;
   display: flex;
   flex-direction: column;
@@ -36,9 +36,12 @@
 }
 
 .lt_left_ccp_header {
+  /* Match the right panel header baseline/padding */
   margin-bottom: 0;
-  padding-bottom: 12px;
-  border-bottom: 1px solid #e2e8f0;
+  padding: 12px 14px;
+  background: linear-gradient(90deg, #fafbff 0%, #f5f3ff 100%);
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
 }
 
 .lt_ccp_meta {
@@ -553,7 +556,7 @@
 }
 
 .lt_ai_count {
-  padding: 2px 8px;
+  padding: 6px 12px;
   font-size: 11px;
   font-weight: 700;
   color: #ffffff;
@@ -563,6 +566,9 @@
 }
 
 .lt_ai_badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 4px 10px;
   font-size: 10px;
   font-weight: 700;
@@ -573,6 +579,15 @@
   border: 1px solid #86efac;
   border-radius: 999px;
   animation: pulse_glow 2s ease-in-out infinite;
+
+  &::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #16a34a;
+    animation: dot_pulse 1.5s ease-in-out infinite;
+  }
 }
 
 @keyframes pulse_glow {
@@ -657,7 +672,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 3px 8px;
+  padding: 6px 12px;
   font-size: 9px;
   font-weight: 700;
   text-transform: uppercase;
@@ -714,7 +729,7 @@
 .lt_suggestion_time {
   font-size: 10px;
   font-weight: 600;
-  color: #94a3b8;
+  color: #64748b;
 }
 
 .lt_suggestion_script {
@@ -753,7 +768,7 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  color: #94a3b8;
+  color: #64748b;
 }
 
 .lt_evidence_text {

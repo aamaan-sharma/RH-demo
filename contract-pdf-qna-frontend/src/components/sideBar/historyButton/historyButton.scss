@@ -41,6 +41,9 @@
     &.open {
       background: #4cc38a;
     }
+    &.processing {
+      background: #f2c94c;
+    }
     &.closed {
       background: #bdbdbd;
     }

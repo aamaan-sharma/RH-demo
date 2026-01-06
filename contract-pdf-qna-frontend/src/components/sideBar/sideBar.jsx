@@ -34,8 +34,35 @@ const SideBar = (props) => {
   const [sidebarError, setSidebarError] = useState(null);
   const location = useLocation();
   const cleanedAuthUrlRef = useRef(false);
+  const lastModeRef = useRef(null);
+  const claimsPollTimerRef = useRef(null);
 
   let navigate = useNavigate();
+
+  const refreshIdTokenAsync = useCallback(async () => {
+    const refreshToken = getRefreshToken();
+    if (!refreshToken) throw new Error("Missing refresh token");
+
+    const params = new URLSearchParams();
+    params.set("client_id", GOOGLE_CLIENT_ID);
+    params.set("client_secret", GOOGLE_CLIENT_SECRET);
+    params.set("grant_type", "refresh_token");
+    params.set("refresh_token", refreshToken);
+
+    const uninterceptedAxiosInstance = axios.create();
+    const resp = await uninterceptedAxiosInstance.post(tokenUrl, params, {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    });
+    const idToken = resp?.data?.id_token;
+    if (!idToken) throw new Error("No id_token in refresh response");
+
+    props.setBearerToken(idToken);
+    const parts = idToken.split(".");
+    const decodedPayload = atob(parts[1]);
+    const payloadObject = JSON.parse(decodedPayload);
+    setAuthTokens({ idToken, payloadObject });
+    return idToken;
+  }, [props]);
 
   const setChatUrl = () => {
     props.setError("");
@@ -45,7 +72,8 @@ const SideBar = (props) => {
     navigate(path);
   };
 
-  const getSidebarHistory = (token, mode = "Search") => {
+  const getSidebarHistory = (token, mode = "Search", opts = {}) => {
+    const showLoading = opts?.showLoading !== false;
     const apiUrl = `${API_BASE_URL}/sidebar`;
     const config = {
       headers: {
@@ -56,7 +84,7 @@ const SideBar = (props) => {
         mode: mode || "Search",
       },
     };
-    setIsLoadingHistory(true);
+    if (showLoading) setIsLoadingHistory(true);
     axios
       .get(apiUrl, config)
       .then((response) => {
@@ -69,6 +97,17 @@ const SideBar = (props) => {
         // Handle errors
         console.error("Error:", error);
         const status = error?.response?.status;
+        if ((status === 401 || status === 403) && getRefreshToken()) {
+          // Token expired/invalid: refresh once and retry.
+          refreshIdTokenAsync()
+            .then((newToken) => {
+              getSidebarHistory(newToken, mode, { showLoading: false });
+            })
+            .catch(() => {
+              logout();
+            });
+          return;
+        }
         if (status === 500) {
           setSidebarError({
             retryFn: () => getSidebarHistory(token, mode),
@@ -193,8 +232,46 @@ const SideBar = (props) => {
   useEffect(() => {
     if (!isLoggedIn) return;
     const mode = props.selectedModel || "Search";
-    getSidebarHistory(getIdToken(), mode);
+    const modeChanged = lastModeRef.current !== mode;
+    lastModeRef.current = mode;
+    // Only show the sidebar loader on first load or when switching modes.
+    // For background refreshes (e.g. transcript processing updates), keep the list visible.
+    const showLoading = modeChanged || !(Array.isArray(sidebarHistory) && sidebarHistory.length > 0);
+    getSidebarHistory(getIdToken(), mode, { showLoading });
   }, [isLoggedIn, props.selectedModel, props.sidebarRefreshTick]);
+
+  // Claims-only: while any case is processing (yellow dot), keep refreshing sidebar in the background
+  // so it flips to green as soon as analysis completes, even if the user is viewing other chats.
+  useEffect(() => {
+    const mode = props.selectedModel || "Search";
+    const isClaims = mode === "Calls";
+    const hasProcessing =
+      isClaims &&
+      Array.isArray(sidebarHistory) &&
+      sidebarHistory.some((c) => Boolean(c?.processing));
+
+    // Clear any existing poller
+    if (claimsPollTimerRef.current) {
+      clearInterval(claimsPollTimerRef.current);
+      claimsPollTimerRef.current = null;
+    }
+
+    if (!isLoggedIn || !isClaims || !hasProcessing) return;
+
+    claimsPollTimerRef.current = setInterval(() => {
+      const token = getIdToken();
+      if (!token) return;
+      // Silent refresh; keep list visible.
+      getSidebarHistory(token, "Calls", { showLoading: false });
+    }, 1500);
+
+    return () => {
+      if (claimsPollTimerRef.current) {
+        clearInterval(claimsPollTimerRef.current);
+        claimsPollTimerRef.current = null;
+      }
+    };
+  }, [isLoggedIn, props.selectedModel, sidebarHistory]);
 
   // Optimistically move a case into "Closed" immediately after approval.
   useEffect(() => {
@@ -216,16 +293,21 @@ const SideBar = (props) => {
 
   // Refresh Id token
   const refreshIdToken = () => {
-    const params = {
-      client_id: GOOGLE_CLIENT_ID,
-      client_secret: GOOGLE_CLIENT_SECRET,
-      grant_type: "refresh_token",
-      refreshToken: getRefreshToken(),
-    };
+    const refreshToken = getRefreshToken();
+    if (!refreshToken) return;
+
+    const params = new URLSearchParams();
+    params.set("client_id", GOOGLE_CLIENT_ID);
+    params.set("client_secret", GOOGLE_CLIENT_SECRET);
+    params.set("grant_type", "refresh_token");
+    // Google expects the param name "refresh_token" (not "refreshToken")
+    params.set("refresh_token", refreshToken);
 
     const uninterceptedAxiosInstance = axios.create();
     uninterceptedAxiosInstance
-      .post("https://oauth2.googleapis.com/token", params)
+      .post("https://oauth2.googleapis.com/token", params, {
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      })
       .then((response) => {
         const idToken = response.data.id_token;
         props.setBearerToken(idToken);
@@ -259,6 +341,28 @@ const SideBar = (props) => {
     }
   }, [logout]);
 
+  // Track activity so we can refresh tokens for active users and logout idle users.
+  useEffect(() => {
+    const markActive = () => {
+      try {
+        sessionStorage.setItem(
+          "lastActiveTime",
+          String(Math.floor(Date.now() / 1000))
+        );
+      } catch {
+        // ignore
+      }
+    };
+
+    // Mark active immediately on mount, then on common interactions.
+    markActive();
+    const events = ["mousemove", "mousedown", "keydown", "touchstart", "scroll"];
+    events.forEach((evt) => window.addEventListener(evt, markActive, { passive: true }));
+    return () => {
+      events.forEach((evt) => window.removeEventListener(evt, markActive));
+    };
+  }, []);
+
   useEffect(() => {
     if (isLoggedIn && !sessionStorage.getItem("timeoutId")) {
       // Set the initial timeout
@@ -267,10 +371,7 @@ const SideBar = (props) => {
     }
   }, [handleTimeout, isLoggedIn, logout]);
 
-  useEffect(() => {
-    // Clearing auth tokens is handled by logout().
-    logout();
-  }, []);
+  // IMPORTANT: Do NOT auto-logout on mount; this breaks login persistence across refresh/reopen.
 
   return (
     <div className="sidebar_wrapper">
@@ -338,6 +439,7 @@ const SideBar = (props) => {
                   conversationId={chat.conversationId}
                   conversationMode={chat.conversationMode}
                   status={chat.status}
+                  processing={Boolean(chat.processing)}
                   setGptModel={props.setGptModel}
                   isActive={isActive}
                   setIsActive={setIsActive}
@@ -381,22 +483,26 @@ const SideBar = (props) => {
               );
             })()
           ) : (
-            sidebarHistory.map((chat, index) => (
-              <HistoryButton
-                key={index}
-                setError={props.setError}
-                name={chat.conversationName}
-                conversationId={chat.conversationId}
-                conversationMode={chat.conversationMode}
-                setGptModel={props.setGptModel}
-                isActive={isActive}
-                setIsActive={setIsActive}
-                bearerToken={props.bearerToken}
-                getSidebarHistory={(token) =>
-                  getSidebarHistory(token, props.selectedModel || "Search")
-                }
-              />
-            ))
+            sidebarHistory && sidebarHistory.length > 0 ? (
+              sidebarHistory.map((chat, index) => (
+                <HistoryButton
+                  key={index}
+                  setError={props.setError}
+                  name={chat.conversationName}
+                  conversationId={chat.conversationId}
+                  conversationMode={chat.conversationMode}
+                  setGptModel={props.setGptModel}
+                  isActive={isActive}
+                  setIsActive={setIsActive}
+                  bearerToken={props.bearerToken}
+                  getSidebarHistory={(token) =>
+                    getSidebarHistory(token, props.selectedModel || "Search")
+                  }
+                />
+              ))
+            ) : (
+              <div className="empty_state">No recent chats.</div>
+            )
           )}
         </div>
         <div className="gredient"></div>

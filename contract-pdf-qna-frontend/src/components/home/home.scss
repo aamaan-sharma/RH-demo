@@ -21,6 +21,17 @@
         // Claims landing page: reuse the Search/Infer "prompt" layout for consistency.
         .calls_prompt_wrapper {
           margin-top: 48px;
+
+          // Match Search/Infer spacing for the mini header line above the cards.
+          .queries_part {
+            margin-top: 10px;
+            margin-bottom: 24px;
+
+            .query {
+              line-height: 20px;
+              max-width: 720px;
+            }
+          }
         }
 
         // Make the Claims landing cards read like informational cards (not clickable prompts).
@@ -615,7 +626,9 @@
 .blocking_overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.4);
+  background: rgba(20, 20, 30, 0.28);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
   justify-content: center;

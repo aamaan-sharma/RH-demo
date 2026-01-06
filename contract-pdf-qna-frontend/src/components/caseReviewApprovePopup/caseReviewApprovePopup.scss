@@ -264,6 +264,15 @@
         cursor: not-allowed;
       }
     }
+
+    .danger {
+      background: #d32f2f;
+      color: #ffffff;
+      &:disabled {
+        background: #efb1b1;
+        cursor: not-allowed;
+      }
+    }
   }
 }
 
