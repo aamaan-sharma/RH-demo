@@ -2365,12 +2365,34 @@ def start():
                         if conversation_id is not None and conversation_id != "":
                             docs = read_qna(email_id=user_email, conversation_id=conversation_id)
                             if docs and "chats" in docs and len(docs["chats"]) > 0:
-                                question1 = docs["chats"][-1]['entered_query']
-                                answer1 = docs["chats"][-1]['response']
-                                # Store in new memory API format (only if values exist)
-                                if question1 and answer1:
-                                    memory1.add_message(HumanMessage(content=question1))
-                                    memory1.add_message(AIMessage(content=answer1))
+                                # Use the last *real* user Q&A pairs as memory. Skip system/synthetic chats.
+                                skip_chat_ids = {"final_answer", "claim_decision", "case_closed"}
+                                skip_entered = {"Final Answer for transcript"}
+                                pairs = []
+                                for c in reversed(docs.get("chats") or []):
+                                    if not isinstance(c, dict):
+                                        continue
+                                    cid = str(c.get("chat_id") or "").strip()
+                                    q = str(c.get("entered_query") or "").strip()
+                                    a = str(c.get("response") or "").strip()
+                                    if not q or not a:
+                                        continue
+                                    if cid in skip_chat_ids or q in skip_entered:
+                                        continue
+                                    if a == "Loading Response":
+                                        continue
+                                    pairs.append((q, a))
+                                    if len(pairs) >= 3:
+                                        break
+
+                                # Keep standalone prompt variables as "previous question/answer"
+                                if pairs:
+                                    question1, answer1 = pairs[0]
+
+                                # Store in new memory API format (oldest -> newest)
+                                for q, a in reversed(pairs):
+                                    memory1.add_message(HumanMessage(content=q))
+                                    memory1.add_message(AIMessage(content=a))
 
                     with tracer.start_span('standalone-prompt-chain', child_of=parent1) as p:
                         standalone_prompt = ChatPromptTemplate.from_template(
@@ -2497,12 +2519,32 @@ def start():
                         if conversation_id is not None and conversation_id != "":
                             docs = read_qna(email_id=user_email, conversation_id=conversation_id)
                             if docs and "chats" in docs and len(docs["chats"]) > 0:
-                                question1 = docs["chats"][-1]['entered_query']
-                                answer1 = docs["chats"][-1]['response']
-                                # Store in new memory API format (only if values exist)
-                                if question1 and answer1:
-                                    memory1.add_message(HumanMessage(content=question1))
-                                    memory1.add_message(AIMessage(content=answer1))
+                                # Use the last *real* user Q&A pairs as memory. Skip system/synthetic chats.
+                                skip_chat_ids = {"final_answer", "claim_decision", "case_closed"}
+                                skip_entered = {"Final Answer for transcript"}
+                                pairs = []
+                                for c in reversed(docs.get("chats") or []):
+                                    if not isinstance(c, dict):
+                                        continue
+                                    cid = str(c.get("chat_id") or "").strip()
+                                    q = str(c.get("entered_query") or "").strip()
+                                    a = str(c.get("response") or "").strip()
+                                    if not q or not a:
+                                        continue
+                                    if cid in skip_chat_ids or q in skip_entered:
+                                        continue
+                                    if a == "Loading Response":
+                                        continue
+                                    pairs.append((q, a))
+                                    if len(pairs) >= 3:
+                                        break
+
+                                if pairs:
+                                    question1, answer1 = pairs[0]
+
+                                for q, a in reversed(pairs):
+                                    memory1.add_message(HumanMessage(content=q))
+                                    memory1.add_message(AIMessage(content=a))
 
                     with tracer.start_span('standalone-prompt-chain', child_of=parent1) as p:
                         standalone_prompt = ChatPromptTemplate.from_template(
@@ -2637,13 +2679,20 @@ def start():
                         new_data=chat, conversation_id=conversation_id, email_id=user_email
                     )
                     # Keep conversation_mode updated for filtering in the sidebar.
+                    # IMPORTANT: For transcript conversations, we must NOT change conversation_mode away from "Calls",
+                    # otherwise the case disappears from the Calls list when asking follow-up questions.
                     try:
                         qna_collection_user = f"chats_{user_email}"
                         qna_collection = db[qna_collection_user]
-                        qna_collection.update_one(
+                        existing = qna_collection.find_one(
                             {"_id": ObjectId(conversation_id)},
-                            {"$set": {"conversation_mode": gpt_model}},
-                        )
+                            {"_id": 0, "doc_type": 1, "conversation_mode": 1},
+                        ) or {}
+                        if existing.get("doc_type") != "transcript_conversation":
+                            qna_collection.update_one(
+                                {"_id": ObjectId(conversation_id)},
+                                {"$set": {"conversation_mode": gpt_model}},
+                            )
                     except Exception:
                         pass
 
@@ -2786,6 +2835,12 @@ def chat_history():
             feedback_dict[chat_id] = doc["reaction"]
 
         chats = docs["chats"]
+        # Do not return synthetic/system chats in the UI.
+        chats = [
+            c
+            for c in (chats or [])
+            if str((c or {}).get("chat_id") or "") not in ("claim_decision", "case_closed")
+        ]
         for chat in chats:
             chat_id = chat.get("chat_id")
             if chat_id in feedback_dict:
@@ -2796,12 +2851,29 @@ def chat_history():
             if "underlying_model" in chat and "underlyingModel" not in chat:
                 chat["underlyingModel"] = chat.get("underlying_model")
 
+        # IMPORTANT:
+        # Transcript (Claims/Calls) conversations must always be treated as "Calls" mode for UI routing.
+        # Older versions of the app could accidentally overwrite conversation_mode to "Search"/"Infer"
+        # when asking follow-up questions. We correct for that here so refresh behaves correctly.
+        is_transcript_conv = (docs.get("doc_type") == "transcript_conversation") or bool(docs.get("transcript_id"))
+        effective_mode = "Calls" if is_transcript_conv else (
+            docs.get("conversation_mode") or (chats[0].get("gpt_model") if chats else None)
+        )
+
         output_json = {
             "conversationName": docs.get("conversation_name"),
             "contractType": docs.get("contract_type"),
             "selectedPlan": docs.get("selected_plan"),
             "selectedState": docs.get("selected_state"),
             "status": docs.get("status", "active"),
+            # Final disposition for this case (set on Approve/Reject & Proceed flows)
+            "caseDisposition": docs.get("case_disposition"),
+            "closedAt": (
+                (docs.get("closed_at").isoformat() + "Z")
+                if docs.get("closed_at")
+                else None
+            ),
+            "reviewComments": docs.get("review_comments"),
             # Transcript conversations can be mid-processing; expose this so the UI can show a loader.
             "processing": bool(docs.get("processing", False)),
             "chats": chats,
@@ -2815,9 +2887,9 @@ def chat_history():
                 if docs.get("updated_at")
                 else None
             ),
-            # For transcript conversations we store a conversation-level mode (e.g. "Calls")
-            # while still keeping the underlying model per chat for backend execution.
-            "gptModel": docs.get("conversation_mode") or (chats[0].get("gpt_model") if chats else None),
+            # For transcript conversations we force Calls mode so refresh doesn't jump to Search history.
+            # Underlying Search/Infer model is still stored per-chat / in `underlying_model`.
+            "gptModel": effective_mode,
             "finalSummary": docs.get("final_summary"),
             "claimDecision": docs.get("claim_decision"),
             "authorizedFinalAnswer": docs.get("authorized_final_answer"),
@@ -2842,6 +2914,7 @@ def authorize_conversation_answer():
     Body:
       - authorizedFinalAnswer (str, required)
       - status (optional): 'inactive' | 'active' (defaults to 'inactive')
+      - reviewComments (optional): string
     """
     try:
         with tracer.start_span("api/conversation/authorize"):
@@ -2868,12 +2941,15 @@ def authorize_conversation_answer():
             if status not in ("active", "inactive"):
                 return jsonify({"error": "status must be 'active' or 'inactive'"}), 400
 
+            review_comments = (data.get("reviewComments") or "").strip()
+
             user_email = token_data[0]["email"]
             qna_collection_user = f"chats_{user_email}"
             qna_collection = db[qna_collection_user]
 
             now_ts = datetime.utcnow()
             now_iso = now_ts.isoformat() + "Z"
+            closed_at = now_ts if status == "inactive" else None
             updated = qna_collection.find_one_and_update(
                 {"_id": ObjectId(conversation_id)},
                 {
@@ -2881,6 +2957,9 @@ def authorize_conversation_answer():
                         "authorized_final_answer": authorized_final_answer,
                         "authorized_approved_at": now_ts,
                         "status": status,
+                        "case_disposition": "approved",
+                        "closed_at": closed_at,
+                        "review_comments": review_comments if review_comments else None,
                         "updated_at": now_ts,
                     }
                 },
@@ -2899,6 +2978,9 @@ def authorize_conversation_answer():
                                 "response_payload.status": status,
                                 "response_payload.authorizedFinalAnswer": authorized_final_answer,
                                 "response_payload.authorizedApprovedAt": now_iso,
+                                "response_payload.caseDisposition": "approved",
+                                "response_payload.closedAt": (closed_at.isoformat() + "Z") if closed_at else None,
+                                "response_payload.reviewComments": review_comments if review_comments else None,
                             }
                         },
                     )
@@ -2910,6 +2992,9 @@ def authorize_conversation_answer():
                     {
                         "conversationId": conversation_id,
                         "status": status,
+                        "caseDisposition": "approved",
+                        "closedAt": (closed_at.isoformat() + "Z") if closed_at else None,
+                        "reviewComments": review_comments if review_comments else None,
                         "authorizedFinalAnswer": authorized_final_answer,
                         "authorizedApprovedAt": now_iso,
                     }
@@ -2978,6 +3063,397 @@ def update_conversation_status():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/conversation/close", methods=["PATCH"])
+def close_conversation():
+    """Close a conversation and persist its final disposition (Approve/Reject & Proceed).
+
+    Query params:
+      - conversation-id (str)
+
+    Body:
+      - disposition (required): 'approved' | 'rejected'
+      - reviewComments (optional): string
+    """
+    try:
+        with tracer.start_span("api/conversation/close"):
+            authorization_header = request.headers.get("Authorization")
+            if authorization_header is None:
+                return jsonify({"message": "Token is missing"}), 401
+
+            if authorization_header:
+                token_data = token_process(authorization_header)
+                if token_data[1] == 401 or token_data[1] == 403:
+                    return (token_data[0].get_json()), token_data[1]
+
+            conversation_id = request.args.get("conversation-id")
+            if not conversation_id:
+                return jsonify({"error": "conversation-id is required"}), 400
+
+            data = request.get_json() or {}
+            disposition = (data.get("disposition") or "").strip().lower()
+            if disposition not in ("approved", "rejected"):
+                return jsonify({"error": "disposition must be 'approved' or 'rejected'"}), 400
+            review_comments = (data.get("reviewComments") or "").strip()
+
+            user_email = token_data[0]["email"]
+            qna_collection_user = f"chats_{user_email}"
+            qna_collection = db[qna_collection_user]
+
+            now_ts = datetime.utcnow()
+            now_iso = now_ts.isoformat() + "Z"
+            updated = qna_collection.find_one_and_update(
+                {"_id": ObjectId(conversation_id)},
+                {
+                    "$set": {
+                        "status": "inactive",
+                        "case_disposition": disposition,
+                        "closed_at": now_ts,
+                        "review_comments": review_comments if review_comments else None,
+                        "updated_at": now_ts,
+                    }
+                },
+                return_document=ReturnDocument.AFTER,
+            )
+            if not updated:
+                return jsonify({"error": "Conversation not found"}), 404
+
+            # Keep cached payload consistent for transcript conversations (if present).
+            try:
+                if updated.get("response_payload"):
+                    qna_collection.update_one(
+                        {"_id": ObjectId(conversation_id)},
+                        {
+                            "$set": {
+                                "response_payload.status": "inactive",
+                                "response_payload.caseDisposition": disposition,
+                                "response_payload.closedAt": now_iso,
+                                "response_payload.reviewComments": review_comments if review_comments else None,
+                            }
+                        },
+                    )
+            except Exception:
+                pass
+
+            return (
+                jsonify(
+                    {
+                        "conversationId": conversation_id,
+                        "status": "inactive",
+                        "caseDisposition": disposition,
+                        "closedAt": now_iso,
+                        "reviewComments": review_comments if review_comments else None,
+                    }
+                ),
+                200,
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+def _build_claims_case_context_for_llm(docs: dict) -> str:
+    """Build a compact, LLM-friendly context pack for Claims follow-up chat.
+
+    Goal: allow answering many questions about the case without vector DB retrieval, using only
+    transcript processing outputs + prior follow-up chat in this conversation.
+    """
+    if not isinstance(docs, dict):
+        return ""
+
+    chats = docs.get("chats") or []
+    final_summary = (docs.get("final_summary") or "").strip()
+    authorized_final = (docs.get("authorized_final_answer") or "").strip()
+    claim_decision = docs.get("claim_decision")
+    transcript_meta = docs.get("transcript_metadata") or {}
+    transcript_id = docs.get("transcript_id") or ""
+
+    extracted = []
+    followups = []
+
+    for c in chats:
+        if not isinstance(c, dict):
+            continue
+        cid = str(c.get("chat_id") or "")
+        q = str(c.get("entered_query") or "").strip()
+        a = str(c.get("response") or "").strip()
+        if not q and not a:
+            continue
+
+        # Transcript extracted Qs are stored with ids like q1, q2, ...
+        if isinstance(cid, str) and re.match(r"^q\d+$", cid, re.IGNORECASE):
+            extracted.append((cid, q, a))
+            continue
+
+        # Skip final analyzed answer from the follow-up timeline (it will be included separately).
+        if cid == "final_answer" or q == "Final Answer for transcript":
+            continue
+
+        # Follow-up chat (user asks about the case)
+        if q or a:
+            followups.append((q, a))
+
+    # Keep only the most useful slices
+    extracted = extracted[:25]
+    followups = followups[-12:]
+
+    parts = []
+    parts.append("CASE CONTEXT (Claims transcript conversation)")
+    if transcript_id:
+        parts.append(f"- transcriptId: {transcript_id}")
+    if isinstance(transcript_meta, dict) and transcript_meta:
+        fn = transcript_meta.get("fileName") or transcript_meta.get("name") or ""
+        if fn:
+            parts.append(f"- transcriptFileName: {fn}")
+        ud = transcript_meta.get("uploadDate")
+        if ud:
+            parts.append(f"- uploadDate: {ud}")
+    parts.append(f"- status: {docs.get('status')}")
+    if docs.get("case_disposition"):
+        parts.append(f"- disposition: {docs.get('case_disposition')}")
+    parts.append("")
+
+    if final_summary:
+        parts.append("FINAL ANALYZED ANSWER")
+        parts.append(final_summary)
+        parts.append("")
+
+    if authorized_final:
+        parts.append("AUTHORIZED FINAL ANSWER (if reviewer edited)")
+        parts.append(authorized_final)
+        parts.append("")
+
+    if claim_decision is not None:
+        parts.append("CLAIM DECISION (JSON)")
+        try:
+            parts.append(json.dumps(claim_decision, ensure_ascii=False, indent=2))
+        except Exception:
+            parts.append(str(claim_decision))
+        parts.append("")
+
+    if extracted:
+        parts.append("EXTRACTED CUSTOMER QUERIES + AI DRAFT ANSWERS")
+        for cid, q, a in extracted:
+            if q:
+                parts.append(f"- {cid}: {q}")
+            if a:
+                parts.append(f"  answer: {a}")
+        parts.append("")
+
+    if followups:
+        parts.append("RECENT FOLLOW-UP CHAT HISTORY")
+        for q, a in followups:
+            if q:
+                parts.append(f"- User: {q}")
+            if a:
+                parts.append(f"  Assistant: {a}")
+        parts.append("")
+
+    return "\n".join(parts).strip()
+
+
+def _retrieve_policy_chunks_for_claims(docs: dict, query: str, k: int = 6):
+    """Best-effort policy retrieval from Milvus for a transcript conversation.
+
+    Returns: (chunks_for_ui, referred_docs_text)
+      - chunks_for_ui: list[dict] where each dict has {content, metadata}
+      - referred_docs_text: a readable text blob for /referred-clauses legacy page
+    """
+    try:
+        if not isinstance(docs, dict):
+            return [], ""
+        query = (query or "").strip()
+        if not query:
+            return [], ""
+
+        contract_type = docs.get("contract_type")
+        selected_plan = docs.get("selected_plan")
+        selected_state = docs.get("selected_state")
+        if not all([contract_type, selected_plan, selected_state]):
+            return [], ""
+
+        milvus_state = normalize_state_for_milvus(selected_state)
+        contract_type_norm = normalize_contract_type(contract_type)
+        selected_plan_norm = normalize_plan_for_milvus(contract_type_norm, selected_plan)
+
+        collection_mapping = {
+            "RE": {
+                "ShieldEssential": f"{milvus_state}_RE_ShieldEssential",
+                "ShieldPlus": f"{milvus_state}_RE_ShieldPlus",
+                "default": f"{milvus_state}_RE_ShieldComplete",
+            },
+            "DTC": {
+                "ShieldSilver": f"{milvus_state}_DTC_ShieldSilver",
+                "ShieldGold": f"{milvus_state}_DTC_ShieldGold",
+                "default": f"{milvus_state}_DTC_ShieldPlatinum",
+            },
+        }
+
+        selected_collection_name = collection_mapping.get(contract_type_norm, {}).get(
+            selected_plan_norm, collection_mapping.get(contract_type_norm, {}).get("default")
+        )
+        if not selected_collection_name:
+            return [], ""
+
+        vector_db1: Milvus = Milvus(
+            embed,
+            collection_name=selected_collection_name,
+            connection_args={"host": MILVUS_HOST, "port": "19530"},
+        )
+        retriever = vector_db1.as_retriever(search_kwargs={"k": max(1, min(int(k), 12))})
+
+        raw_docs = retriever.get_relevant_documents(query)
+        chunks_for_ui = []
+        text_lines = []
+        for i, d in enumerate(raw_docs or [], start=1):
+            content = (getattr(d, "page_content", "") or "").strip()
+            metadata = getattr(d, "metadata", {}) or {}
+            if not content:
+                continue
+            chunks_for_ui.append({"content": content, "metadata": metadata})
+            # Build a readable blob for legacy referred clauses page
+            src = ""
+            if isinstance(metadata, dict):
+                src = metadata.get("source") or metadata.get("file") or metadata.get("document") or ""
+            header = f"Clause {i}"
+            if src:
+                header += f" ({src})"
+            text_lines.append(header)
+            text_lines.append(content)
+            text_lines.append("")
+
+        referred_docs_text = "\n".join(text_lines).strip()
+        return chunks_for_ui, referred_docs_text
+    except Exception as e:
+        print(f"Warning: policy retrieval failed for claims followup: {e}")
+        return [], ""
+
+
+@app.route("/claims/followup", methods=["POST"])
+def claims_followup_chat():
+    """Claims follow-up chat that answers using BOTH:
+    - stored case context (final analyzed answer, extracted Q&A, prior follow-ups), and
+    - vector DB retrieved policy clauses (Milvus), when contract/plan/state are available.
+
+    Query params:
+      - conversation-id (str)
+
+    Body:
+      - enteredQuery (str, required)
+
+    Returns:
+      { "aiResponse": "...", "conversationId": "...", "chatId": "..." }
+    """
+    try:
+        with tracer.start_span("api/claims/followup"):
+            authorization_header = request.headers.get("Authorization")
+            if authorization_header is None:
+                return jsonify({"message": "Token is missing"}), 401
+
+            if authorization_header:
+                token_data = token_process(authorization_header)
+                if token_data[1] == 401 or token_data[1] == 403:
+                    return (token_data[0].get_json()), token_data[1]
+
+            conversation_id = request.args.get("conversation-id")
+            if not conversation_id:
+                return jsonify({"error": "conversation-id is required"}), 400
+
+            data = request.get_json() or {}
+            entered_query = (data.get("enteredQuery") or "").strip()
+            if not entered_query:
+                return jsonify({"error": "enteredQuery is required"}), 400
+
+            user_email = token_data[0]["email"]
+            qna_collection_user = f"chats_{user_email}"
+            qna_collection = db[qna_collection_user]
+
+            docs = qna_collection.find_one({"_id": ObjectId(conversation_id)}) or {}
+            if not docs:
+                return jsonify({"error": "Conversation not found"}), 404
+
+            # Only enable this endpoint for transcript (Claims/Calls) conversations
+            if docs.get("doc_type") != "transcript_conversation":
+                return jsonify({"error": "claims/followup is only supported for transcript conversations"}), 400
+
+            # Respect closed case lock (frontend also blocks, but enforce server-side too)
+            if (docs.get("status") or "").lower() == "inactive":
+                return jsonify({"error": "Case is closed. Chat is disabled."}), 403
+
+            case_context = _build_claims_case_context_for_llm(docs)
+            if not case_context:
+                return jsonify({"error": "Missing case context for this conversation"}), 400
+
+            # Hybrid: retrieve policy clauses from Milvus using the case's stored contract/plan/state
+            policy_chunks, referred_docs_text = _retrieve_policy_chunks_for_claims(docs, entered_query, k=6)
+            policy_section = ""
+            if policy_chunks:
+                lines = ["RETRIEVED POLICY CLAUSES (Vector DB)"]
+                for i, ch in enumerate(policy_chunks[:12], start=1):
+                    if not isinstance(ch, dict):
+                        continue
+                    content = str(ch.get("content") or "").strip()
+                    if not content:
+                        continue
+                    lines.append(f"- Clause {i}: {content}")
+                policy_section = "\n".join(lines).strip()
+
+            prompt = (
+                "You are an insurance claims copilot.\n"
+                "Answer the user's question using BOTH the CASE CONTEXT and (when provided) the RETRIEVED POLICY CLAUSES.\n"
+                "If the user asks:\n"
+                "- what the claim is about: summarize using FINAL ANALYZED ANSWER.\n"
+                "- what customer queries were: list/explain from EXTRACTED CUSTOMER QUERIES.\n"
+                "- a repeat question: answer consistently, using the context and prior follow-up chat.\n"
+                "For policy/coverage questions, use the RETRIEVED POLICY CLAUSES when relevant.\n"
+                "If the answer is not in CASE CONTEXT or the RETRIEVED POLICY CLAUSES, say you don't have that information.\n"
+                "Do NOT use any external policy lookup beyond the provided clauses.\n"
+                "\n"
+                f"{case_context}\n"
+                "\n"
+                f"{policy_section}\n"
+                "\n"
+                f"USER QUESTION: {entered_query}\n"
+                "ANSWER:"
+            )
+
+            llm = ChatOpenAI(temperature=0.0, model="gpt-4o-mini")
+            ai_text = ""
+            try:
+                ai_text = str(llm.invoke([HumanMessage(content=prompt)]).content or "").strip()
+            except Exception as e:
+                return jsonify({"error": f"LLM error: {e}"}), 500
+
+            chat_id = str(uuid.uuid4())
+            now_ts = datetime.utcnow()
+            underlying = docs.get("underlying_model") or "Search"
+            try:
+                qna_collection.update_one(
+                    {"_id": ObjectId(conversation_id)},
+                    {
+                        "$push": {
+                            "chats": {
+                                "chat_id": chat_id,
+                                "entered_query": entered_query,
+                                "response": ai_text,
+                                "relevant_chunks": policy_chunks or [],
+                                "relevant_docs": referred_docs_text or "",
+                                "gpt_model": "Calls",
+                                "underlying_model": underlying,
+                                "chat_timestamp": now_ts,
+                                "latency": 0.0,
+                                "confidence": 0.0,
+                            }
+                        },
+                        "$set": {"updated_at": now_ts},
+                    },
+                )
+            except Exception:
+                pass
+
+            return jsonify({"aiResponse": ai_text, "conversationId": str(conversation_id), "chatId": chat_id}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/sidebar", methods=["GET"])
 def sidebar_history():
     with tracer.start_span('api/sidebar'):
@@ -3007,6 +3483,7 @@ def sidebar_history():
             {"doc_type": {"$ne": "transcript_status"}},
             {
                 "_id": 1,
+                "doc_type": 1,
                 "conversation_name": 1,
                 "conversation_mode": 1,
                 "chats.gpt_model": 1,
@@ -3019,7 +3496,13 @@ def sidebar_history():
 
         output_json = []
         for doc in result:
-            conv_mode = doc.get("conversation_mode")
+            # IMPORTANT:
+            # Always treat transcript (Claims/Calls) conversations as Calls mode, even if older data
+            # was corrupted by overwriting conversation_mode to "Search"/"Infer".
+            if doc.get("doc_type") == "transcript_conversation":
+                conv_mode = "Calls"
+            else:
+                conv_mode = doc.get("conversation_mode")
             if not conv_mode:
                 try:
                     chats = doc.get("chats") or []
@@ -3828,6 +4311,9 @@ def create_transcript_conversation_stub():
                 "query_time": now_ts,
                 "updated_at": now_ts,
                 "status": transcript_status,
+                "case_disposition": None,
+                "closed_at": None,
+                "review_comments": None,
                 "processing": True,
                 "chats": [],
             }
@@ -4066,6 +4552,77 @@ Policy chunks (verbatim):
             "citedChunks": cleaned[:2],
             "claims": [],
         }
+
+
+def _format_claim_decision_for_chat(claim_decision) -> str:
+    """Human-readable summary of the claim decision JSON, suitable for saving as a chat message."""
+    if not isinstance(claim_decision, dict):
+        return ""
+
+    overall = str(claim_decision.get("decision") or "").strip()
+    short_answer = str(claim_decision.get("shortAnswer") or "").strip()
+    reasons = claim_decision.get("reasons") or []
+    claims = claim_decision.get("claims") or []
+
+    lines = []
+    lines.append("Claim decision (grounded in retrieved policy clauses)")
+    if overall:
+        lines.append(f"- Overall: {overall}")
+    if short_answer:
+        lines.append(f"- Summary: {short_answer}")
+    lines.append("")
+
+    if isinstance(reasons, list) and reasons:
+        lines.append("Reasons")
+        for r in reasons[:10]:
+            rr = str(r or "").strip()
+            if rr:
+                lines.append(f"- {rr}")
+        lines.append("")
+
+    if isinstance(claims, list) and claims:
+        lines.append("Per-claim breakdown")
+        for idx, c in enumerate(claims[:25], start=1):
+            if not isinstance(c, dict):
+                continue
+            cid = str(c.get("claimId") or "").strip()
+            situation = str(c.get("situation") or "").strip()
+            decision = str(c.get("decision") or "").strip()
+            decision_summary = str(c.get("decisionSummary") or "").strip()
+            items = c.get("items") or []
+
+            header = f"- Claim {idx}"
+            if cid:
+                header += f" ({cid})"
+            if decision:
+                header += f": {decision}"
+            lines.append(header)
+
+            if isinstance(items, list) and items:
+                item_names = []
+                for it in items:
+                    if isinstance(it, dict):
+                        nm = str(it.get("name") or "").strip()
+                        det = str(it.get("details") or "").strip()
+                        if nm and det:
+                            item_names.append(f"{nm} ({det})")
+                        elif nm:
+                            item_names.append(nm)
+                        elif det:
+                            item_names.append(det)
+                    else:
+                        s = str(it or "").strip()
+                        if s:
+                            item_names.append(s)
+                if item_names:
+                    lines.append(f"  - Items: {', '.join(item_names[:8])}")
+
+            if situation:
+                lines.append(f"  - Situation: {situation}")
+            if decision_summary:
+                lines.append(f"  - Summary: {decision_summary}")
+
+    return "\n".join(lines).strip()
 
 
 @app.route("/transcripts/process/stream", methods=["POST"])
@@ -4600,6 +5157,7 @@ def process_transcript_stream():
             avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
 
             # Claim decision grounded only in retrieved chunks (stream it before final summary UI finishes)
+            claim_decision = None
             try:
                 all_chunks = []
                 for r in results or []:
@@ -4636,23 +5194,27 @@ def process_transcript_stream():
                     {
                         "$push": {
                             "chats": {
-                                "chat_id": "final_answer",
-                                "entered_query": "Final Answer for transcript",
-                                "response": final_summary_text,
-                                "relevant_chunks": [],
-                                "relevant_docs": "",
-                                "gpt_model": "Calls",
-                                "underlying_model": gpt_model,
-                                "chat_timestamp": datetime.utcnow(),
-                                "latency": 0.0,
-                                "confidence": 0.0,
-                            }
+                                "$each": [
+                                    {
+                                        "chat_id": "final_answer",
+                                        "entered_query": "Final Answer for transcript",
+                                        "response": final_summary_text,
+                                        "relevant_chunks": [],
+                                        "relevant_docs": "",
+                                        "gpt_model": "Calls",
+                                        "underlying_model": gpt_model,
+                                        "chat_timestamp": datetime.utcnow(),
+                                        "latency": 0.0,
+                                        "confidence": 0.0,
+                                    },
+                                ]
+                            },
                         },
                         "$set": {
                             "processing": False,
                             "updated_at": datetime.utcnow(),
                             "final_summary": final_summary_text,
-                            "claim_decision": claim_decision if 'claim_decision' in locals() else None,
+                            "claim_decision": claim_decision,
                             "summary": {
                                 "totalQuestions": len(questions),
                                 "processedQuestions": len([r for r in results if "error" not in r]),

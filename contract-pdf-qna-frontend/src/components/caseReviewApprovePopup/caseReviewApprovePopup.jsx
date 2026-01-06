@@ -51,6 +51,7 @@ const CaseReviewApprovePopup = ({
   isRejecting = false,
   isClosed = false,
   userName = "",
+  caseDisposition = "",
 }) => {
   if (!isOpen) return null;
 
@@ -108,6 +109,12 @@ const CaseReviewApprovePopup = ({
                 <div className="k">Status</div>
                 <div className="v">{isClosed ? "Closed" : "Open"}</div>
               </div>
+              {caseDisposition ? (
+                <div className="meta_item">
+                  <div className="k">Disposition</div>
+                  <div className="v">{String(caseDisposition).toUpperCase()}</div>
+                </div>
+              ) : null}
             </div>
           </div>
 
@@ -146,7 +153,7 @@ const CaseReviewApprovePopup = ({
           <button
             type="button"
             className="danger"
-            onClick={onReject}
+            onClick={() => onReject?.(comments)}
             disabled={!canReject}
             title={isClosed ? "Case is already closed." : ""}
           >
@@ -155,7 +162,7 @@ const CaseReviewApprovePopup = ({
           <button
             type="button"
             className="primary"
-            onClick={onApprove}
+            onClick={() => onApprove?.(comments)}
             disabled={!canApprove}
             title={isClosed ? "Case is already closed." : ""}
           >

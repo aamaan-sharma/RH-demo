@@ -81,7 +81,7 @@ const ChatList = ({ chats, setChats, conversationId, isCallsMode = false, server
 
         {followUps.length > 0 ? (
           <div className="calls_case_chat">
-            <div className="section_title">Case chat</div>
+            <div className="section_title">Chat</div>
             {followUps.map((chat, index) => (
               <div
                 key={index}
@@ -89,7 +89,7 @@ const ChatList = ({ chats, setChats, conversationId, isCallsMode = false, server
                 className="chat_item"
               >
                 {chat?.entered_query ? (
-                  <Question text={chat.entered_query} label="You" meta="Case follow-up" />
+                  <Question text={chat.entered_query} label="You" />
                 ) : null}
                 {chat?.response ? (
                   <Response
@@ -99,7 +99,7 @@ const ChatList = ({ chats, setChats, conversationId, isCallsMode = false, server
                     chats={chats}
                     setChats={setChats}
                     relevantChunks={chat.relevantChunks || chat.relevant_chunks || []}
-                    headerLabel="Assistant (Case Context)"
+                    headerLabel="Assistant"
                     isError={chat.isError}
                     onRetry={chat.isError && onRetryChat ? onRetryChat : null}
                   />

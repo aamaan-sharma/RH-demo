@@ -193,6 +193,35 @@
             }
           }
 
+          .disposition_badge {
+            padding: 8px 12px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 900;
+            border: 1px solid #e6e6e6;
+            background: #ffffff;
+            color: #333333;
+            white-space: nowrap;
+
+            &.approved {
+              border-color: #bfead6;
+              background: #e9fbf2;
+              color: #0f5f3a;
+            }
+
+            &.rejected {
+              border-color: #ffd0d0;
+              background: #fff0f0;
+              color: #8a1f1f;
+            }
+
+            &.neutral {
+              border-color: #ededed;
+              background: #f7f7f7;
+              color: #6b6b6b;
+            }
+          }
+
           .title {
             font-size: 14px;
             font-weight: 700;
