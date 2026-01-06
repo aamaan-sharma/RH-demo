@@ -240,6 +240,23 @@ class CallbackHandler(BaseCallbackHandler):
             except Exception:
                 pass
 
+        # Token usage (when provided by the LLM wrapper).
+        try:
+            if (response.llm_output is not None) and isinstance(response.llm_output, Dict):
+                token_usage = response.llm_output.get("token_usage")
+                model_name = response.llm_output.get("model_name")
+                if isinstance(token_usage, dict):
+                    if "prompt_tokens" in token_usage:
+                        end_attrs["langchain.llm.tokens.prompt"] = int(token_usage["prompt_tokens"])
+                    if "completion_tokens" in token_usage:
+                        end_attrs["langchain.llm.tokens.completion"] = int(token_usage["completion_tokens"])
+                    if "total_tokens" in token_usage:
+                        end_attrs["langchain.llm.tokens.total"] = int(token_usage["total_tokens"])
+                if model_name is not None:
+                    end_attrs["langchain.llm.model_name"] = str(model_name)
+        except Exception:
+            pass
+
         self.append_to_list(
             last_dict['chain_name'],
             latency,

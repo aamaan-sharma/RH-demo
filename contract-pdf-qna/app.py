@@ -136,6 +136,30 @@ def _span_set_attr(span, key: str, value) -> None:
     except Exception:
         pass
 
+
+def _aggregate_token_usage(tok_all) -> Dict[str, int]:
+    """
+    Aggregate token usage entries collected by CallbackHandler into totals.
+    Expected entries resemble:
+      {"prompt_tokens": int, "completion_tokens": int, "total_tokens": int, "model_name": str}
+    """
+    totals = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    if not tok_all:
+        return totals
+    try:
+        for item in tok_all:
+            if not isinstance(item, dict):
+                continue
+            for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                if k in item and item[k] is not None:
+                    try:
+                        totals[k] += int(item[k])
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+    return totals
+
 # Using new LangChain memory API - InMemoryChatMessageHistory
 # Note: This is only used to store previous Q&A for standalone prompt, not used in chains
 memory1 = InMemoryChatMessageHistory()
@@ -2558,6 +2582,11 @@ def start():
 
                     # After ALL LangChain work completes: export exactly once.
                     res_all, tok_all = handler.infi()
+                    # Attach request-level token totals (if available) to the mode span.
+                    totals = _aggregate_token_usage(tok_all)
+                    _span_set_attr(parent1, "langchain.tokens.prompt_total", totals.get("prompt_tokens", 0))
+                    _span_set_attr(parent1, "langchain.tokens.completion_total", totals.get("completion_tokens", 0))
+                    _span_set_attr(parent1, "langchain.tokens.total", totals.get("total_tokens", 0))
                     llm_trace_to_otel(res_all, parent1)
                     threading.Thread(target=token_calculator, args=(tok_all,)).start()
                     
@@ -2654,12 +2683,41 @@ def start():
 
                         with tracer.start_as_current_span("llm_call"):
                             agent_response = input_prompt(standalone_result, qa, llm, handler)
+                            # Optional: capture agent orchestration summary (no extra spans; just tags)
+                            if _flag_enabled("OTEL_TRACE_INCLUDE_AGENT_STEPS", "0"):
+                                try:
+                                    steps = agent_response.get("intermediate_steps") if isinstance(agent_response, dict) else None
+                                    if isinstance(steps, list):
+                                        _span_set_attr(q, "langchain.agent.steps_count", len(steps))
+                                        tool_names = []
+                                        for step in steps:
+                                            # step is typically (AgentAction, observation)
+                                            try:
+                                                action = step[0]
+                                                tool_names.append(getattr(action, "tool", None) or "unknown")
+                                            except Exception:
+                                                pass
+                                        if tool_names:
+                                            _span_set_attr(q, "langchain.agent.tools_used", ",".join([t for t in tool_names if t]))
+                                        if _flag_enabled("OTEL_TRACE_INCLUDE_PAYLOADS", "0"):
+                                            preview_chars = int(os.getenv("OTEL_TRACE_PAYLOAD_PREVIEW_CHARS", "500") or "500")
+                                            _span_set_attr(
+                                                q,
+                                                "langchain.agent.steps_preview",
+                                                _trace_preview(str(steps), preview_chars),
+                                            )
+                                except Exception:
+                                    pass
 
                         with tracer.start_as_current_span("response_postprocessing"):
                             agent_resp = agent_response["output"]
 
                     # After ALL LangChain work completes: export exactly once.
                     res_all, tok_all = handler.infi()
+                    totals = _aggregate_token_usage(tok_all)
+                    _span_set_attr(parent1, "langchain.tokens.prompt_total", totals.get("prompt_tokens", 0))
+                    _span_set_attr(parent1, "langchain.tokens.completion_total", totals.get("completion_tokens", 0))
+                    _span_set_attr(parent1, "langchain.tokens.total", totals.get("total_tokens", 0))
                     llm_trace_to_otel(res_all, parent1)
                     threading.Thread(target=token_calculator, args=(tok_all,)).start()
                     
