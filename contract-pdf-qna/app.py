@@ -6756,7 +6756,7 @@ def on_copilot_disable(data):
 
 if __name__ == "__main__":
     # use_reloader=False to avoid Windows socket errors during reload
-    port = int(os.getenv("PORT", "8001"))
+    port = int(os.getenv("PORT", "5000"))
     debug = str(os.getenv("FLASK_DEBUG", "0")).lower() in ("1", "true", "yes")
 
     # Flask-SocketIO blocks Werkzeug in production by default; allow it if we ever

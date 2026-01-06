@@ -5,7 +5,7 @@ services:
     platform: ${DOCKER_PLATFORM:-linux/amd64}
     build: .
     ports:
-      - "8001:8001"
+      - "5000:5000"
     # Loads env vars from `./.env` (local file; not baked into the image).
     env_file:
       - .env
@@ -23,7 +23,7 @@ services:
       JWKS_URL: ${JWKS_URL}
       # Docker default: don't run in debug mode
       FLASK_DEBUG: ${FLASK_DEBUG:-0}
-      PORT: ${PORT:-8001}
+      PORT: ${PORT:-5000}
 
       # ---- BigQuery creds via env (choose ONE) ----
       # BIGQUERY_SERVICE_ACCOUNT_JSON: ${BIGQUERY_SERVICE_ACCOUNT_JSON}
