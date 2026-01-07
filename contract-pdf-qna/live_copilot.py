@@ -45,11 +45,8 @@ def _get_infer_wrapper():
         from app import process_live_copilot_question
         _process_live_copilot_question = process_live_copilot_question
         _INFER_WRAPPER_AVAILABLE = True
-        print("✅ [LIVE_COPILOT] INFER wrapper loaded successfully - using full LangChain Agent")
         return _process_live_copilot_question
     except ImportError as e:
-        print(f"⚠️ [LIVE_COPILOT] Could not import INFER wrapper: {e}")
-        print("   Falling back to simple RAG implementation")
         _INFER_WRAPPER_AVAILABLE = False
         return None
 
@@ -982,7 +979,7 @@ def _call_suggest_llm_traced(
 # -----------------------
 
 
-def handle_transcript_event(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Optional[Dict[str, Any]]:
     session_id = _s(payload.get("sessionId"))
     speaker = _s(payload.get("speaker")).lower()
     text = _s(payload.get("text"))
@@ -997,7 +994,8 @@ def handle_transcript_event(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
     output: Optional[Dict[str, Any]] = None
     tok = _live_session_id_var.set(session_id)
     try:
-        with tracer.start_as_current_span("live_call.event") as root:
+        # Live Copilot branch is a child of csr_copilot.session (session-level trace root).
+        with tracer.start_as_current_span("live_call.processing", context=parent_context) as root:
             root.set_attribute("live.session_id", session_id)
             if _trace_include_payloads():
                 root.set_attribute("live.transcript.preview", _preview(text))
@@ -1218,7 +1216,7 @@ def handle_transcript_event(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
                             if _trace_include_payloads():
                                 sp_post.set_attribute("live.response.preview", _preview(output))
 
-            # Handler aggregation EXACTLY ONCE at end; attach totals ONLY to root live_call.event span.
+            # Handler aggregation EXACTLY ONCE at end; attach totals ONLY to this Live Copilot branch span.
             try:
                 runs, token_usage = handler.infi()
                 llm_trace_to_jaeger(runs, token_usage)

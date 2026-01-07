@@ -97,6 +97,51 @@ from monitoring_module import q_monitor, tracer, llm_trace_to_jaeger
 from token_module import token_calculator, CallbackHandler
 import threading
 
+# -----------------------------------------------------------------------------
+# Session-level trace context (1 trace per live sessionId)
+# -----------------------------------------------------------------------------
+_session_trace_ctx = {}  # sessionId -> opentelemetry.trace.SpanContext
+_session_trace_lock = threading.Lock()
+
+
+def _get_or_create_session_trace_context(session_id: str):
+    """
+    Ensure a single trace per sessionId by creating ONE root span:
+      csr_copilot.session
+    We immediately end it (not long-running), and then use its SpanContext as the
+    explicit parent for all subsequent spans for that session.
+    """
+    if not session_id:
+        return None
+    try:
+        from opentelemetry import trace as otel_trace
+        from opentelemetry.trace import NonRecordingSpan
+    except Exception:
+        return None
+
+    with _session_trace_lock:
+        existing = _session_trace_ctx.get(session_id)
+        if existing is None:
+            # Create the root span exactly once per sessionId.
+            with tracer.start_as_current_span("csr_copilot.session") as root:
+                root.set_attribute("live.session_id", session_id)
+            try:
+                existing = root.get_span_context()
+            except Exception:
+                existing = None
+            if existing is not None:
+                _session_trace_ctx[session_id] = existing
+
+        if existing is None:
+            return None
+
+        # Return an explicit parent context for child spans.
+        try:
+            parent_span = NonRecordingSpan(existing)
+            return otel_trace.set_span_in_context(parent_span)
+        except Exception:
+            return None
+
 # Using new LangChain memory API - InMemoryChatMessageHistory
 # Note: This is only used to store previous Q&A for standalone prompt, not used in chains
 memory1 = InMemoryChatMessageHistory()
@@ -5957,9 +6002,37 @@ def process_transcript_internal():
         extraction_warning = None
         
         try:
-            with tracer.start_as_current_span('api/internal/transcripts/process') as parent0:
+            # Note: `contactId` is used as the live session correlation key in this internal processor.
+            # We establish a single trace per sessionId by parenting this branch off csr_copilot.session.
+            parent0 = None
+            parent_ctx = None
+            # We'll read JSON in claims.data_fetching span below; placeholder here.
+
+            # Pre-read JSON once so we can correlate this request to the live session trace root.
+            # This does NOT change behavior; auth is still enforced before any processing.
+            try:
+                _pre_data = request.get_json() or {}
+            except Exception:
+                _pre_data = {}
+            _session_id = (_pre_data.get("contactId") or _pre_data.get("sessionId") or "").strip()
+            parent_ctx = _get_or_create_session_trace_context(_session_id) if _session_id else None
+
+            with tracer.start_as_current_span("claims.transcript_processing", context=parent_ctx) as parent0:
+                if _session_id:
+                    parent0.set_attribute("live.session_id", str(_session_id))
+                parent0.set_attribute("agent.name", "claims-transcript-processor")
+                parent0.set_attribute("agent.type", "system")
+                parent0.set_attribute("agent.orchestration", "sequential")
+
                 # --- Internal auth (simple shared secret) ---
-                with tracer.start_as_current_span('internal-auth'):
+                with tracer.start_as_current_span("claims.internal_auth") as sp:
+                    if _session_id:
+                        sp.set_attribute("live.session_id", str(_session_id))
+                    sp.set_attribute("agent.name", "claims-transcript-processor")
+                    sp.set_attribute("agent.type", "system")
+                    sp.set_attribute("agent.orchestration", "sequential")
+                    sp.set_attribute("claims.stage", "security")
+                    sp.set_attribute("claims.operation", "internal_auth")
                     expected = os.getenv("INTERNAL_PROCESS_SECRET")
                     got = request.headers.get("X-Internal-Auth")
                     if not expected or got != expected:
@@ -5967,8 +6040,15 @@ def process_transcript_internal():
                         return
 
                 # --- Request body ---
-                with tracer.start_as_current_span('data-fetching'):
-                    data = request.get_json()
+                with tracer.start_as_current_span("claims.data_fetching") as sp:
+                    if _session_id:
+                        sp.set_attribute("live.session_id", str(_session_id))
+                    sp.set_attribute("agent.name", "claims-transcript-processor")
+                    sp.set_attribute("agent.type", "system")
+                    sp.set_attribute("agent.orchestration", "sequential")
+                    sp.set_attribute("claims.stage", "enrichment")
+                    sp.set_attribute("claims.operation", "data_fetch")
+                    data = _pre_data or request.get_json()
                     if not data:
                         yield _sse("error", {"error": "Request body is missing or invalid"})
                         return
@@ -5987,6 +6067,8 @@ def process_transcript_internal():
 
                     contact_id = data.get("contactId")
                     agent_name = data.get("agentName")
+                    # session correlation (prefer contactId)
+                    session_id = (contact_id or data.get("sessionId") or "").strip()
 
                     # Validate required fields
                     if not transcript_file_name:
@@ -6012,7 +6094,14 @@ def process_transcript_internal():
                 )
 
                 # --- Resolve user email from mappings ---
-                with tracer.start_as_current_span('resolve-email'):
+                with tracer.start_as_current_span('claims.resolve_email') as sp:
+                    if session_id:
+                        sp.set_attribute("live.session_id", str(session_id))
+                    sp.set_attribute("agent.name", "claims-transcript-processor")
+                    sp.set_attribute("agent.type", "system")
+                    sp.set_attribute("agent.orchestration", "sequential")
+                    sp.set_attribute("claims.stage", "enrichment")
+                    sp.set_attribute("claims.operation", "resolve_email")
                     user_email = None
 
                     # (A) Best: resolve from sessions mapping (contactId -> email)
@@ -6685,8 +6774,9 @@ def transcript_event():
                 "plan": data.get("plan"),
             }
             
-            # Call Live Copilot to process transcript
-            copilot_result = handle_transcript_event(copilot_payload)
+            # Call Live Copilot to process transcript under the session trace root (1 trace per sessionId)
+            parent_ctx = _get_or_create_session_trace_context(session_id)
+            copilot_result = handle_transcript_event(copilot_payload, parent_context=parent_ctx)
             
             if copilot_result:
                 if include_payloads:
