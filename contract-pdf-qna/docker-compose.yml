@@ -1,9 +1,21 @@
 services:
+  jaeger:
+    image: jaegertracing/all-in-one:1.55
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      # Jaeger UI
+      - "16686:16686"
+      # OTLP HTTP
+      - "4318:4318"
+
   contract-pdf-qna:
     # Option C: build/run as linux/amd64 (useful on Apple Silicon to leverage prebuilt wheels).
     # Override if needed: export DOCKER_PLATFORM=linux/arm64 (or omit).
     platform: ${DOCKER_PLATFORM:-linux/amd64}
     build: .
+    depends_on:
+      - jaeger
     ports:
       - "5000:5000"
     # Loads env vars from `./.env` (local file; not baked into the image).
@@ -25,6 +37,13 @@ services:
       FLASK_DEBUG: ${FLASK_DEBUG:-0}
       PORT: ${PORT:-5000}
 
+      # ---- OpenTelemetry tracing (OTLP/HTTP -> Jaeger) ----
+      OTEL_SERVICE_NAME: "${OTEL_SERVICE_NAME:-CSR Copilot}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4318}
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
+       # 🔍 tracing payloads (opt-in)
+      OTEL_TRACE_INCLUDE_PAYLOADS: "1"
+      OTEL_TRACE_PAYLOAD_PREVIEW_CHARS: "500"
       # ---- BigQuery creds via env (choose ONE) ----
       # BIGQUERY_SERVICE_ACCOUNT_JSON: ${BIGQUERY_SERVICE_ACCOUNT_JSON}
       # BIGQUERY_SERVICE_ACCOUNT_JSON_BASE64: ${BIGQUERY_SERVICE_ACCOUNT_JSON_BASE64}

@@ -1,85 +1,125 @@
-from whylogs.experimental.core.udf_schema import udf_schema
-import whylogs as why
-from langkit import toxicity
-from langkit import sentiment
-from langkit import themes
-# from langkit import injections  # Disabled - AWS S3 data file unavailable
-from langkit import textstat
-from google.oauth2 import service_account
-from google.cloud import bigquery
-from datetime import datetime
-import closest
-from jaeger_client import Config, span, span_context, constants
-from sentence_transformers import SentenceTransformer, util
+import os
 import json
+from datetime import datetime
 from pathlib import Path
 
-model = SentenceTransformer( "sentence-transformers/all-MiniLM-L6-v2")
-
-BASE_DIR = Path(__file__).resolve().parent
-with open(BASE_DIR / 'files' / 'ontopic_fd.json', 'r', encoding='utf-8') as file:
-    ontopic = json.load(file)
-    ontopic = ontopic['jailbreak']
-
-with open(BASE_DIR / 'files' / 'offtopic_fd.json', 'r', encoding='utf-8') as file:
-    offtopic = json.load(file)
-    offtopic = offtopic['jailbreak']
+# OpenTelemetry (single tracing implementation)
+from opentelemetry import trace
+from opentelemetry.sdk.resources import Resource, SERVICE_NAME
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
 
-ontopic_embed = [model.encode(i) for i in ontopic]
+def _env(name: str, default: str = "") -> str:
+    return (os.getenv(name, default) or "").strip()
 
-offtopic_embed = [model.encode(i) for i in offtopic]
+
+def _otlp_http_endpoint() -> str:
+    """
+    OTLP/HTTP exporter endpoint.
+    Accepts either:
+      - http://host:4318
+      - http://host:4318/v1/traces
+    """
+    base = _env("OTEL_EXPORTER_OTLP_ENDPOINT", "http://jaeger:4318")
+    if base.endswith("/v1/traces"):
+        return base
+    return base.rstrip("/") + "/v1/traces"
 
 
-def init_tracer(service_name):
-    config = Config(
-        config={
-            'sampler': {'type': 'const', 'param': 1},
-            'logging': True,
-        },
-        service_name=service_name,
+def _init_tracer_provider() -> None:
+    # Safety: never create multiple tracer providers.
+    current = trace.get_tracer_provider()
+    if isinstance(current, TracerProvider):
+        return
+
+    service_name = _env("OTEL_SERVICE_NAME", "CSR Copilot") or "CSR Copilot"
+    protocol = _env("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf").lower()
+    if protocol and protocol != "http/protobuf":
+        # Per target state: we only support OTLP HTTP/protobuf here.
+        # Keep app running; exporter will still be configured for HTTP/protobuf.
+        pass
+
+    resource = Resource.create({SERVICE_NAME: service_name})
+    provider = TracerProvider(resource=resource)
+    exporter = OTLPSpanExporter(endpoint=_otlp_http_endpoint())
+    provider.add_span_processor(BatchSpanProcessor(exporter))
+    trace.set_tracer_provider(provider)
+
+
+_init_tracer_provider()
+tracer = trace.get_tracer("csr_copilot.tracing")
+
+
+def _ctx_from_parent(parent_span):
+    if parent_span is None:
+        return None
+    try:
+        return trace.set_span_in_context(parent_span)
+    except Exception:
+        return None
+
+_MONITORING_AVAILABLE = False
+
+# Monitoring stack (whylogs/langkit/sentence-transformers/bigquery) is optional.
+# The core service and tracing must still import and run without these dependencies.
+try:
+    from whylogs.experimental.core.udf_schema import udf_schema
+    import whylogs as why
+    from langkit import toxicity
+    from langkit import sentiment
+    from langkit import themes
+    # from langkit import injections  # Disabled - AWS S3 data file unavailable
+    from langkit import textstat
+    from google.oauth2 import service_account
+    from google.cloud import bigquery
+    import closest
+    from sentence_transformers import SentenceTransformer, util
+
+    model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+
+    BASE_DIR = Path(__file__).resolve().parent
+    with open(BASE_DIR / "files" / "ontopic_fd.json", "r", encoding="utf-8") as file:
+        ontopic = json.load(file)
+        ontopic = ontopic["jailbreak"]
+
+    with open(BASE_DIR / "files" / "offtopic_fd.json", "r", encoding="utf-8") as file:
+        offtopic = json.load(file)
+        offtopic = offtopic["jailbreak"]
+
+    ontopic_embed = [model.encode(i) for i in ontopic]
+    offtopic_embed = [model.encode(i) for i in offtopic]
+
+    BQ_CRED_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "bigquery.json")
+    credentials = service_account.Credentials.from_service_account_file(
+        BQ_CRED_PATH, scopes=["https://www.googleapis.com/auth/bigquery"]
     )
-    return config.initialize_tracer()
+    client = bigquery.Client(credentials=credentials, project="data-404309")
+    dataset_id = "data123"
+    table_id = "Score"
+    table_ref = client.dataset(dataset_id).table(table_id)
+    table = client.get_table(table_ref)
+    text_schema = udf_schema()
 
-
-tracer = init_tracer('AHS Customer Rep Copilot')
-
-
-#credentials = service_account.Credentials.from_service_account_file(
-#    r'bigquery.json',
-#    scopes=['https://www.googleapis.com/auth/bigquery']
-#)
-import os
-from google.oauth2 import service_account
-BQ_CRED_PATH = os.getenv(
-    "GOOGLE_APPLICATION_CREDENTIALS",
-    "bigquery.json"  # fallback for local non-docker runs
-)
-
-credentials = service_account.Credentials.from_service_account_file(
-    BQ_CRED_PATH,
-    scopes=["https://www.googleapis.com/auth/bigquery"]
-)
-
-
-# Initialize the BigQuery client
-client = bigquery.Client(credentials=credentials, project='data-404309')
-
-# Define the dataset ID, table ID
-dataset_id = 'data123'
-table_id = 'Score'
-
-# Construct the reference to the table
-table_ref = client.dataset(dataset_id).table(table_id)
-table = client.get_table(table_ref)
-
-text_schema = udf_schema()
+    _MONITORING_AVAILABLE = True
+except Exception:
+    # Keep module importable even when monitoring deps are missing.
+    _MONITORING_AVAILABLE = False
+    model = None
+    ontopic_embed = []
+    offtopic_embed = []
+    client = None
+    table = None
+    text_schema = None
 
 
 
 
 def func_Binsert(parent1, dicts,prompt):
-    with tracer.start_span('func_Binsert', child_of=parent1) as child2:
+    if not _MONITORING_AVAILABLE:
+        return
+    with tracer.start_as_current_span('func_Binsert', context=_ctx_from_parent(parent1)) as child2:
         # Get the current time
         current_time = datetime.now()
 
@@ -120,13 +160,17 @@ def func_Binsert(parent1, dicts,prompt):
 
 
 def closest_t(child1, question):
-    with tracer.start_span('closest', child_of=child1) as child1_1:
+    if not _MONITORING_AVAILABLE:
+        return None
+    with tracer.start_as_current_span('closest', context=_ctx_from_parent(child1)) as child1_1:
         topic = closest.classify_topic(closest.arr,question,closest.Embed)
         return topic
 
 
 def score_calculator(child1, question):
-    with tracer.start_span('score_calculator', child_of=child1) as child1_2:
+    if not _MONITORING_AVAILABLE:
+        return {}
+    with tracer.start_as_current_span('score_calculator', context=_ctx_from_parent(child1)) as child1_2:
         dicts = {}
        #results = why.log({"prompt": question}, schema = text_schema)
         results = why.log(
@@ -146,7 +190,9 @@ def score_calculator(child1, question):
 
 
 def ontopic_fun(child1, query):
-    with tracer.start_span('ontopic_fun', child_of=child1) as child1_3:
+    if not _MONITORING_AVAILABLE:
+        return 0.0
+    with tracer.start_as_current_span('ontopic_fun', context=_ctx_from_parent(child1)) as child1_3:
         query_embedding = model.encode(query)
         val = -10
         for i in ontopic_embed:
@@ -156,7 +202,9 @@ def ontopic_fun(child1, query):
         return float(val)
 
 def offtopic_fun(child1, query):
-    with tracer.start_span('offtopic_fun', child_of=child1) as child1_4:
+    if not _MONITORING_AVAILABLE:
+        return 0.0
+    with tracer.start_as_current_span('offtopic_fun', context=_ctx_from_parent(child1)) as child1_4:
         query_embedding = model.encode(query)
         val = -10
         for i in offtopic_embed:
@@ -167,7 +215,9 @@ def offtopic_fun(child1, query):
 
 
 def security_scores(parent1, question):
-    with tracer.start_span('security_scores', child_of=parent1) as child1:
+    if not _MONITORING_AVAILABLE:
+        return {}
+    with tracer.start_as_current_span('security_scores', context=_ctx_from_parent(parent1)) as child1:
 
         dicts = {}
         
@@ -186,6 +236,8 @@ def security_scores(parent1, question):
 
 
 def q_monitor(parent1, question):
+    if not _MONITORING_AVAILABLE:
+        return
     # Guard against empty / bad input
     if not question or not isinstance(question, str):
         return
@@ -193,13 +245,55 @@ def q_monitor(parent1, question):
     func_Binsert(parent1,dicts,question)
 
 
-def llm_trace_to_jaeger(data, span_id, trace_id):
-    # trace_id = random.getrandbits(64)
-    for x in data[::-1]:
-        if x['parent_run_id'] is not None:
-            context = span_context.SpanContext(trace_id = trace_id,span_id = x['run_id'].int & 0xFFFFFFFFFFFFFFFF,parent_id=x['parent_run_id'].int & 0xFFFFFFFFFFFFFFFF,flags = 1)
-        else:
-            context = span_context.SpanContext(trace_id = trace_id,span_id = x['run_id'].int & 0xFFFFFFFFFFFFFFFF,parent_id=span_id,flags = 1)
-        
-        a = span.Span(context=context,tracer=tracer, operation_name=x["chain_name"], start_time=x["start_time"])
-        a.finish(finish_time = x['end_time'])
+def llm_trace_to_jaeger(data, token_usage=None):
+    """
+    OpenTelemetry bridge for LangChain callback data.
+    We do NOT create spans here (no new spans allowed in this migration).
+    We only attach metadata + token totals to the current span.
+    """
+    span = trace.get_current_span()
+    try:
+        if span is None or not span.get_span_context().is_valid:
+            return
+    except Exception:
+        return
+
+    # Attach run metadata (best-effort, keep small to avoid oversized attributes)
+    try:
+        runs = list(data or [])
+        span.set_attribute("langchain.runs.count", len(runs))
+        names = []
+        total_latency = 0.0
+        for r in runs:
+            if not isinstance(r, dict):
+                continue
+            nm = str(r.get("chain_name") or "")
+            if nm:
+                names.append(nm)
+            try:
+                total_latency += float(r.get("latency") or 0.0)
+            except Exception:
+                pass
+        if names:
+            span.set_attribute("langchain.runs.names_csv", ",".join(names)[:1024])
+        span.set_attribute("langchain.runs.total_latency_s", float(total_latency))
+    except Exception:
+        pass
+
+    # Attach token totals (from handler.infi token_usage list)
+    try:
+        toks = list(token_usage or [])
+        prompt = 0
+        completion = 0
+        total = 0
+        for t in toks:
+            if not isinstance(t, dict):
+                continue
+            prompt += int(t.get("prompt_tokens") or 0)
+            completion += int(t.get("completion_tokens") or 0)
+            total += int(t.get("total_tokens") or 0)
+        span.set_attribute("langchain.tokens.prompt", int(prompt))
+        span.set_attribute("langchain.tokens.completion", int(completion))
+        span.set_attribute("langchain.tokens.total", int(total))
+    except Exception:
+        pass

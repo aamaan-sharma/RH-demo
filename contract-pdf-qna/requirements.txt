@@ -33,14 +33,17 @@ certifi==2025.11.12
 # Optional: monitoring_module.py dependencies (app.py will run without these)
 # NOTE: monitoring_module.py currently imports `closest` (not in this repo); if you want monitoring enabled,
 # you must provide that module AND install the deps below.
+# OpenTelemetry (required: tracing implementation)
+opentelemetry-api>=1.22.0,<2.0.0
+opentelemetry-sdk>=1.22.0,<2.0.0
+opentelemetry-exporter-otlp>=1.22.0,<2.0.0
+opentelemetry-instrumentation>=0.43b0,<1.0
 # PyTorch (CPU-only version for Windows compatibility - required by transformers/sentence-transformers)
 # NOTE: Install PyTorch CPU separately first: pip install torch --index-url https://download.pytorch.org/whl/cpu
 transformers>=4.41.0,<5.0.0
 whylogs==1.6.4
 langkit==0.0.35
 whylabs-textstat==0.7.4
-jaeger-client==4.8.0
-opentracing==2.4.0
 sentence-transformers==5.1.2
 nltk
 closest
