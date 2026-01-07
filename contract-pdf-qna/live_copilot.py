@@ -94,6 +94,19 @@ MONGO_URI = os.getenv("MONGO_URI")
 MODEL_INTENT = os.getenv("COPILOT_MODEL_INTENT", "gpt-4o")
 MODEL_SUGGEST = os.getenv("COPILOT_MODEL_SUGGEST", "gpt-4o")
 
+# Debug mode: set VERBOSE_DEBUG=1 to enable detailed logging
+VERBOSE_DEBUG = os.getenv("VERBOSE_DEBUG", "").lower() in ("1", "true", "yes")
+
+
+def _log(level: str, icon: str, message: str, **kwargs):
+    """Structured logging helper for Live Copilot."""
+    extra = " | ".join(f"{k}={v}" for k, v in kwargs.items()) if kwargs else ""
+    prefix = f"[LIVE_COPILOT] {icon}"
+    if extra:
+        print(f"{prefix} {message} | {extra}")
+    else:
+        print(f"{prefix} {message}")
+
 
 def _now_epoch() -> int:
     return int(time())
@@ -757,6 +770,13 @@ You are a real-time copilot helping a CSR (Customer Service Representative) duri
 
 Your role is to generate PROFESSIONAL, CALM, and CONCISE suggestions that the CSR can say directly to the customer.
 
+STRICT GROUNDING RULES (CRITICAL - FOLLOW EXACTLY):
+- NEVER invent or guess dollar amounts, fees, limits, or coverage percentages
+- ONLY use specific numbers/values that appear in tool_result.newAnswers or tool_result.previousAnswers
+- If a specific fee/limit is NOT in tool_result, say "Let me verify the exact amount for your plan"
+- If you previously answered a question (check previousAnswers), use THE SAME answer - never contradict yourself
+- When tool_result contains an answer, quote the numbers EXACTLY as they appear
+
 OPERATING RULES:
 - Use conversation context below (do not ignore earlier customer questions).
 - Use tool_result + customer_context as your ground truth; do NOT invent coverage details.
@@ -771,12 +791,12 @@ CSR SCRIPT TONE REQUIREMENTS:
 - Be CONCISE - 1-2 sentences maximum
 - Be PROFESSIONAL - use polite, helpful language
 - Be DIRECT about coverage decisions (Yes, covered / No, not covered / Partially covered)
-- Include specific details when available (limits, fees, next steps)
+- Include specific details ONLY when they are in tool_result
 
 EXAMPLES OF GOOD CSR SCRIPTS:
-- "Good news! Your plan does cover water heater repairs. The service call fee is $75, and we can dispatch a technician within 24-48 hours."
+- "Good news! Your plan does cover water heater repairs. [Use exact fee from tool_result], and we can dispatch a technician within 24-48 hours."
 - "I understand your concern about the refrigerator. Unfortunately, cosmetic damage to the exterior panel is not covered under your plan, but I can help you with other options."
-- "Based on your ShieldPlus plan, drain line stoppages are covered. Let me create a service request for you."
+- "Based on your plan, drain line stoppages are covered. Let me create a service request for you."
 
 Return ONLY valid JSON:
 {{
@@ -809,10 +829,11 @@ def _call_suggest_llm(
     transcript: str,
     evidence: str,
 ) -> List[Dict[str, Any]]:
-    # Debug: log the tool_result being passed to LLM
-    print(f"[LIVE_COPILOT_DEBUG] _call_suggest_llm tool_result: {json.dumps(tool_result, default=str)[:500]}")
+    if VERBOSE_DEBUG:
+        _log("debug", "🔍", f"Generating suggestions | intent={intent} | verified={customer_verified}")
     
-    llm = ChatOpenAI(temperature=0.2, model=MODEL_SUGGEST)
+    # Use temperature=0.0 for deterministic, consistent outputs
+    llm = ChatOpenAI(temperature=0.0, model=MODEL_SUGGEST)
     chain = _suggest_prompt | llm | StrOutputParser()
     raw = (chain.invoke(
         {
@@ -824,7 +845,8 @@ def _call_suggest_llm(
         }
     ) or "").strip()
     
-    print(f"[LIVE_COPILOT_DEBUG] _call_suggest_llm raw response: {raw[:500]}")
+    if VERBOSE_DEBUG:
+        _log("debug", "📄", f"Suggestion LLM response: {raw[:150]}...")
     
     # Clean markdown if present
     cleaned = raw
@@ -836,16 +858,16 @@ def _call_suggest_llm(
     
     try:
         obj = json.loads(cleaned)
-        print(f"[LIVE_COPILOT_DEBUG] _call_suggest_llm parsed: {obj}")
         cards = obj.get("cards") if isinstance(obj, dict) else None
         if isinstance(cards, list) and cards:
+            _log("info", "💡", f"Generated {len(cards)} suggestion cards", intent=intent)
             # Ensure evidence populated
             for c in cards:
                 if isinstance(c, dict) and not c.get("evidence") and evidence:
                     c["evidence"] = evidence
             return cards
     except Exception as e:
-        print(f"[LIVE_COPILOT_DEBUG] _call_suggest_llm parse error: {e}")
+        _log("warn", "⚠️", f"Suggestion parse error: {e}")
         pass
     return [
         {
@@ -963,6 +985,13 @@ def handle_transcript_event(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
                 print(f"[LIVE_COPILOT_DEBUG] Questions queued: {extracted}")
 
     # Build tool_result snapshot (always present so the prompt has state + conversation context)
+    # Include previousAnswers so LLM doesn't contradict itself
+    previous_answers = [
+        {"question": k, "answer": v.get("answer", ""), "citedChunks": v.get("citedChunks", [])}
+        for k, v in st.answered.items()
+        if v.get("answer")
+    ]
+    
     tool_result = {
         "mode": "verified" if verified else "unverified",
         "sessionContext": {
@@ -972,6 +1001,7 @@ def handle_transcript_event(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
         },
         "pendingQuestions": [x.get("q") for x in st.pending_questions if _s(x.get("q"))],
         "answeredCount": len(st.answered),
+        "previousAnswers": previous_answers,  # Include all previously answered questions for consistency
         "newAnswers": [],
         "verification": {
             "needsPhone": False,
