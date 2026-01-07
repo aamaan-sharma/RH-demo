@@ -100,83 +100,18 @@ MONGO_URI = os.getenv("MONGO_URI")
 MODEL_INTENT = os.getenv("COPILOT_MODEL_INTENT", "gpt-4o")
 MODEL_SUGGEST = os.getenv("COPILOT_MODEL_SUGGEST", "gpt-4o")
 
-def _trace_include_payloads() -> bool:
-    raw = (os.getenv("OTEL_TRACE_INCLUDE_PAYLOADS", "0") or "").strip().lower()
-    return raw in ("1", "true", "yes", "y", "on")
+# Debug mode: set VERBOSE_DEBUG=1 to enable detailed logging
+VERBOSE_DEBUG = os.getenv("VERBOSE_DEBUG", "").lower() in ("1", "true", "yes")
 
 
-def _payload_preview_chars() -> int:
-    raw = (os.getenv("OTEL_TRACE_PAYLOAD_PREVIEW_CHARS", "300") or "").strip()
-    try:
-        n = int(raw) if raw else 300
-        return max(0, min(n, 10_000))
-    except Exception:
-        return 300
-
-
-def _preview(v: Any) -> str:
-    s = str(v or "")
-    n = _payload_preview_chars()
-    if n <= 0:
-        return ""
-    if len(s) <= n:
-        return s
-    return s[:n] + "...(truncated)"
-
-
-def _live_session_id() -> str:
-    try:
-        return _live_session_id_var.get() or ""
-    except Exception:
-        return ""
-
-
-def _set_session_attr(span) -> None:
-    sid = _live_session_id()
-    if sid:
-        span.set_attribute("live.session_id", sid)
-
-
-def _span_common(
-    span,
-    *,
-    agent_name: str,
-    agent_role: str,
-    from_agent: str,
-) -> None:
-    _set_session_attr(span)
-    span.set_attribute("agent.name", agent_name)
-    span.set_attribute("agent.role", agent_role)
-    span.set_attribute("agent.type", "simulated")
-    span.set_attribute("agent.orchestration", "sequential")
-    span.set_attribute("a2a.enabled", False)
-    span.set_attribute("a2a.simulated", True)
-    span.set_attribute("a2a.pattern", "handoff")
-    span.set_attribute("a2a.from_agent", from_agent)
-    span.set_attribute("a2a.to_agent", agent_name)
-
-
-@contextmanager
-def _infer_handler_context(handler: CallbackHandler):
-    """
-    Live Call uses the existing Infer wrapper in `app.py`, which references `app.handler`.
-    We keep Infer logic unchanged by temporarily binding `app.handler` to the per-event handler.
-    """
-    with _infer_handler_lock:
-        try:
-            import app as _app
-        except Exception:
-            yield
-            return
-        old = getattr(_app, "handler", None)
-        try:
-            _app.handler = handler
-            yield
-        finally:
-            try:
-                _app.handler = old
-            except Exception:
-                pass
+def _log(level: str, icon: str, message: str, **kwargs):
+    """Structured logging helper for Live Copilot."""
+    extra = " | ".join(f"{k}={v}" for k, v in kwargs.items()) if kwargs else ""
+    prefix = f"[LIVE_COPILOT] {icon}"
+    if extra:
+        print(f"{prefix} {message} | {extra}")
+    else:
+        print(f"{prefix} {message}")
 
 
 def _now_epoch() -> int:
@@ -865,6 +800,13 @@ You are a real-time copilot helping a CSR (Customer Service Representative) duri
 
 Your role is to generate PROFESSIONAL, CALM, and CONCISE suggestions that the CSR can say directly to the customer.
 
+STRICT GROUNDING RULES (CRITICAL - FOLLOW EXACTLY):
+- NEVER invent or guess dollar amounts, fees, limits, or coverage percentages
+- ONLY use specific numbers/values that appear in tool_result.newAnswers or tool_result.previousAnswers
+- If a specific fee/limit is NOT in tool_result, say "Let me verify the exact amount for your plan"
+- If you previously answered a question (check previousAnswers), use THE SAME answer - never contradict yourself
+- When tool_result contains an answer, quote the numbers EXACTLY as they appear
+
 OPERATING RULES:
 - Use conversation context below (do not ignore earlier customer questions).
 - Use tool_result + customer_context as your ground truth; do NOT invent coverage details.
@@ -879,12 +821,12 @@ CSR SCRIPT TONE REQUIREMENTS:
 - Be CONCISE - 1-2 sentences maximum
 - Be PROFESSIONAL - use polite, helpful language
 - Be DIRECT about coverage decisions (Yes, covered / No, not covered / Partially covered)
-- Include specific details when available (limits, fees, next steps)
+- Include specific details ONLY when they are in tool_result
 
 EXAMPLES OF GOOD CSR SCRIPTS:
-- "Good news! Your plan does cover water heater repairs. The service call fee is $75, and we can dispatch a technician within 24-48 hours."
+- "Good news! Your plan does cover water heater repairs. [Use exact fee from tool_result], and we can dispatch a technician within 24-48 hours."
 - "I understand your concern about the refrigerator. Unfortunately, cosmetic damage to the exterior panel is not covered under your plan, but I can help you with other options."
-- "Based on your ShieldPlus plan, drain line stoppages are covered. Let me create a service request for you."
+- "Based on your plan, drain line stoppages are covered. Let me create a service request for you."
 
 Return ONLY valid JSON:
 {{
@@ -917,33 +859,24 @@ def _call_suggest_llm(
     transcript: str,
     evidence: str,
 ) -> List[Dict[str, Any]]:
-    raise RuntimeError("_call_suggest_llm should be called via _call_suggest_llm_traced")
-
-
-def _call_suggest_llm_traced(
-    *,
-    intent: str,
-    customer_verified: bool,
-    customer_context: Dict[str, Any],
-    tool_result: Dict[str, Any],
-    transcript: str,
-    evidence: str,
-    handler: CallbackHandler,
-    span,
-) -> List[Dict[str, Any]]:
-    llm = ChatOpenAI(temperature=0.2, model=MODEL_SUGGEST)
+    if VERBOSE_DEBUG:
+        _log("debug", "🔍", f"Generating suggestions | intent={intent} | verified={customer_verified}")
+    
+    # Use temperature=0.0 for deterministic, consistent outputs
+    llm = ChatOpenAI(temperature=0.0, model=MODEL_SUGGEST)
     chain = _suggest_prompt | llm | StrOutputParser()
-    payload = {
-        "intent": intent,
-        "customer_verified": bool(customer_verified),
-        "customer_context": json.dumps(customer_context or {}, default=str),
-        "tool_result": json.dumps(tool_result or {}, default=str),
-        "transcript": transcript,
-    }
-    raw = (chain.invoke(payload, config={"callbacks": [handler]}) or "").strip()
-    if _trace_include_payloads():
-        span.set_attribute("llm.prompt.preview", _preview(payload))
-        span.set_attribute("llm.response.preview", _preview(raw))
+    raw = (chain.invoke(
+        {
+            "intent": intent,
+            "customer_verified": bool(customer_verified),
+            "customer_context": json.dumps(customer_context or {}, default=str),
+            "tool_result": json.dumps(tool_result or {}, default=str),
+            "transcript": transcript,
+        }
+    ) or "").strip()
+    
+    if VERBOSE_DEBUG:
+        _log("debug", "📄", f"Suggestion LLM response: {raw[:150]}...")
     
     # Clean markdown if present
     cleaned = raw
@@ -957,12 +890,14 @@ def _call_suggest_llm_traced(
         obj = json.loads(cleaned)
         cards = obj.get("cards") if isinstance(obj, dict) else None
         if isinstance(cards, list) and cards:
+            _log("info", "💡", f"Generated {len(cards)} suggestion cards", intent=intent)
             # Ensure evidence populated
             for c in cards:
                 if isinstance(c, dict) and not c.get("evidence") and evidence:
                     c["evidence"] = evidence
             return cards
     except Exception as e:
+        _log("warn", "⚠️", f"Suggestion parse error: {e}")
         pass
     return [
         {
@@ -1098,6 +1033,18 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                             if _queue_questions(st, extracted):
                                 important_change = True
 
+                    # Build tool_result snapshot (always present so the prompt has state + conversation context)
+                    # Include previousAnswers so LLM doesn't contradict itself
+                    previous_answers = [
+                        {
+                            "question": k,
+                            "answer": v.get("answer", ""),
+                            "citedChunks": v.get("citedChunks", []),
+                        }
+                        for k, v in st.answered.items()
+                        if v.get("answer")
+                    ]
+
                     tool_result = {
                         "mode": "verified" if verified else "unverified",
                         "sessionContext": {
@@ -1107,6 +1054,7 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                         },
                         "pendingQuestions": [x.get("q") for x in st.pending_questions if _s(x.get("q"))],
                         "answeredCount": len(st.answered),
+                        "previousAnswers": previous_answers,  # Include all previously answered questions for consistency
                         "newAnswers": [],
                         "verification": {
                             "needsPhone": False,

@@ -1150,7 +1150,13 @@ const Home = ({ bearerToken, setBearerToken }) => {
       }
       const apiUrl = `${API_BASE_URL}/claims/followup?conversation-id=${conversationId}`;
       axios
-        .post(apiUrl, { enteredQuery: input })
+        .post(apiUrl, {
+          enteredQuery: input,
+          // Ensure backend always has plan metadata for Milvus retrieval (and can persist it if missing).
+          contractType: selectedContract,
+          selectedPlan: selectedPlan,
+          selectedState: selectedState,
+        })
         .then((response) => {
           if (viewKeyRef.current !== viewKeyAtSubmit) return;
           setServerError(null);

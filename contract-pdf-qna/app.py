@@ -3228,6 +3228,10 @@ def _build_claims_case_context_for_llm(docs: dict) -> str:
     claim_decision = docs.get("claim_decision")
     transcript_meta = docs.get("transcript_metadata") or {}
     transcript_id = docs.get("transcript_id") or ""
+    contract_type = (docs.get("contract_type") or "").strip()
+    selected_plan = (docs.get("selected_plan") or "").strip()
+    selected_state = (docs.get("selected_state") or "").strip()
+    plan_overview = (docs.get("plan_overview") or "").strip()
 
     extracted = []
     followups = []
@@ -3262,6 +3266,11 @@ def _build_claims_case_context_for_llm(docs: dict) -> str:
     parts.append("CASE CONTEXT (Claims transcript conversation)")
     if transcript_id:
         parts.append(f"- transcriptId: {transcript_id}")
+    if contract_type or selected_plan or selected_state:
+        # Make plan metadata visible to the LLM (even if retrieval fails), but keep it compact.
+        parts.append(
+            f"- plan: state={selected_state or '(unknown)'}, contractType={contract_type or '(unknown)'}, selectedPlan={selected_plan or '(unknown)'}"
+        )
     if isinstance(transcript_meta, dict) and transcript_meta:
         fn = transcript_meta.get("fileName") or transcript_meta.get("name") or ""
         if fn:
@@ -3273,6 +3282,11 @@ def _build_claims_case_context_for_llm(docs: dict) -> str:
     if docs.get("case_disposition"):
         parts.append(f"- disposition: {docs.get('case_disposition')}")
     parts.append("")
+
+    if plan_overview:
+        parts.append("PLAN OVERVIEW (CACHED)")
+        parts.append(plan_overview)
+        parts.append("")
 
     if final_summary:
         parts.append("FINAL ANALYZED ANSWER")
@@ -3356,6 +3370,19 @@ def _retrieve_policy_chunks_for_claims(docs: dict, query: str, k: int = 6):
         if not selected_collection_name:
             return [], ""
 
+        # Lightweight logging to debug "no clauses found" issues in claims follow-up.
+        try:
+            print(
+                "[CLAIMS_FOLLOWUP] Milvus retrieval "
+                f"state={selected_state!r}->{milvus_state!r}, "
+                f"contract_type={contract_type!r}->{contract_type_norm!r}, "
+                f"selected_plan={selected_plan!r}->{selected_plan_norm!r}, "
+                f"collection={selected_collection_name!r}, "
+                f"k={k}"
+            )
+        except Exception:
+            pass
+
         vector_db1: Milvus = Milvus(
             embed,
             collection_name=selected_collection_name,
@@ -3364,6 +3391,10 @@ def _retrieve_policy_chunks_for_claims(docs: dict, query: str, k: int = 6):
         retriever = vector_db1.as_retriever(search_kwargs={"k": max(1, min(int(k), 12))})
 
         raw_docs = retriever.get_relevant_documents(query)
+        try:
+            print(f"[CLAIMS_FOLLOWUP] Milvus returned {len(raw_docs or [])} docs")
+        except Exception:
+            pass
         chunks_for_ui = []
         text_lines = []
         for i, d in enumerate(raw_docs or [], start=1):
@@ -3388,6 +3419,78 @@ def _retrieve_policy_chunks_for_claims(docs: dict, query: str, k: int = 6):
     except Exception as e:
         print(f"Warning: policy retrieval failed for claims followup: {e}")
         return [], ""
+
+
+def _looks_like_plan_overview_question(q: str) -> bool:
+    """Heuristic: broad plan questions that benefit from a cached plan overview."""
+    q = (q or "").strip().lower()
+    if not q:
+        return False
+    needles = [
+        "what is covered",
+        "what's covered",
+        "whats covered",
+        "what all is covered",
+        "coverage in the plan",
+        "plan cover",
+        "covered in the plan",
+        "what does my plan cover",
+        "plan coverage",
+        "coverage summary",
+        "coverage overview",
+    ]
+    return any(n in q for n in needles)
+
+
+def _get_or_build_plan_overview_for_claims(docs: dict) -> str:
+    """Best-effort: build a cached plan overview using Milvus clauses, store in Mongo for reuse.
+
+    This is intended to make broad plan questions answerable even if the user doesn't ask a
+    clause-shaped question. If Milvus is unreachable or returns no clauses, returns "".
+    """
+    if not isinstance(docs, dict):
+        return ""
+    existing = (docs.get("plan_overview") or "").strip()
+    if existing:
+        return existing
+
+    contract_type = docs.get("contract_type")
+    selected_plan = docs.get("selected_plan")
+    selected_state = docs.get("selected_state")
+    if not all([contract_type, selected_plan, selected_state]):
+        return ""
+
+    # Pull a broader set of clauses (k=12 cap inside retrieval) and summarize.
+    overview_query = (
+        "Provide an overview of what is covered and not covered in this plan, including key limits, "
+        "exclusions, and service fees. Keep it structured and concise."
+    )
+    chunks, _ = _retrieve_policy_chunks_for_claims(docs, overview_query, k=12)
+    if not chunks:
+        return ""
+
+    clauses_blob = "\n\n".join(
+        [str(c.get("content") or "").strip() for c in (chunks or []) if isinstance(c, dict) and str(c.get("content") or "").strip()]
+    ).strip()
+    if not clauses_blob:
+        return ""
+    clauses_blob = clauses_blob[:12_000]  # keep prompt bounded
+
+    llm = ChatOpenAI(temperature=0.0, model="gpt-4o-mini")
+    prompt = (
+        "Summarize the plan coverage based ONLY on the clauses below.\n"
+        "Output sections:\n"
+        "- Covered (bullets)\n"
+        "- Not covered / exclusions (bullets)\n"
+        "- Limits / caps / service fees (bullets)\n"
+        "- Notes (eligibility, waiting periods, claim process pointers if present)\n"
+        "Be careful: do not invent coverage.\n\n"
+        f"CLAUSES:\n{clauses_blob}\n"
+    )
+    try:
+        return str(llm.invoke([HumanMessage(content=prompt)]).content or "").strip()
+    except Exception:
+        return ""
 
 
 @app.route("/claims/followup", methods=["POST"])
@@ -3440,6 +3543,43 @@ def claims_followup_chat():
             # Respect closed case lock (frontend also blocks, but enforce server-side too)
             if (docs.get("status") or "").lower() == "inactive":
                 return jsonify({"error": "Case is closed. Chat is disabled."}), 403
+
+            # Optional overrides from client (frontend knows selected plan/state from /history).
+            # This makes follow-up resilient even if an older conversation stub is missing metadata.
+            try:
+                override_contract = (data.get("contractType") or "").strip()
+                override_plan = (data.get("selectedPlan") or "").strip()
+                override_state = (data.get("selectedState") or "").strip()
+                if override_contract or override_plan or override_state:
+                    updates = {}
+                    if override_contract:
+                        updates["contract_type"] = override_contract
+                        docs["contract_type"] = override_contract
+                    if override_plan:
+                        updates["selected_plan"] = override_plan
+                        docs["selected_plan"] = override_plan
+                    if override_state:
+                        updates["selected_state"] = override_state
+                        docs["selected_state"] = override_state
+                    if updates:
+                        updates["updated_at"] = datetime.utcnow()
+                        qna_collection.update_one({"_id": ObjectId(conversation_id)}, {"$set": updates})
+            except Exception:
+                pass
+
+            # Best-effort: build & cache plan overview in Mongo for broad plan questions.
+            # This helps queries like "What is covered in the plan?" even when retrieval is sparse.
+            try:
+                if _looks_like_plan_overview_question(entered_query):
+                    overview = _get_or_build_plan_overview_for_claims(docs)
+                    if overview:
+                        qna_collection.update_one(
+                            {"_id": ObjectId(conversation_id)},
+                            {"$set": {"plan_overview": overview, "updated_at": datetime.utcnow()}},
+                        )
+                        docs["plan_overview"] = overview
+            except Exception:
+                pass
 
             case_context = _build_claims_case_context_for_llm(docs)
             if not case_context:
