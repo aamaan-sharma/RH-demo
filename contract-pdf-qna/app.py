@@ -97,6 +97,51 @@ from monitoring_module import q_monitor, tracer, llm_trace_to_jaeger
 from token_module import token_calculator, CallbackHandler
 import threading
 
+# -----------------------------------------------------------------------------
+# Session-level trace context (1 trace per live sessionId)
+# -----------------------------------------------------------------------------
+_session_trace_ctx = {}  # sessionId -> opentelemetry.trace.SpanContext
+_session_trace_lock = threading.Lock()
+
+
+def _get_or_create_session_trace_context(session_id: str):
+    """
+    Ensure a single trace per sessionId by creating ONE root span:
+      csr_copilot.session
+    We immediately end it (not long-running), and then use its SpanContext as the
+    explicit parent for all subsequent spans for that session.
+    """
+    if not session_id:
+        return None
+    try:
+        from opentelemetry import trace as otel_trace
+        from opentelemetry.trace import NonRecordingSpan
+    except Exception:
+        return None
+
+    with _session_trace_lock:
+        existing = _session_trace_ctx.get(session_id)
+        if existing is None:
+            # Create the root span exactly once per sessionId.
+            with tracer.start_as_current_span("csr_copilot.session") as root:
+                root.set_attribute("live.session_id", session_id)
+            try:
+                existing = root.get_span_context()
+            except Exception:
+                existing = None
+            if existing is not None:
+                _session_trace_ctx[session_id] = existing
+
+        if existing is None:
+            return None
+
+        # Return an explicit parent context for child spans.
+        try:
+            parent_span = NonRecordingSpan(existing)
+            return otel_trace.set_span_in_context(parent_span)
+        except Exception:
+            return None
+
 # Using new LangChain memory API - InMemoryChatMessageHistory
 # Note: This is only used to store previous Q&A for standalone prompt, not used in chains
 memory1 = InMemoryChatMessageHistory()
@@ -114,12 +159,15 @@ try:
 except Exception:
     _async_mode = os.getenv("SOCKETIO_ASYNC_MODE", "threading")
 
-socketio = SocketIO(
-    app,
-    cors_allowed_origins="*",
-    async_mode=_async_mode,
-    manage_session=True
-)
+try:
+    socketio = SocketIO(
+        app,
+        cors_allowed_origins="*",
+        async_mode=_async_mode,
+        manage_session=True
+    )
+except Exception:
+    raise
 
 JWT_AUDIENCE = os.getenv("JWT_AUDIENCE")
 JWKS_URL = os.getenv("JWKS_URL")
@@ -2186,7 +2234,7 @@ def before_request():
 
 @app.route("/feedback", methods=["POST"])
 def feedback():
-    with tracer.start_span('api/feedback'):
+    with tracer.start_as_current_span('api/feedback'):
         authorization_header = request.headers.get("Authorization")
 
         # case 5: missing token
@@ -2294,8 +2342,8 @@ def calls_transcripts():
 @app.route("/start", methods=["POST"])
 def start():
     try:
-        with tracer.start_span('api/start') as parent0:
-            with tracer.start_span('authorization', child_of=parent0):
+        with tracer.start_as_current_span('api/start') as parent0:
+            with tracer.start_as_current_span('authorization'):
                 start_time = time()
                 authorization_header = request.headers.get("Authorization")
 
@@ -2308,7 +2356,7 @@ def start():
                     if token_data[1] == 401 or token_data[1] == 403:
                         return (token_data[0].get_json()), token_data[1]
             
-            with tracer.start_span('data-fetching', child_of=parent0):
+            with tracer.start_as_current_span('data-fetching'):
                 data = request.get_json()
                 if not data:
                     return jsonify({"error": "Request body is missing or invalid"}), 400
@@ -2354,7 +2402,7 @@ def start():
                     f"selected_plan={selected_plan!r}->{selected_plan_norm!r}, "
                     f"collection={selected_collection_name!r}"
                 )
-            with tracer.start_span('vector_db-initialization', child_of=parent0):
+            with tracer.start_as_current_span('vector_db-initialization'):
                 # Selecting collection dynamically
                 vector_db1: Milvus = Milvus(
                     embed,
@@ -2367,13 +2415,13 @@ def start():
             relevant_documents = ""
 
             if gpt_model == "Search":
-                with tracer.start_span('Search', child_of=parent0) as parent1:
-                    with tracer.start_span('llm-retriever-initialization', child_of=parent1):
+                with tracer.start_as_current_span('Search') as parent1:
+                    with tracer.start_as_current_span('llm-retriever-initialization'):
                         llm2 = ChatOpenAI(temperature=0.0, model="ft:gpt-3.5-turbo-0613:mindstix::8YYD56aA")
                         llm = ChatOpenAI(temperature=0.0, model="gpt-4o")
                         retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
                     
-                    with tracer.start_span('memory_update', child_of=parent1):
+                    with tracer.start_as_current_span('memory_update'):
                         memory1.clear()
                         question1 = ""
                         answer1 = ""
@@ -2409,7 +2457,7 @@ def start():
                                     memory1.add_message(HumanMessage(content=q))
                                     memory1.add_message(AIMessage(content=a))
 
-                    with tracer.start_span('standalone-prompt-chain', child_of=parent1) as p:
+                    with tracer.start_as_current_span('standalone-prompt-chain') as p:
                         standalone_prompt = ChatPromptTemplate.from_template(
                         """
                         Act as an expert in question rephrasing and create a standalone question in its own language by analyzing previous question, answer to the previous question and current question.
@@ -2453,18 +2501,18 @@ def start():
                         )
                         print(standalone_result)
                         res1, tok1 = handler.infi()
-                        llm_trace_to_jaeger(res1, p.span_id, p.trace_id)
+                        llm_trace_to_jaeger(res1, tok1)
                         a = threading.Thread(target=token_calculator, args=(tok1,))
                         a.start()
 
                         print(f"time taken for standalone = {time() - start}")
 
-                    with tracer.start_span('q_monitor', child_of=parent1) as parentq:
+                    with tracer.start_as_current_span('q_monitor') as parentq:
                         t = threading.Thread(target=q_monitor, args=(parentq,entered_query,))
                         t.start()
                         # q_monitor(parentq,entered_query)
 
-                    with tracer.start_span('llm-RetrievalQA-chain', child_of=parent1) as q:
+                    with tracer.start_as_current_span('llm-RetrievalQA-chain') as q:
                         # Creating a prompt template
                         prompt_template = """
 
@@ -2504,11 +2552,11 @@ def start():
                         )
                         agent_resp = qa_resp["result"] if isinstance(qa_resp, dict) else qa_resp
                         res2, tok2 = handler.infi()
-                        llm_trace_to_jaeger(res2, q.span_id, q.trace_id)
+                        llm_trace_to_jaeger(res2, tok2)
                         b = threading.Thread(target=token_calculator, args=(tok2,))
                         b.start()
                     
-                    with tracer.start_span('relevant_documents', child_of=parent1):
+                    with tracer.start_as_current_span('relevant_documents'):
                         print(
                             "[CHUNKS] /start(Search): calling relevant_docs for entered_query "
                             f"'{str(entered_query)[:200]}'"
@@ -2520,14 +2568,14 @@ def start():
                         )
 
             elif gpt_model == "Infer":
-                with tracer.start_span('Infer', child_of=parent0) as parent1:
-                    with tracer.start_span('llm-retriever-initialization', child_of=parent1):
+                with tracer.start_as_current_span('Infer') as parent1:
+                    with tracer.start_as_current_span('llm-retriever-initialization'):
                         llm3 = ChatOpenAI(temperature=0.0, model="ft:gpt-3.5-turbo-0613:mindstix::8YYD56aA")
                         llm = ChatOpenAI(temperature=0.0, model='gpt-4o')
                         llm2 = ChatOpenAI(temperature=0.0, model='gpt-4o')
                         retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
                         
-                    with tracer.start_span('memory_update', child_of=parent1):
+                    with tracer.start_as_current_span('memory_update'):
                         memory1.clear()
                         question1 = ""
                         answer1 = ""
@@ -2561,7 +2609,7 @@ def start():
                                     memory1.add_message(HumanMessage(content=q))
                                     memory1.add_message(AIMessage(content=a))
 
-                    with tracer.start_span('standalone-prompt-chain', child_of=parent1) as p:
+                    with tracer.start_as_current_span('standalone-prompt-chain') as p:
                         standalone_prompt = ChatPromptTemplate.from_template(
                             """
                             Identify if the current question is related to previous question and answer and Create a standalone question in its own language by analyzing previous question, answer to the previous question and current question.
@@ -2600,24 +2648,24 @@ def start():
                         standalone_result = standalone_chain.invoke({"input": entered_query})
                         print(standalone_result)
                         res1, tok1 = handler.infi()
-                        llm_trace_to_jaeger(res1, p.span_id, p.trace_id)
+                        llm_trace_to_jaeger(res1, tok1)
                         a = threading.Thread(target=token_calculator, args=(tok1,))
                         a.start()
 
-                    with tracer.start_span('q_monitor', child_of=parent1) as parentq:
+                    with tracer.start_as_current_span('q_monitor') as parentq:
                         t = threading.Thread(target=q_monitor, args=(parentq,entered_query,))
                         t.start()
 
-                    with tracer.start_span('llm-RetrievalQA-chain', child_of=parent1) as q:
+                    with tracer.start_as_current_span('llm-RetrievalQA-chain') as q:
                         qa = RetrievalQA.from_chain_type(llm=llm2, retriever=retriever, verbose=True)
                         agent_response = input_prompt(standalone_result, qa, llm)
                         agent_resp = agent_response["output"]
                         res2, tok2 = handler.infi()
-                        llm_trace_to_jaeger(res2, q.span_id, q.trace_id)
+                        llm_trace_to_jaeger(res2, tok2)
                         b = threading.Thread(target=token_calculator, args=(tok2,))
                         b.start()
                     
-                    with tracer.start_span('relevant_documents', child_of=parent1):
+                    with tracer.start_as_current_span('relevant_documents'):
                         knowledge_base_thoughts = [
                             item[0].tool_input
                             for item in agent_response["intermediate_steps"]
@@ -2642,7 +2690,7 @@ def start():
             else:
                 return jsonify({"error": f"Invalid gpt_model: {gpt_model}. Must be 'Search' or 'Infer'"}), 400
 
-            with tracer.start_span('output-formating', child_of=parent0):
+            with tracer.start_as_current_span('output-formating'):
                 # Validate that we have a response
                 if agent_resp is None:
                     return jsonify({"error": "Invalid gpt_model. Must be 'Search' or 'Infer'"}), 400
@@ -2817,7 +2865,7 @@ def calls_start():
 
 @app.route("/history", methods=["GET"])
 def chat_history():
-    with tracer.start_span('api/history'):
+    with tracer.start_as_current_span('api/history'):
         authorization_header = request.headers.get("Authorization")
 
         if authorization_header is None:
@@ -2932,7 +2980,7 @@ def authorize_conversation_answer():
       - reviewComments (optional): string
     """
     try:
-        with tracer.start_span("api/conversation/authorize"):
+        with tracer.start_as_current_span("api/conversation/authorize"):
             authorization_header = request.headers.get("Authorization")
 
             if authorization_header is None:
@@ -3031,7 +3079,7 @@ def update_conversation_status():
       - status: 'active' | 'inactive'
     """
     try:
-        with tracer.start_span('api/conversation/status'):
+        with tracer.start_as_current_span('api/conversation/status'):
             authorization_header = request.headers.get("Authorization")
 
             if authorization_header is None:
@@ -3090,7 +3138,7 @@ def close_conversation():
       - reviewComments (optional): string
     """
     try:
-        with tracer.start_span("api/conversation/close"):
+        with tracer.start_as_current_span("api/conversation/close"):
             authorization_header = request.headers.get("Authorization")
             if authorization_header is None:
                 return jsonify({"message": "Token is missing"}), 401
@@ -3180,6 +3228,10 @@ def _build_claims_case_context_for_llm(docs: dict) -> str:
     claim_decision = docs.get("claim_decision")
     transcript_meta = docs.get("transcript_metadata") or {}
     transcript_id = docs.get("transcript_id") or ""
+    contract_type = (docs.get("contract_type") or "").strip()
+    selected_plan = (docs.get("selected_plan") or "").strip()
+    selected_state = (docs.get("selected_state") or "").strip()
+    plan_overview = (docs.get("plan_overview") or "").strip()
 
     extracted = []
     followups = []
@@ -3214,6 +3266,11 @@ def _build_claims_case_context_for_llm(docs: dict) -> str:
     parts.append("CASE CONTEXT (Claims transcript conversation)")
     if transcript_id:
         parts.append(f"- transcriptId: {transcript_id}")
+    if contract_type or selected_plan or selected_state:
+        # Make plan metadata visible to the LLM (even if retrieval fails), but keep it compact.
+        parts.append(
+            f"- plan: state={selected_state or '(unknown)'}, contractType={contract_type or '(unknown)'}, selectedPlan={selected_plan or '(unknown)'}"
+        )
     if isinstance(transcript_meta, dict) and transcript_meta:
         fn = transcript_meta.get("fileName") or transcript_meta.get("name") or ""
         if fn:
@@ -3225,6 +3282,11 @@ def _build_claims_case_context_for_llm(docs: dict) -> str:
     if docs.get("case_disposition"):
         parts.append(f"- disposition: {docs.get('case_disposition')}")
     parts.append("")
+
+    if plan_overview:
+        parts.append("PLAN OVERVIEW (CACHED)")
+        parts.append(plan_overview)
+        parts.append("")
 
     if final_summary:
         parts.append("FINAL ANALYZED ANSWER")
@@ -3308,6 +3370,19 @@ def _retrieve_policy_chunks_for_claims(docs: dict, query: str, k: int = 6):
         if not selected_collection_name:
             return [], ""
 
+        # Lightweight logging to debug "no clauses found" issues in claims follow-up.
+        try:
+            print(
+                "[CLAIMS_FOLLOWUP] Milvus retrieval "
+                f"state={selected_state!r}->{milvus_state!r}, "
+                f"contract_type={contract_type!r}->{contract_type_norm!r}, "
+                f"selected_plan={selected_plan!r}->{selected_plan_norm!r}, "
+                f"collection={selected_collection_name!r}, "
+                f"k={k}"
+            )
+        except Exception:
+            pass
+
         vector_db1: Milvus = Milvus(
             embed,
             collection_name=selected_collection_name,
@@ -3316,6 +3391,10 @@ def _retrieve_policy_chunks_for_claims(docs: dict, query: str, k: int = 6):
         retriever = vector_db1.as_retriever(search_kwargs={"k": max(1, min(int(k), 12))})
 
         raw_docs = retriever.get_relevant_documents(query)
+        try:
+            print(f"[CLAIMS_FOLLOWUP] Milvus returned {len(raw_docs or [])} docs")
+        except Exception:
+            pass
         chunks_for_ui = []
         text_lines = []
         for i, d in enumerate(raw_docs or [], start=1):
@@ -3342,6 +3421,78 @@ def _retrieve_policy_chunks_for_claims(docs: dict, query: str, k: int = 6):
         return [], ""
 
 
+def _looks_like_plan_overview_question(q: str) -> bool:
+    """Heuristic: broad plan questions that benefit from a cached plan overview."""
+    q = (q or "").strip().lower()
+    if not q:
+        return False
+    needles = [
+        "what is covered",
+        "what's covered",
+        "whats covered",
+        "what all is covered",
+        "coverage in the plan",
+        "plan cover",
+        "covered in the plan",
+        "what does my plan cover",
+        "plan coverage",
+        "coverage summary",
+        "coverage overview",
+    ]
+    return any(n in q for n in needles)
+
+
+def _get_or_build_plan_overview_for_claims(docs: dict) -> str:
+    """Best-effort: build a cached plan overview using Milvus clauses, store in Mongo for reuse.
+
+    This is intended to make broad plan questions answerable even if the user doesn't ask a
+    clause-shaped question. If Milvus is unreachable or returns no clauses, returns "".
+    """
+    if not isinstance(docs, dict):
+        return ""
+    existing = (docs.get("plan_overview") or "").strip()
+    if existing:
+        return existing
+
+    contract_type = docs.get("contract_type")
+    selected_plan = docs.get("selected_plan")
+    selected_state = docs.get("selected_state")
+    if not all([contract_type, selected_plan, selected_state]):
+        return ""
+
+    # Pull a broader set of clauses (k=12 cap inside retrieval) and summarize.
+    overview_query = (
+        "Provide an overview of what is covered and not covered in this plan, including key limits, "
+        "exclusions, and service fees. Keep it structured and concise."
+    )
+    chunks, _ = _retrieve_policy_chunks_for_claims(docs, overview_query, k=12)
+    if not chunks:
+        return ""
+
+    clauses_blob = "\n\n".join(
+        [str(c.get("content") or "").strip() for c in (chunks or []) if isinstance(c, dict) and str(c.get("content") or "").strip()]
+    ).strip()
+    if not clauses_blob:
+        return ""
+    clauses_blob = clauses_blob[:12_000]  # keep prompt bounded
+
+    llm = ChatOpenAI(temperature=0.0, model="gpt-4o-mini")
+    prompt = (
+        "Summarize the plan coverage based ONLY on the clauses below.\n"
+        "Output sections:\n"
+        "- Covered (bullets)\n"
+        "- Not covered / exclusions (bullets)\n"
+        "- Limits / caps / service fees (bullets)\n"
+        "- Notes (eligibility, waiting periods, claim process pointers if present)\n"
+        "Be careful: do not invent coverage.\n\n"
+        f"CLAUSES:\n{clauses_blob}\n"
+    )
+    try:
+        return str(llm.invoke([HumanMessage(content=prompt)]).content or "").strip()
+    except Exception:
+        return ""
+
+
 @app.route("/claims/followup", methods=["POST"])
 def claims_followup_chat():
     """Claims follow-up chat that answers using BOTH:
@@ -3358,7 +3509,7 @@ def claims_followup_chat():
       { "aiResponse": "...", "conversationId": "...", "chatId": "..." }
     """
     try:
-        with tracer.start_span("api/claims/followup"):
+        with tracer.start_as_current_span("api/claims/followup"):
             authorization_header = request.headers.get("Authorization")
             if authorization_header is None:
                 return jsonify({"message": "Token is missing"}), 401
@@ -3392,6 +3543,43 @@ def claims_followup_chat():
             # Respect closed case lock (frontend also blocks, but enforce server-side too)
             if (docs.get("status") or "").lower() == "inactive":
                 return jsonify({"error": "Case is closed. Chat is disabled."}), 403
+
+            # Optional overrides from client (frontend knows selected plan/state from /history).
+            # This makes follow-up resilient even if an older conversation stub is missing metadata.
+            try:
+                override_contract = (data.get("contractType") or "").strip()
+                override_plan = (data.get("selectedPlan") or "").strip()
+                override_state = (data.get("selectedState") or "").strip()
+                if override_contract or override_plan or override_state:
+                    updates = {}
+                    if override_contract:
+                        updates["contract_type"] = override_contract
+                        docs["contract_type"] = override_contract
+                    if override_plan:
+                        updates["selected_plan"] = override_plan
+                        docs["selected_plan"] = override_plan
+                    if override_state:
+                        updates["selected_state"] = override_state
+                        docs["selected_state"] = override_state
+                    if updates:
+                        updates["updated_at"] = datetime.utcnow()
+                        qna_collection.update_one({"_id": ObjectId(conversation_id)}, {"$set": updates})
+            except Exception:
+                pass
+
+            # Best-effort: build & cache plan overview in Mongo for broad plan questions.
+            # This helps queries like "What is covered in the plan?" even when retrieval is sparse.
+            try:
+                if _looks_like_plan_overview_question(entered_query):
+                    overview = _get_or_build_plan_overview_for_claims(docs)
+                    if overview:
+                        qna_collection.update_one(
+                            {"_id": ObjectId(conversation_id)},
+                            {"$set": {"plan_overview": overview, "updated_at": datetime.utcnow()}},
+                        )
+                        docs["plan_overview"] = overview
+            except Exception:
+                pass
 
             case_context = _build_claims_case_context_for_llm(docs)
             if not case_context:
@@ -3471,7 +3659,7 @@ def claims_followup_chat():
 
 @app.route("/sidebar", methods=["GET"])
 def sidebar_history():
-    with tracer.start_span('api/sidebar'):
+    with tracer.start_as_current_span('api/sidebar'):
         authorization_header = request.headers.get("Authorization")
 
         if authorization_header is None:
@@ -3552,7 +3740,7 @@ def sidebar_history():
 
 @app.route("/delete", methods=["DELETE"])
 def delete_conversation():
-    with tracer.start_span('api/delete'):
+    with tracer.start_as_current_span('api/delete'):
         authorization_header = request.headers.get("Authorization")
 
         if authorization_header is None:
@@ -3576,7 +3764,7 @@ def delete_conversation():
 
 @app.route("/edit-conversation-name", methods=["PATCH"])
 def edit_name():
-    with tracer.start_span('api/edit-conversation-name'):
+    with tracer.start_as_current_span('api/edit-conversation-name'):
         authorization_header = request.headers.get("Authorization")
 
         if authorization_header is None:
@@ -3611,7 +3799,7 @@ def edit_name():
 
 @app.route("/referred-clauses", methods=["GET"])
 def referred_clauses():
-    with tracer.start_span('api/referred-clauses'):
+    with tracer.start_as_current_span('api/referred-clauses'):
         authorization_header = request.headers.get("Authorization")
 
         if authorization_header is None:
@@ -3692,7 +3880,7 @@ def list_transcripts():
     - q (str, optional): Alias for 'search' parameter
     """
     try:
-        with tracer.start_span('api/transcripts'):
+        with tracer.start_as_current_span('api/transcripts'):
             authorization_header = request.headers.get("Authorization")
             
             if authorization_header is None:
@@ -3792,7 +3980,7 @@ def list_transcripts():
 def get_transcript_content(filename):
     """Fetch transcript file content from GCS bucket"""
     try:
-        with tracer.start_span('api/transcripts/content'):
+        with tracer.start_as_current_span('api/transcripts/content'):
             # Authorization
             authorization_header = request.headers.get("Authorization")
             
@@ -4051,7 +4239,7 @@ def transcript_dialogue():
       }
     """
     try:
-        with tracer.start_span("api/transcripts/dialogue"):
+        with tracer.start_as_current_span("api/transcripts/dialogue"):
             # Authorization
             authorization_header = request.headers.get("Authorization")
             if authorization_header is None:
@@ -4127,7 +4315,7 @@ def update_transcript_status():
       - status: 'active' | 'inactive'
     """
     try:
-        with tracer.start_span('api/transcripts/status'):
+        with tracer.start_as_current_span('api/transcripts/status'):
             authorization_header = request.headers.get("Authorization")
 
             if authorization_header is None:
@@ -4200,7 +4388,7 @@ def list_transcript_conversations():
       }
     """
     try:
-        with tracer.start_span('api/transcripts/conversations'):
+        with tracer.start_as_current_span('api/transcripts/conversations'):
             authorization_header = request.headers.get("Authorization")
 
             if authorization_header is None:
@@ -4268,7 +4456,7 @@ def create_transcript_conversation_stub():
       - conversationName (optional, str)
     """
     try:
-        with tracer.start_span("api/transcripts/conversation/stub"):
+        with tracer.start_as_current_span("api/transcripts/conversation/stub"):
             authorization_header = request.headers.get("Authorization")
             if authorization_header is None:
                 return jsonify({"message": "Token is missing"}), 401
@@ -5280,12 +5468,12 @@ def process_transcript_stream():
 def process_transcript():
     """Process transcript: fetch from GCP, extract questions, and get answers"""
     try:
-        with tracer.start_span('api/transcripts/process') as parent0:
+        with tracer.start_as_current_span('api/transcripts/process') as parent0:
             start_time = time()
             extraction_warning = None
             
             # Authorization
-            with tracer.start_span('authorization', child_of=parent0):
+            with tracer.start_as_current_span('authorization'):
                 authorization_header = request.headers.get("Authorization")
                 
                 if authorization_header is None:
@@ -5297,7 +5485,7 @@ def process_transcript():
                         return (token_data[0].get_json()), token_data[1]
             
             # Get request data
-            with tracer.start_span('data-fetching', child_of=parent0):
+            with tracer.start_as_current_span('data-fetching'):
                 data = request.get_json()
                 if not data:
                     return jsonify({"error": "Request body is missing or invalid"}), 400
@@ -5510,7 +5698,7 @@ def process_transcript():
                 )
             
             # Read transcript from GCP bucket
-            with tracer.start_span('download-transcript', child_of=parent0):
+            with tracer.start_as_current_span('download-transcript'):
                 if not gcs_fs:
                     return jsonify({"error": "GCP Storage not configured or unavailable"}), 500
                 
@@ -5538,7 +5726,7 @@ def process_transcript():
             # Extract questions
             questions = []
             if extract_questions:
-                with tracer.start_span('extract-questions', child_of=parent0):
+                with tracer.start_as_current_span('extract-questions'):
                     llm_extract = ChatOpenAI(temperature=0.0, model="gpt-4o")
                     # Try direct extraction first (more reliable), then agent if needed
                     print(f"DEBUG: Attempting direct extraction first...")
@@ -5570,7 +5758,7 @@ def process_transcript():
                     return jsonify({"error": "No questions provided"}), 400
             
             # Initialize vector DB and LLM
-            with tracer.start_span('vector_db-initialization', child_of=parent0):
+            with tracer.start_as_current_span('vector_db-initialization'):
                 collection_mapping = {
                     "RE": {
                         "ShieldEssential": f"{milvus_state}_RE_ShieldEssential",
@@ -5618,7 +5806,7 @@ def process_transcript():
             total_latency = 0
             confidences = []
             
-            with tracer.start_span('process-questions', child_of=parent0):
+            with tracer.start_as_current_span('process-questions'):
                 for question_obj in questions:
                     question_text = question_obj.get("question", "")
                     question_id = question_obj.get("questionId", f"q{len(results) + 1}")
@@ -5737,7 +5925,7 @@ def process_transcript():
             # and only skip items that have no question text at all.
             final_summary_text = ""
             try:
-                with tracer.start_span('final-summary', child_of=parent0):
+                with tracer.start_as_current_span('final-summary'):
                     llm_summary = ChatOpenAI(temperature=0.0, model="gpt-4o")
                     qa_lines = []
                     for r in results or []:
@@ -5954,9 +6142,37 @@ def process_transcript_internal():
         extraction_warning = None
         
         try:
-            with tracer.start_span('api/internal/transcripts/process') as parent0:
+            # Note: `contactId` is used as the live session correlation key in this internal processor.
+            # We establish a single trace per sessionId by parenting this branch off csr_copilot.session.
+            parent0 = None
+            parent_ctx = None
+            # We'll read JSON in claims.data_fetching span below; placeholder here.
+
+            # Pre-read JSON once so we can correlate this request to the live session trace root.
+            # This does NOT change behavior; auth is still enforced before any processing.
+            try:
+                _pre_data = request.get_json() or {}
+            except Exception:
+                _pre_data = {}
+            _session_id = (_pre_data.get("contactId") or _pre_data.get("sessionId") or "").strip()
+            parent_ctx = _get_or_create_session_trace_context(_session_id) if _session_id else None
+
+            with tracer.start_as_current_span("claims.transcript_processing", context=parent_ctx) as parent0:
+                if _session_id:
+                    parent0.set_attribute("live.session_id", str(_session_id))
+                parent0.set_attribute("agent.name", "claims-transcript-processor")
+                parent0.set_attribute("agent.type", "system")
+                parent0.set_attribute("agent.orchestration", "sequential")
+
                 # --- Internal auth (simple shared secret) ---
-                with tracer.start_span('internal-auth', child_of=parent0):
+                with tracer.start_as_current_span("claims.internal_auth") as sp:
+                    if _session_id:
+                        sp.set_attribute("live.session_id", str(_session_id))
+                    sp.set_attribute("agent.name", "claims-transcript-processor")
+                    sp.set_attribute("agent.type", "system")
+                    sp.set_attribute("agent.orchestration", "sequential")
+                    sp.set_attribute("claims.stage", "security")
+                    sp.set_attribute("claims.operation", "internal_auth")
                     expected = os.getenv("INTERNAL_PROCESS_SECRET")
                     got = request.headers.get("X-Internal-Auth")
                     if not expected or got != expected:
@@ -5964,8 +6180,15 @@ def process_transcript_internal():
                         return
 
                 # --- Request body ---
-                with tracer.start_span('data-fetching', child_of=parent0):
-                    data = request.get_json()
+                with tracer.start_as_current_span("claims.data_fetching") as sp:
+                    if _session_id:
+                        sp.set_attribute("live.session_id", str(_session_id))
+                    sp.set_attribute("agent.name", "claims-transcript-processor")
+                    sp.set_attribute("agent.type", "system")
+                    sp.set_attribute("agent.orchestration", "sequential")
+                    sp.set_attribute("claims.stage", "enrichment")
+                    sp.set_attribute("claims.operation", "data_fetch")
+                    data = _pre_data or request.get_json()
                     if not data:
                         yield _sse("error", {"error": "Request body is missing or invalid"})
                         return
@@ -5984,6 +6207,8 @@ def process_transcript_internal():
 
                     contact_id = data.get("contactId")
                     agent_name = data.get("agentName")
+                    # session correlation (prefer contactId)
+                    session_id = (contact_id or data.get("sessionId") or "").strip()
 
                     # Validate required fields
                     if not transcript_file_name:
@@ -6009,7 +6234,14 @@ def process_transcript_internal():
                 )
 
                 # --- Resolve user email from mappings ---
-                with tracer.start_span('resolve-email', child_of=parent0):
+                with tracer.start_as_current_span('claims.resolve_email') as sp:
+                    if session_id:
+                        sp.set_attribute("live.session_id", str(session_id))
+                    sp.set_attribute("agent.name", "claims-transcript-processor")
+                    sp.set_attribute("agent.type", "system")
+                    sp.set_attribute("agent.orchestration", "sequential")
+                    sp.set_attribute("claims.stage", "enrichment")
+                    sp.set_attribute("claims.operation", "resolve_email")
                     user_email = None
 
                     # (A) Best: resolve from sessions mapping (contactId -> email)
@@ -6632,7 +6864,23 @@ def transcript_event():
 
     # broadcast to UI via websocket
     # 🔥 LOG TRANSCRIPT EVENT
-    print("🔴 TRANSCRIPT RECEIVED:", json.dumps(data, indent=2))
+    include_payloads = str(os.getenv("OTEL_TRACE_INCLUDE_PAYLOADS", "0") or "").strip().lower() in ("1", "true", "yes", "y", "on")
+    if include_payloads:
+        try:
+            limit = int(os.getenv("OTEL_TRACE_PAYLOAD_PREVIEW_CHARS", "500") or 500)
+        except Exception:
+            limit = 500
+        print("🔴 TRANSCRIPT RECEIVED (payload):", json.dumps(data, indent=2, default=str)[: max(0, limit)])
+    else:
+        try:
+            txt = str(data.get("text") or "")
+            print(
+                "🔴 TRANSCRIPT RECEIVED (summary): "
+                f"sessionId={data.get('sessionId')}, speaker={data.get('speaker')}, "
+                f"isPartial={bool(data.get('isPartial', True))}, text_len={len(txt)}"
+            )
+        except Exception:
+            pass
     socketio.emit("transcript_update", data)
     socketio.emit("transcript_update", data, room=data["sessionId"])
 
@@ -6666,11 +6914,29 @@ def transcript_event():
                 "plan": data.get("plan"),
             }
             
-            # Call Live Copilot to process transcript
-            copilot_result = handle_transcript_event(copilot_payload)
+            # Call Live Copilot to process transcript under the session trace root (1 trace per sessionId)
+            parent_ctx = _get_or_create_session_trace_context(session_id)
+            copilot_result = handle_transcript_event(copilot_payload, parent_context=parent_ctx)
             
             if copilot_result:
-                print("🟢 COPILOT SUGGESTION:", json.dumps(copilot_result, indent=2, default=str))
+                if include_payloads:
+                    try:
+                        limit = int(os.getenv("OTEL_TRACE_PAYLOAD_PREVIEW_CHARS", "500") or 500)
+                    except Exception:
+                        limit = 500
+                    print(
+                        "🟢 COPILOT SUGGESTION (payload):",
+                        json.dumps(copilot_result, indent=2, default=str)[: max(0, limit)],
+                    )
+                else:
+                    try:
+                        cards = copilot_result.get("cards") or []
+                        print(
+                            "🟢 COPILOT SUGGESTION (summary): "
+                            f"sessionId={copilot_result.get('sessionId')}, intent={copilot_result.get('intent')}, cards={len(cards)}"
+                        )
+                    except Exception:
+                        pass
                 # Emit suggestion to UI
                 socketio.emit("suggestion_update", copilot_result)
                 socketio.emit("suggestion_update", copilot_result, room=session_id)

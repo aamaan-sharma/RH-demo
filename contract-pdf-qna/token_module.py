@@ -13,6 +13,22 @@ import json
 import base64
 from pathlib import Path
 
+# Optional: OpenTelemetry child spans for per-step visibility in Jaeger.
+# Off by default; enable with:
+# - OTEL_TRACE_LLM_CALL_SPANS=1 (per LLM call spans)
+# - OTEL_TRACE_TOOL_CALL_SPANS=1 (per tool/retriever call spans)
+from opentelemetry import trace
+
+
+def _env_truthy(name: str, default: str = "0") -> bool:
+    raw = (os.getenv(name, default) or "").strip().lower()
+    return raw in ("1", "true", "yes", "y", "on")
+
+
+_OTEL_TRACE_LLM_CALL_SPANS = _env_truthy("OTEL_TRACE_LLM_CALL_SPANS", "1")
+_OTEL_TRACE_TOOL_CALL_SPANS = _env_truthy("OTEL_TRACE_TOOL_CALL_SPANS", "1")
+_otel_tracer = trace.get_tracer("csr_copilot.langchain")
+
 
 def _load_bigquery_credentials():
     """
@@ -129,6 +145,8 @@ class CallbackHandler(BaseCallbackHandler):
         self.token_usage = []
         self.client = []
         self.result_list = []
+        # run_id -> active OTEL span (ended on *_end callbacks)
+        self._otel_active_spans: Dict[UUID, Any] = {}
         # self.model_id = model_id
         # self.model_version = model_version
         # self.verbose = verbose
@@ -188,6 +206,28 @@ class CallbackHandler(BaseCallbackHandler):
             llm_name = serialized.get("name") or (serialized.get("id")[-1] if serialized.get("id") else "<unknown>")
         self.append_to_list("chain_name", llm_name,run_id, parent_run_id )
 
+        # Optional: child span per LLM call (shows ReAct loops clearly in Jaeger)
+        if _OTEL_TRACE_LLM_CALL_SPANS:
+            try:
+                span = _otel_tracer.start_span("llm_call")
+                span.set_attribute("langchain.run_id", str(run_id))
+                if parent_run_id is not None:
+                    span.set_attribute("langchain.parent_run_id", str(parent_run_id))
+                span.set_attribute("langchain.llm.name", str(llm_name))
+                try:
+                    span.set_attribute("langchain.prompts.count", int(len(prompts or [])))
+                    prompt_chars = 0
+                    for p in (prompts or []):
+                        if isinstance(p, str):
+                            prompt_chars += len(p)
+                    span.set_attribute("langchain.prompts.chars", int(prompt_chars))
+                except Exception:
+                    pass
+                self._otel_active_spans[run_id] = span
+            except Exception:
+                # Never break the main flow for tracing.
+                pass
+
 
     def on_llm_end(self, response: LLMResult,*,
         run_id: UUID,
@@ -215,6 +255,24 @@ class CallbackHandler(BaseCallbackHandler):
                 'model_name': response.llm_output["model_name"]
                 }
                 self.token_usage.append(payload)
+
+        # End optional span for this LLM call.
+        if _OTEL_TRACE_LLM_CALL_SPANS:
+            try:
+                span = self._otel_active_spans.pop(run_id, None)
+                if span is not None:
+                    try:
+                        if (response.llm_output is not None) and isinstance(response.llm_output, Dict):
+                            tu = response.llm_output.get("token_usage") or {}
+                            span.set_attribute("llm.model", str(response.llm_output.get("model_name") or ""))
+                            span.set_attribute("llm.tokens.prompt", int(tu.get("prompt_tokens") or 0))
+                            span.set_attribute("llm.tokens.completion", int(tu.get("completion_tokens") or 0))
+                            span.set_attribute("llm.tokens.total", int(tu.get("total_tokens") or 0))
+                    except Exception:
+                        pass
+                    span.end()
+            except Exception:
+                pass
 
     
     def on_chain_start(
@@ -254,7 +312,26 @@ class CallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> None:
         """Do nothing when tool starts."""
-        self.append_to_list("chain_name", "on_tool_start",run_id, parent_run_id )
+        tool_name = "<tool>"
+        try:
+            tool_name = serialized.get("name") or (serialized.get("id")[-1] if serialized.get("id") else tool_name)
+        except Exception:
+            pass
+
+        self.append_to_list("chain_name", str(tool_name),run_id, parent_run_id )
+
+        if _OTEL_TRACE_TOOL_CALL_SPANS:
+            try:
+                span = _otel_tracer.start_span("tool_call")
+                span.set_attribute("langchain.run_id", str(run_id))
+                if parent_run_id is not None:
+                    span.set_attribute("langchain.parent_run_id", str(parent_run_id))
+                span.set_attribute("langchain.tool.name", str(tool_name))
+                if isinstance(input_str, str):
+                    span.set_attribute("langchain.tool.input.chars", int(len(input_str)))
+                self._otel_active_spans[run_id] = span
+            except Exception:
+                pass
 
         pass
 
@@ -276,6 +353,19 @@ class CallbackHandler(BaseCallbackHandler):
         self.client.remove(last_dict)
         self.append_to_list(last_dict['chain_name'], latency,last_dict['time'],run_id, parent_run_id , is_ts=False)
 
+        if _OTEL_TRACE_TOOL_CALL_SPANS:
+            try:
+                span = self._otel_active_spans.pop(run_id, None)
+                if span is not None:
+                    try:
+                        if isinstance(output, str):
+                            span.set_attribute("langchain.tool.output.chars", int(len(output)))
+                    except Exception:
+                        pass
+                    span.end()
+            except Exception:
+                pass
+
         pass
 
     def on_retriever_start(
@@ -292,6 +382,18 @@ class CallbackHandler(BaseCallbackHandler):
         """Run when Retriever starts running."""
         
         self.append_to_list("chain_name", "VectorStoreRetriever",run_id, parent_run_id )
+
+        if _OTEL_TRACE_TOOL_CALL_SPANS:
+            try:
+                span = _otel_tracer.start_span("retriever_call")
+                span.set_attribute("langchain.run_id", str(run_id))
+                if parent_run_id is not None:
+                    span.set_attribute("langchain.parent_run_id", str(parent_run_id))
+                if isinstance(query, str):
+                    span.set_attribute("retriever.query.chars", int(len(query)))
+                self._otel_active_spans[run_id] = span
+            except Exception:
+                pass
    
     def on_retriever_end(
         self,
@@ -308,4 +410,16 @@ class CallbackHandler(BaseCallbackHandler):
         latency = time.time() - last_dict['time']
         self.client.remove(last_dict)
         self.append_to_list(last_dict['chain_name'], latency,last_dict['time'],run_id, parent_run_id , is_ts=False)
+
+        if _OTEL_TRACE_TOOL_CALL_SPANS:
+            try:
+                span = self._otel_active_spans.pop(run_id, None)
+                if span is not None:
+                    try:
+                        span.set_attribute("retriever.docs.count", int(len(list(documents or []))))
+                    except Exception:
+                        pass
+                    span.end()
+            except Exception:
+                pass
         
