@@ -89,6 +89,118 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+# -----------------------
+# Tracing helpers (ADD ONLY)
+# -----------------------
+
+
+def _trace_include_payloads() -> bool:
+    raw = (os.getenv("OTEL_TRACE_INCLUDE_PAYLOADS", "0") or "").strip().lower()
+    return raw in ("1", "true", "yes", "y", "on")
+
+
+def _payload_preview_chars() -> int:
+    # Bounded preview sizing; must be safe and opt-in.
+    try:
+        raw = (os.getenv("OTEL_TRACE_PAYLOAD_PREVIEW_CHARS", "0") or "").strip()
+        n = int(raw) if raw else 0
+        if n <= 0:
+            return 0
+        # Hard cap to reduce accidental PII leakage / huge spans.
+        return min(n, 2000)
+    except Exception:
+        return 0
+
+
+def _preview(obj: Any) -> str:
+    """
+    Produce a bounded, single-line-ish preview string for tracing attributes.
+    This should only be used when _trace_include_payloads() is true.
+    """
+    try:
+        if obj is None:
+            s = ""
+        elif isinstance(obj, str):
+            s = obj
+        else:
+            try:
+                s = json.dumps(obj, sort_keys=True, default=str)
+            except Exception:
+                s = str(obj)
+        s = (s or "").replace("\r", " ").replace("\n", " ").strip()
+        n = _payload_preview_chars()
+        if n <= 0:
+            return ""
+        if len(s) <= n:
+            return s
+        return s[:n] + "…"
+    except Exception:
+        return ""
+
+
+def _live_session_id() -> str:
+    try:
+        return _s(_live_session_id_var.get())
+    except Exception:
+        return ""
+
+
+def _set_session_attr(span) -> None:
+    try:
+        sid = _live_session_id()
+        if sid:
+            span.set_attribute("live.session_id", sid)
+    except Exception:
+        pass
+
+
+def _span_common(span, agent_name: str, agent_role: str, from_agent: str) -> None:
+    """
+    Apply consistent metadata across spans for correlation + agent attribution.
+    Do not change span names/hierarchy; this is additive metadata only.
+    """
+    try:
+        _set_session_attr(span)
+        if agent_name:
+            span.set_attribute("agent.name", agent_name)
+        if agent_role:
+            span.set_attribute("agent.role", agent_role)
+        if from_agent:
+            span.set_attribute("agent.from", from_agent)
+        span.set_attribute("agent.type", "simulated")
+        span.set_attribute("agent.orchestration", "sequential")
+    except Exception:
+        pass
+
+
+@contextmanager
+def _infer_handler_context(handler: CallbackHandler):
+    """
+    Temporarily bind app.handler = handler so that Infer's LLM calls share the
+    same request-scoped CallbackHandler.
+    """
+    # Thread-safety: Infer may run concurrently across sessions.
+    with _infer_handler_lock:
+        old = None
+        bound = False
+        try:
+            try:
+                import app as _app  # lazy import; avoids circular dependency issues
+                old = getattr(_app, "handler", None)
+                setattr(_app, "handler", handler)
+                bound = True
+            except Exception:
+                bound = False
+            yield
+        finally:
+            if bound:
+                try:
+                    import app as _app
+                    setattr(_app, "handler", old)
+                except Exception:
+                    pass
+
+
 # Hardcoded: emit suggestions at most once per second (no env needed)
 COPILOT_COOLDOWN_SECONDS = 1
 COPILOT_MAX_VERIFICATION_ASKS = _env_int("COPILOT_MAX_VERIFICATION_ASKS", 2)
@@ -859,25 +971,48 @@ def _call_suggest_llm(
     transcript: str,
     evidence: str,
 ) -> List[Dict[str, Any]]:
+    raise RuntimeError("_call_suggest_llm should be called via _call_suggest_llm_traced")
+
+
+def _call_suggest_llm_traced(
+    *,
+    intent: str,
+    customer_verified: bool,
+    customer_context: Dict[str, Any],
+    tool_result: Dict[str, Any],
+    transcript: str,
+    evidence: str,
+    handler: CallbackHandler,
+    span,
+) -> List[Dict[str, Any]]:
+    if handler is None or span is None:
+        raise RuntimeError("_call_suggest_llm_traced requires handler and span")
+
     if VERBOSE_DEBUG:
         _log("debug", "🔍", f"Generating suggestions | intent={intent} | verified={customer_verified}")
-    
+
     # Use temperature=0.0 for deterministic, consistent outputs
     llm = ChatOpenAI(temperature=0.0, model=MODEL_SUGGEST)
     chain = _suggest_prompt | llm | StrOutputParser()
-    raw = (chain.invoke(
-        {
-            "intent": intent,
-            "customer_verified": bool(customer_verified),
-            "customer_context": json.dumps(customer_context or {}, default=str),
-            "tool_result": json.dumps(tool_result or {}, default=str),
-            "transcript": transcript,
-        }
-    ) or "").strip()
-    
+    prompt_payload = {
+        "intent": intent,
+        "customer_verified": bool(customer_verified),
+        "customer_context": json.dumps(customer_context or {}, default=str),
+        "tool_result": json.dumps(tool_result or {}, default=str),
+        "transcript": transcript,
+    }
+    raw = (chain.invoke(prompt_payload, config={"callbacks": [handler]}) or "").strip()
+
+    if _trace_include_payloads():
+        try:
+            span.set_attribute("llm.prompt.preview", _preview(prompt_payload))
+            span.set_attribute("llm.response.preview", _preview(raw))
+        except Exception:
+            pass
+
     if VERBOSE_DEBUG:
         _log("debug", "📄", f"Suggestion LLM response: {raw[:150]}...")
-    
+
     # Clean markdown if present
     cleaned = raw
     if "```json" in cleaned:
@@ -885,7 +1020,7 @@ def _call_suggest_llm(
     if "```" in cleaned:
         cleaned = re.sub(r"```\n?", "", cleaned)
     cleaned = cleaned.strip()
-    
+
     try:
         obj = json.loads(cleaned)
         cards = obj.get("cards") if isinstance(obj, dict) else None
@@ -936,11 +1071,12 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                 root.set_attribute("live.transcript.preview", _preview(text))
 
             with tracer.start_as_current_span("orchestrator_agent") as orch:
-                orch.set_attribute("live.session_id", session_id)
-                orch.set_attribute("agent.name", "orchestrator-agent.live-infer")
-                orch.set_attribute("agent.role", "Coordinates intent detection, retrieval, and response generation")
-                orch.set_attribute("agent.type", "simulated")
-                orch.set_attribute("agent.orchestration", "sequential")
+                _span_common(
+                    orch,
+                    agent_name="orchestrator-agent.live-infer",
+                    agent_role="Coordinates intent detection, retrieval, and response generation",
+                    from_agent="live_call.processing",
+                )
 
                 st = _get_state(session_id)
                 _update_session_context_from_payload(st, payload)
