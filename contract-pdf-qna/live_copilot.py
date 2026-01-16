@@ -19,6 +19,8 @@ from langchain_core.output_parsers import StrOutputParser
 from monitoring_module import tracer, llm_trace_to_jaeger
 from token_module import CallbackHandler
 
+from utils.transcript_filters import is_trivial_utterance
+
 _live_session_id_var: ContextVar[str] = ContextVar("live_session_id", default="")
 _infer_handler_lock = threading.Lock()
 
@@ -209,11 +211,75 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 MILVUS_HOST = os.getenv("MILVUS_HOST")
 MONGO_URI = os.getenv("MONGO_URI")
 
-MODEL_INTENT = os.getenv("COPILOT_MODEL_INTENT", "gpt-4o")
+MODEL_INTENT = os.getenv("COPILOT_MODEL_INTENT", "gpt-3.5-turbo")
 MODEL_SUGGEST = os.getenv("COPILOT_MODEL_SUGGEST", "gpt-4o")
 
 # Debug mode: set VERBOSE_DEBUG=1 to enable detailed logging
 VERBOSE_DEBUG = os.getenv("VERBOSE_DEBUG", "").lower() in ("1", "true", "yes")
+
+# -----------------------
+# LLM instance caching (thread-safe, global reuse)
+# -----------------------
+
+# Global cache for LLM instances - reused across all transcript events
+_llm_intent_cache: Optional[ChatOpenAI] = None
+_llm_suggest_cache: Optional[ChatOpenAI] = None
+_llm_diagnostics_cache: Optional[ChatOpenAI] = None
+_llm_cache_lock = threading.Lock()  # Thread-safe initialization
+
+
+def _get_intent_llm() -> ChatOpenAI:
+    """
+    Get or create cached intent detection LLM instance (thread-safe).
+    Reuses the same instance across all transcript events for efficiency.
+    """
+    global _llm_intent_cache
+    if _llm_intent_cache is None:
+        with _llm_cache_lock:  # Prevent race condition during initialization
+            if _llm_intent_cache is None:  # Double-check pattern
+                _llm_intent_cache = ChatOpenAI(
+                    temperature=0.0,
+                    model=MODEL_INTENT,
+                    max_tokens=200,  # Limit response length for speed
+                    timeout=10.0,  # Fail fast on slow API calls
+                )
+    return _llm_intent_cache
+
+
+def _get_suggest_llm() -> ChatOpenAI:
+    """
+    Get or create cached suggestion generation LLM instance (thread-safe).
+    Reuses the same instance across all transcript events for efficiency.
+    """
+    global _llm_suggest_cache
+    if _llm_suggest_cache is None:
+        with _llm_cache_lock:  # Prevent race condition during initialization
+            if _llm_suggest_cache is None:  # Double-check pattern
+                _llm_suggest_cache = ChatOpenAI(
+                    temperature=0.0,
+                    model=MODEL_SUGGEST,
+                    max_tokens=500,  # Limit response length
+                    timeout=15.0,  # Allow more time for suggestion generation
+                )
+    return _llm_suggest_cache
+
+
+def _get_diagnostics_llm() -> ChatOpenAI:
+    """
+    Get or create cached diagnostics LLM instance (thread-safe).
+    Reuses the same instance across all transcript events for efficiency.
+    """
+    global _llm_diagnostics_cache
+    if _llm_diagnostics_cache is None:
+        with _llm_cache_lock:  # Prevent race condition during initialization
+            if _llm_diagnostics_cache is None:  # Double-check pattern
+                _llm_diagnostics_cache = ChatOpenAI(
+                    temperature=0.2,
+                    model=MODEL_SUGGEST,
+                    max_tokens=300,  # Limit response length
+                    timeout=10.0,  # Fail fast on slow API calls
+                )
+    return _llm_diagnostics_cache
 
 
 def _log(level: str, icon: str, message: str, **kwargs):
@@ -443,7 +509,7 @@ Transcript (most recent last):
 
 
 def _extract_questions_llm(*, transcript: str, handler: CallbackHandler, span) -> List[str]:
-    llm = ChatOpenAI(temperature=0.0, model=MODEL_SUGGEST)
+    llm = _get_suggest_llm()  # Use cached instance
     chain = _question_extract_prompt | llm | StrOutputParser()
     raw = (chain.invoke({"transcript": transcript}, config={"callbacks": [handler]}) or "").strip()
     if _trace_include_payloads():
@@ -725,7 +791,7 @@ Return ONLY valid JSON in exactly this schema:\n
 
 
 def _call_intent_llm(*, transcript: str, handler: CallbackHandler, span) -> Dict[str, Any]:
-    llm = ChatOpenAI(temperature=0.0, model=MODEL_INTENT)
+    llm = _get_intent_llm()  # Use cached instance
     chain = _intent_prompt | llm | StrOutputParser()
     raw = (chain.invoke({"transcript": transcript}, config={"callbacks": [handler]}) or "").strip()
     if _trace_include_payloads():
@@ -797,7 +863,7 @@ def _simple_rag_answer(*, question: str, customer: Dict[str, Any], handler: Call
             chunks.append(content.strip())
     if not chunks:
         return {"answer": "I couldn't find relevant policy language for that question.", "citedChunks": []}
-    llm = ChatOpenAI(temperature=0.0, model=MODEL_SUGGEST)
+    llm = _get_suggest_llm()  # Use cached instance
     chain = _rag_prompt | llm | StrOutputParser()
     payload = {"question": question, "chunks": "\n\n".join(chunks)}
     raw = (chain.invoke(payload, config={"callbacks": [handler]}) or "").strip()
@@ -889,7 +955,7 @@ Transcript:\n
 {transcript}\n
 """
     )
-    llm = ChatOpenAI(temperature=0.2, model=MODEL_SUGGEST)
+    llm = _get_diagnostics_llm()  # Use cached instance
     chain = prompt | llm | StrOutputParser()
     raw = (chain.invoke({"transcript": transcript}, config={"callbacks": [handler]}) or "").strip()
     if _trace_include_payloads():
@@ -992,7 +1058,7 @@ def _call_suggest_llm_traced(
         _log("debug", "🔍", f"Generating suggestions | intent={intent} | verified={customer_verified}")
 
     # Use temperature=0.0 for deterministic, consistent outputs
-    llm = ChatOpenAI(temperature=0.0, model=MODEL_SUGGEST)
+    llm = _get_suggest_llm()  # Use cached instance
     chain = _suggest_prompt | llm | StrOutputParser()
     prompt_payload = {
         "intent": intent,
@@ -1060,6 +1126,31 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
     if is_partial:
         return None
 
+    # Update buffer and session context (always needed for conversation history)
+    st = _get_state(session_id)
+    _update_session_context_from_payload(st, payload)
+    _append_buffer(st, speaker=speaker, text=text)
+
+    # Skip AI processing for CSR text - only process customer prompts for suggestions
+    if speaker == "agent":
+        # Still do minimal phone extraction and customer lookup if CSR mentions phone
+        # phone_candidates = _extract_phone_candidates(text)
+        # if phone_candidates and not st.customer:
+        #     doc = _lookup_user_by_phone([c for c in phone_candidates if c])
+        #     if doc:
+        #         st.customer = _normalize_customer_doc(doc, phone_candidates[0])
+        #         try:
+        #             st.contract_type = st.contract_type or _s(st.customer.get("contractType"))
+        #             st.selected_plan = st.selected_plan or _s(st.customer.get("plan"))
+        #             st.selected_state = st.selected_state or _s(st.customer.get("state"))
+        #         except Exception:
+        #             pass
+        # No AI suggestions needed for CSR text
+        return None
+    
+    if is_trivial_utterance(text):
+        return None
+
     handler = CallbackHandler()
     output: Optional[Dict[str, Any]] = None
     tok = _live_session_id_var.set(session_id)
@@ -1078,9 +1169,6 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                     from_agent="live_call.processing",
                 )
 
-                st = _get_state(session_id)
-                _update_session_context_from_payload(st, payload)
-                _append_buffer(st, speaker=speaker, text=text)
                 transcript = _buffer_text(st)
 
                 important_change = False
@@ -1096,15 +1184,7 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
 
                     phone_candidates = _extract_phone_candidates(text)
                     intent_obj: Dict[str, Any]
-                    if speaker == "csr" and _looks_like_verification_request(text):
-                        intent_obj = {
-                            "intent": "CUSTOMER_IDENTIFICATION",
-                            "confidence": 0.9,
-                            "entities": {"phone": "", "question": ""},
-                            "requiresVerification": True,
-                            "evidenceQuote": text[:200],
-                        }
-                    elif phone_candidates:
+                    if phone_candidates:
                         intent_obj = {
                             "intent": "CUSTOMER_IDENTIFICATION",
                             "confidence": 0.95,
@@ -1158,7 +1238,11 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                     customer_ctx = _effective_customer_context(st)
                     verified = bool(customer_ctx.get("verified"))
 
-                    should_extract = speaker == "customer" and _should_extract_questions(text)
+                    should_extract = (
+                        speaker == "customer" 
+                        and _should_extract_questions(text) 
+                        and intent not in ("CUSTOMER_IDENTIFICATION", "SMALL_TALK", "OTHER")
+                    )
                     if should_extract:
                         extracted = _extract_questions_llm(transcript=transcript, handler=handler, span=sp_ctx)
                         if not extracted:

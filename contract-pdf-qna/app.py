@@ -97,6 +97,7 @@ from monitoring_module import q_monitor, tracer, llm_trace_to_jaeger
 from token_module import token_calculator, CallbackHandler
 import threading
 
+from utils.transcript_filters import should_start_copilot
 # -----------------------------------------------------------------------------
 # Session-level trace context (1 trace per live sessionId)
 # -----------------------------------------------------------------------------
@@ -348,7 +349,6 @@ def health():
 mongo_client = MongoClient(MONGO_URI, unicode_decode_error_handler='ignore')
 db = mongo_client["FrontDoorDB"]
 db2 = mongo_client[os.getenv("MONGO_DB_NAME")]
-transcripts_collection = db2.call_transcripts
 
 model_name = "text-embedding-ada-002"
 embed = OpenAIEmbeddings(model=model_name, openai_api_key=OPENAI_API_KEY)
@@ -6835,32 +6835,6 @@ def transcript_event():
     if not session_id:
         return jsonify({"error": "sessionId is required"}), 400
 
-    # Deduplication: Check if this exact transcript already exists
-    dedup_query = {
-        "sessionId": data.get("sessionId"),
-        "speaker": data.get("speaker"),
-        "text": data.get("text"),
-        "beginOffsetMillis": data.get("beginOffsetMillis"),
-        "endOffsetMillis": data.get("endOffsetMillis"),
-    }
-    
-    existing = transcripts_collection.find_one(dedup_query)
-    if existing:
-        # Already received this transcript, skip logging and storing
-        return jsonify({"ok": True, "duplicate": True}), 200
-
-    transcript_doc = {
-        "sessionId": data["sessionId"],
-        "contactId": data.get("contactId"),
-        "speaker": data.get("speaker"),
-        "text": data.get("text"),
-        "isPartial": data.get("isPartial", True),
-        "beginOffsetMillis": data.get("beginOffsetMillis"),
-        "endOffsetMillis": data.get("endOffsetMillis"),
-        "createdAt": data.get("createdAt")
-    }
-
-    transcripts_collection.insert_one(transcript_doc)
 
     # broadcast to UI via websocket
     # 🔥 LOG TRANSCRIPT EVENT
@@ -6893,57 +6867,60 @@ def transcript_event():
     if (
         LIVE_COPILOT_AVAILABLE
         and _flag_enabled("ENABLE_LIVE_COPILOT", "0")
-        and not data.get("isPartial", True)
+        and should_start_copilot(data)
     ):
-        try:
-            # Build copilot payload with session context
-            # Include phone, state, plan, contractType from transcript payload
-            copilot_payload = {
-                "sessionId": session_id,
-                "contactId": data.get("contactId"),
-                "speaker": data.get("speaker"),
-                "text": data.get("text"),
-                "isPartial": data.get("isPartial", False),
-                "beginOffsetMillis": data.get("beginOffsetMillis"),
-                "endOffsetMillis": data.get("endOffsetMillis"),
-                # New fields from transcript for session context
-                # Support both 'phoneNumber' (Amazon Connect) and 'phone' keys
-                "phoneNumber": data.get("phoneNumber") or data.get("phone"),
-                "state": data.get("state"),
-                "contractType": data.get("contractType"),
-                "plan": data.get("plan"),
-            }
-            
-            # Call Live Copilot to process transcript under the session trace root (1 trace per sessionId)
-            parent_ctx = _get_or_create_session_trace_context(session_id)
-            copilot_result = handle_transcript_event(copilot_payload, parent_context=parent_ctx)
-            
-            if copilot_result:
-                if include_payloads:
-                    try:
-                        limit = int(os.getenv("OTEL_TRACE_PAYLOAD_PREVIEW_CHARS", "500") or 500)
-                    except Exception:
-                        limit = 500
-                    print(
-                        "🟢 COPILOT SUGGESTION (payload):",
-                        json.dumps(copilot_result, indent=2, default=str)[: max(0, limit)],
-                    )
-                else:
-                    try:
-                        cards = copilot_result.get("cards") or []
+        def process_copilot_async():
+            try:
+                # Build copilot payload with session context
+                # Include phone, state, plan, contractType from transcript payload
+                copilot_payload = {
+                    "sessionId": session_id,
+                    "contactId": data.get("contactId"),
+                    "speaker": data.get("speaker"),
+                    "text": data.get("text"),
+                    "isPartial": data.get("isPartial", False),
+                    "beginOffsetMillis": data.get("beginOffsetMillis"),
+                    "endOffsetMillis": data.get("endOffsetMillis"),
+                    # New fields from transcript for session context
+                    # Support both 'phoneNumber' (Amazon Connect) and 'phone' keys
+                    "phoneNumber": data.get("phoneNumber") or data.get("phone"),
+                    "state": data.get("state"),
+                    "contractType": data.get("contractType"),
+                    "plan": data.get("plan"),
+                }
+                
+                # Call Live Copilot to process transcript under the session trace root (1 trace per sessionId)
+                parent_ctx = _get_or_create_session_trace_context(session_id)
+                copilot_result = handle_transcript_event(copilot_payload, parent_context=parent_ctx)
+                
+                if copilot_result:
+                    if include_payloads:
+                        try:
+                            limit = int(os.getenv("OTEL_TRACE_PAYLOAD_PREVIEW_CHARS", "500") or 500)
+                        except Exception:
+                            limit = 500
                         print(
-                            "🟢 COPILOT SUGGESTION (summary): "
-                            f"sessionId={copilot_result.get('sessionId')}, intent={copilot_result.get('intent')}, cards={len(cards)}"
+                            "🟢 COPILOT SUGGESTION (payload):",
+                            json.dumps(copilot_result, indent=2, default=str)[: max(0, limit)],
                         )
-                    except Exception:
-                        pass
-                # Emit suggestion to UI
-                socketio.emit("suggestion_update", copilot_result)
-                socketio.emit("suggestion_update", copilot_result, room=session_id)
-        except Exception as e:
-            print(f"⚠️ Copilot processing error (non-blocking): {e}")
-            import traceback
-            traceback.print_exc()
+                    else:
+                        try:
+                            cards = copilot_result.get("cards") or []
+                            print(
+                                "🟢 COPILOT SUGGESTION (summary): "
+                                f"sessionId={copilot_result.get('sessionId')}, intent={copilot_result.get('intent')}, cards={len(cards)}"
+                            )
+                        except Exception:
+                            pass
+                    # Emit suggestion to UI
+                    socketio.emit("suggestion_update", copilot_result)
+                    socketio.emit("suggestion_update", copilot_result, room=session_id)
+            except Exception as e:
+                print(f"⚠️ Copilot processing error (non-blocking): {e}")
+                import traceback
+                traceback.print_exc()
+        # threading.Thread(target=process_copilot_async, daemon=True).start()
+        socketio.start_background_task(process_copilot_async)
     # =============================================================
 
     return jsonify({"ok": True}), 200
