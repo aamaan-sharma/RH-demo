@@ -98,6 +98,17 @@ from token_module import token_calculator, CallbackHandler
 import threading
 
 from utils.transcript_filters import should_start_copilot
+from config import (
+    OPENAI_API_KEY,
+    MONGO_URI,
+    MILVUS_HOST,
+    JWT_AUDIENCE,
+    JWKS_URL,
+    GCP_BUCKET_NAME,
+    GCP_PROJECT_ID,
+    MOTORHEAD_API_KEY,
+    MOTORHEAD_CLIENT_ID
+)
 # -----------------------------------------------------------------------------
 # Session-level trace context (1 trace per live sessionId)
 # -----------------------------------------------------------------------------
@@ -170,13 +181,6 @@ try:
 except Exception:
     raise
 
-JWT_AUDIENCE = os.getenv("JWT_AUDIENCE")
-JWKS_URL = os.getenv("JWKS_URL")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-MILVUS_HOST = os.getenv("MILVUS_HOST")
-MONGO_URI = (
-    os.getenv("MONGO_URI")
-)
 
 # ----------------------------
 # Live Copilot: session gating
@@ -348,15 +352,10 @@ def health():
 
 mongo_client = MongoClient(MONGO_URI, unicode_decode_error_handler='ignore')
 db = mongo_client["FrontDoorDB"]
-db2 = mongo_client[os.getenv("MONGO_DB_NAME")]
 
 model_name = "text-embedding-ada-002"
 embed = OpenAIEmbeddings(model=model_name, openai_api_key=OPENAI_API_KEY)
 
-# Initialize GCP Storage using fsspec (with Application Default Credentials)
-# Supports multiple authentication methods via environment variables
-GCP_BUCKET_NAME = os.getenv("GCP_BUCKET_NAME", "ahs-demo-transcripts")
-GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "generative-ai-390411")
 GCP_SERVICE_ACCOUNT_PATH = os.getenv("GCP_SERVICE_ACCOUNT_PATH", None)  # Optional: path to service account JSON
 gcs_fs = None  # fsspec filesystem instance for GCS
 
@@ -587,8 +586,6 @@ def input_prompt(entered_query, qa, llm):
 
     current_time = time()
 
-    MOTORHEAD_API_KEY = os.getenv("MOTORHEAD_API_KEY")
-    MOTORHEAD_CLIENT_ID = os.getenv("MOTORHEAD_CLIENT_ID")
     MOTORHEAD_SESSION_ID = str(current_time)
     MOTORHEAD_MEMORY_KEY = "chat_history"
 
@@ -6822,10 +6819,6 @@ def process_transcript_internal():
 
 @app.route("/webhook", methods=["POST"])
 def transcript_event():
-    # simple shared-secret auth
-    # auth = request.headers.get("authorization", "")
-    # if auth != f"Bearer {os.getenv('FLASK_AUTH_TOKEN')}":
-    #     return {"error": "unauthorized"}, 401
 
     data = request.get_json()
     if not data:
