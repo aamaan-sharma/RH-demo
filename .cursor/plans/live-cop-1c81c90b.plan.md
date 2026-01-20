@@ -1,24 +1,3 @@
----
-name: Live Copilot Real-Time Suggestion System
-overview: ""
-todos:
-  - id: 178100ce-7486-4719-b34c-ebd38922e56d
-    content: Import live_copilot module in app.py
-    status: pending
-  - id: e8a39b69-d3df-45bb-b1b6-a00692713b44
-    content: Add copilot_enable/copilot_disable Socket.IO handlers
-    status: pending
-  - id: c72eeaa6-9b15-4903-8a1f-ffa39c05e37b
-    content: Integrate copilot processing in /webhook endpoint
-    status: pending
-  - id: ac72e02c-05bc-4723-8198-d55e7c5a8419
-    content: Update live_copilot.py to parse new payload format with phone/state/plan/contractType
-    status: pending
-  - id: 5bb07ea5-4d9a-414a-9e6d-cf86bd42800f
-    content: Test end-to-end flow with sample transcript
-    status: pending
----
-
 # Live Copilot Real-Time Suggestion System
 
 ## Architecture

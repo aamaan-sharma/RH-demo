@@ -1,5 +1,13 @@
 # Set the OpenAI API Keys, embedding model,
+_async_mode = "threading"
+try:
+    import eventlet  # noqa: F401
 
+    # Prefer eventlet when available (recommended for production SocketIO)
+    _async_mode = "eventlet"
+    eventlet.monkey_patch()
+except Exception:
+    _async_mode = os.getenv("SOCKETIO_ASYNC_MODE", "threading")
 import os
 import asyncio
 from dotenv import load_dotenv
@@ -162,14 +170,6 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret")
 
-_async_mode = "threading"
-try:
-    import eventlet  # noqa: F401
-
-    # Prefer eventlet when available (recommended for production SocketIO)
-    _async_mode = "eventlet"
-except Exception:
-    _async_mode = os.getenv("SOCKETIO_ASYNC_MODE", "threading")
 
 try:
     socketio = SocketIO(
@@ -180,7 +180,7 @@ try:
     )
 except Exception:
     raise
-
+print(_async_mode)
 
 # ----------------------------
 # Live Copilot: session gating
@@ -6912,8 +6912,8 @@ def transcript_event():
                 print(f"⚠️ Copilot processing error (non-blocking): {e}")
                 import traceback
                 traceback.print_exc()
-        # threading.Thread(target=process_copilot_async, daemon=True).start()
-        socketio.start_background_task(process_copilot_async)
+        threading.Thread(target=process_copilot_async, daemon=True).start()
+        # socketio.start_background_task(process_copilot_async)
     # =============================================================
 
     return jsonify({"ok": True}), 200
