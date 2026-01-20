@@ -52,7 +52,7 @@ services:
       GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/bigquery.json
 
       # ---- GCS creds ----
-      # Force app.py to use the explicit service-account path (avoids ADC invalid_scope in containers)
+      # Force the application to use the explicit service-account path (avoids ADC invalid_scope in containers)
       GCP_SERVICE_ACCOUNT_PATH: /run/secrets/bigquery.json
 
     # If you want automatic restarts:

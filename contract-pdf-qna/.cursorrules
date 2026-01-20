@@ -1,0 +1,16 @@
+# Project Rules: Flask, Langchain & Agentic AI
+
+## Core Principles
+- Always follow SOLID principles and Clean Architecture.
+- Maintain a modular project structure (Blueprints for routes, Services for logic, Tools for agents).
+- Avoid circular dependencies by using the Flask Application Factory pattern.
+
+## Coding Standards
+- Use Python type hints for all function signatures.
+- Prefer absolute imports (e.g., `from app.services import agent_manager`) over relative imports.
+- Ensure every agent tool is isolated in the `app/tools/` directory with a clear description for the LLM.
+
+## Refactoring Guidelines
+- Before applying changes, verify that the new structure doesn't break existing functionality.
+- Remove unused imports and dead code automatically.
+- Centralize LLM configurations in `app/services/llm_factory.py`.

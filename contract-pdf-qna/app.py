@@ -97,18 +97,6 @@ from monitoring_module import q_monitor, tracer, llm_trace_to_jaeger
 from token_module import token_calculator, CallbackHandler
 import threading
 
-from utils.transcript_filters import should_start_copilot
-from config import (
-    OPENAI_API_KEY,
-    MONGO_URI,
-    MILVUS_HOST,
-    JWT_AUDIENCE,
-    JWKS_URL,
-    GCP_BUCKET_NAME,
-    GCP_PROJECT_ID,
-    MOTORHEAD_API_KEY,
-    MOTORHEAD_CLIENT_ID
-)
 # -----------------------------------------------------------------------------
 # Session-level trace context (1 trace per live sessionId)
 # -----------------------------------------------------------------------------
@@ -181,6 +169,13 @@ try:
 except Exception:
     raise
 
+JWT_AUDIENCE = os.getenv("JWT_AUDIENCE")
+JWKS_URL = os.getenv("JWKS_URL")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+MILVUS_HOST = os.getenv("MILVUS_HOST")
+MONGO_URI = (
+    os.getenv("MONGO_URI")
+)
 
 # ----------------------------
 # Live Copilot: session gating
@@ -352,10 +347,16 @@ def health():
 
 mongo_client = MongoClient(MONGO_URI, unicode_decode_error_handler='ignore')
 db = mongo_client["FrontDoorDB"]
+db2 = mongo_client[os.getenv("MONGO_DB_NAME")]
+transcripts_collection = db2.call_transcripts
 
 model_name = "text-embedding-ada-002"
 embed = OpenAIEmbeddings(model=model_name, openai_api_key=OPENAI_API_KEY)
 
+# Initialize GCP Storage using fsspec (with Application Default Credentials)
+# Supports multiple authentication methods via environment variables
+GCP_BUCKET_NAME = os.getenv("GCP_BUCKET_NAME", "ahs-demo-transcripts")
+GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "generative-ai-390411")
 GCP_SERVICE_ACCOUNT_PATH = os.getenv("GCP_SERVICE_ACCOUNT_PATH", None)  # Optional: path to service account JSON
 gcs_fs = None  # fsspec filesystem instance for GCS
 
@@ -586,6 +587,8 @@ def input_prompt(entered_query, qa, llm):
 
     current_time = time()
 
+    MOTORHEAD_API_KEY = os.getenv("MOTORHEAD_API_KEY")
+    MOTORHEAD_CLIENT_ID = os.getenv("MOTORHEAD_CLIENT_ID")
     MOTORHEAD_SESSION_ID = str(current_time)
     MOTORHEAD_MEMORY_KEY = "chat_history"
 
@@ -1935,13 +1938,46 @@ Answer format:
             if MILVUS_MAX_RETURN_CHUNKS is not None:
                 docs_iter = docs_for_chunks[:MILVUS_MAX_RETURN_CHUNKS]
 
+            print(f"[CHUNKS_DEBUG] process_single_transcript_question: Processing {len(docs_iter)} documents")
+            
             for doc in docs_iter:
+                chunk_index = len(chunk_texts) + 1
+                print(f"\n[CHUNKS_DEBUG] ========== Chunk {chunk_index} (process_single_transcript_question) ==========")
+                
                 content = (getattr(doc, "page_content", "") or "").strip()
                 metadata = getattr(doc, "metadata", {}) or {}
+                
+                print(f"[CHUNKS_DEBUG] Content preview (first 100 chars): {content[:100]}...")
+                print(f"[CHUNKS_DEBUG] Metadata type: {type(metadata)}")
+                
                 if not content:
+                    print(f"[CHUNKS_DEBUG] SKIPPING: No content in document")
                     continue
+                
+                # Detailed metadata logging
+                if isinstance(metadata, dict):
+                    print(f"[CHUNKS_DEBUG] Metadata keys: {list(metadata.keys())}")
+                    # Print each metadata field individually for clarity
+                    for key, value in metadata.items():
+                        print(f"[CHUNKS_DEBUG]   {key}: {value}")
+                    print(f"[CHUNKS_DEBUG] Full metadata JSON: {json.dumps(metadata, default=str, indent=2)}")
+                else:
+                    print(f"[CHUNKS_DEBUG] Metadata value: {metadata}")
+                
+                print(f"[CHUNKS_DEBUG] ===========================================\n")
+                
+                # Generate meaningful name from metadata
+                chunk_name = _generate_chunk_name(metadata, chunk_index)
+                
+                # Log the generated name
+                print(f"[CHUNKS_DEBUG] Generated chunk name for chunk {chunk_index}: '{chunk_name}'")
+                
                 chunk_texts.append(content)
-                chunk_details.append({"content": content, "metadata": metadata})
+                chunk_details.append({
+                    "content": content, 
+                    "metadata": metadata,
+                    "name": chunk_name  # Add meaningful name
+                })
         except Exception as e:
             print(f"[CHUNKS] process_single_transcript_question: ERROR building chunks: {e}")
 
@@ -1957,23 +1993,51 @@ Answer format:
 
         # Log the exact chunks that will be returned with this question
         returned_chunks = chunk_texts
+        returned_chunk_details = chunk_details
         if MILVUS_MAX_RETURN_CHUNKS is not None:
             returned_chunks = chunk_texts[:MILVUS_MAX_RETURN_CHUNKS]
+            returned_chunk_details = chunk_details[:MILVUS_MAX_RETURN_CHUNKS]
+        
+        # Return chunks as objects with names for better UI display
+        # Frontend can handle both string arrays (backward compatibility) and object arrays
+        chunks_with_names = []
+        for detail in returned_chunk_details:
+            if isinstance(detail, dict):
+                chunk_obj = {
+                    "content": detail.get("content", ""),
+                    "metadata": detail.get("metadata", {}),
+                    "name": detail.get("name", f"Clause {len(chunks_with_names) + 1}")
+                }
+                chunks_with_names.append(chunk_obj)
+                # Log what we're returning
+                print(f"[CHUNKS_DEBUG] ✅ Returning chunk object with name: '{chunk_obj.get('name')}'")
+            else:
+                # Fallback for backward compatibility
+                chunks_with_names.append({
+                    "content": str(detail) if not isinstance(detail, dict) else detail.get("content", ""),
+                    "name": f"Clause {len(chunks_with_names) + 1}"
+                })
+        
+        print(f"[CHUNKS_DEBUG] ✅ Total chunks_with_names: {len(chunks_with_names)}")
+        if chunks_with_names:
+            print(f"[CHUNKS_DEBUG] ✅ First chunk name: '{chunks_with_names[0].get('name', 'MISSING')}'")
+            print(f"[CHUNKS_DEBUG] ✅ First chunk keys: {list(chunks_with_names[0].keys())}")
+        
         # print(
         #     "[CHUNKS] process_single_transcript_question: returning relevantChunks="
         #     f"{[c[:200].replace(chr(10), ' ') for c in returned_chunks]}"
         # )
 
+        # Use chunks_with_names as the primary format (objects with name, content, metadata)
+        # This ensures MongoDB stores objects with names, not just strings
         return {
             "answer": answer,
-            # API contract: array of strings
-            "relevantChunks": returned_chunks,
+            # Return chunks as objects with names (this is what gets stored in MongoDB)
+            "relevantChunks": chunks_with_names,  # Changed from returned_chunks (strings) to chunks_with_names (objects)
+            # Keep string array for backward compatibility if needed
+            "relevantChunksStrings": returned_chunks,
             # Keep details for optional persistence/debugging
-            "relevantChunksDetail": (
-                chunk_details[:MILVUS_MAX_RETURN_CHUNKS]
-                if MILVUS_MAX_RETURN_CHUNKS is not None
-                else chunk_details
-            ),
+            "relevantChunksDetail": returned_chunk_details,
             "confidence": 0.90,  # Default confidence, can be calculated from LLM
             "latency": q_latency
         }
@@ -2905,6 +2969,37 @@ def chat_history():
             chat_id = chat.get("chat_id")
             if chat_id in feedback_dict:
                 chat["reaction"] = feedback_dict[chat_id]
+            # Normalize chunks to ensure they have names
+            if "relevant_chunks" in chat:
+                print(f"\n[HISTORY_API] ===== Normalizing chunks for chat_id: {chat_id} =====")
+                print(f"[HISTORY_API] Original chunks type: {type(chat['relevant_chunks'])}")
+                print(f"[HISTORY_API] Original chunks count: {len(chat['relevant_chunks']) if isinstance(chat['relevant_chunks'], list) else 'not_list'}")
+                if isinstance(chat["relevant_chunks"], list) and len(chat["relevant_chunks"]) > 0:
+                    for idx, c in enumerate(chat["relevant_chunks"][:3], start=1):
+                        print(f"[HISTORY_API] Original chunk {idx} type: {type(c)}")
+                        if isinstance(c, dict):
+                            print(f"[HISTORY_API] Original chunk {idx} keys: {list(c.keys())}")
+                            print(f"[HISTORY_API] Original chunk {idx} NAME: '{c.get('name', 'MISSING NAME!')}'")
+                            if c.get('metadata'):
+                                source = c.get('metadata', {}).get('source', '')
+                                print(f"[HISTORY_API] Original chunk {idx} metadata.source: {source}")
+                        else:
+                            print(f"[HISTORY_API] Original chunk {idx} is STRING: {str(c)[:50]}")
+                
+                normalized_chunks = _normalize_chunks_with_names(chat["relevant_chunks"])
+                chat["relevant_chunks"] = normalized_chunks
+                chat["relevantChunks"] = normalized_chunks
+                
+                print(f"[HISTORY_API] After normalization:")
+                for idx, c in enumerate(normalized_chunks[:3], start=1):
+                    if isinstance(c, dict):
+                        print(f"[HISTORY_API]   Normalized chunk {idx} NAME: '{c.get('name', 'STILL MISSING!')}'")
+                    else:
+                        print(f"[HISTORY_API]   Normalized chunk {idx} is not dict!")
+                print(f"[HISTORY_API] ===========================================\n")
+            elif "relevantChunks" in chat:
+                normalized_chunks = _normalize_chunks_with_names(chat["relevantChunks"])
+                chat["relevantChunks"] = normalized_chunks
             # Normalize chunk fields for frontend consumption (keep backwards-compatible snake_case too)
             if "relevant_chunks" in chat and "relevantChunks" not in chat:
                 chat["relevantChunks"] = chat.get("relevant_chunks")
@@ -3331,17 +3426,33 @@ def _retrieve_policy_chunks_for_claims(docs: dict, query: str, k: int = 6):
       - chunks_for_ui: list[dict] where each dict has {content, metadata}
       - referred_docs_text: a readable text blob for /referred-clauses legacy page
     """
+    # Entry point logging
+    print(f"\n{'='*80}")
+    print(f"[CHUNKS_DEBUG] _retrieve_policy_chunks_for_claims CALLED")
+    print(f"[CHUNKS_DEBUG] Query: {query[:100] if query else 'EMPTY'}")
+    print(f"[CHUNKS_DEBUG] Docs type: {type(docs)}")
+    print(f"{'='*80}\n")
+    
     try:
         if not isinstance(docs, dict):
+            print(f"[CHUNKS_DEBUG] ERROR: docs is not a dict, returning empty")
             return [], ""
         query = (query or "").strip()
         if not query:
+            print(f"[CHUNKS_DEBUG] ERROR: query is empty, returning empty")
             return [], ""
 
         contract_type = docs.get("contract_type")
         selected_plan = docs.get("selected_plan")
         selected_state = docs.get("selected_state")
+        
+        # Log the extracted values
+        print(f"[CHUNKS_DEBUG] contract_type={contract_type}")
+        print(f"[CHUNKS_DEBUG] selected_plan={selected_plan}")
+        print(f"[CHUNKS_DEBUG] selected_state={selected_state}")
+        
         if not all([contract_type, selected_plan, selected_state]):
+            print(f"[CHUNKS_DEBUG] ERROR: Missing required fields (contract_type, selected_plan, or selected_state), returning empty")
             return [], ""
 
         milvus_state = normalize_state_for_milvus(selected_state)
@@ -3364,7 +3475,13 @@ def _retrieve_policy_chunks_for_claims(docs: dict, query: str, k: int = 6):
         selected_collection_name = collection_mapping.get(contract_type_norm, {}).get(
             selected_plan_norm, collection_mapping.get(contract_type_norm, {}).get("default")
         )
+        
+        # Log collection name
+        print(f"[CHUNKS_DEBUG] Normalized: state={milvus_state}, contract={contract_type_norm}, plan={selected_plan_norm}")
+        print(f"[CHUNKS_DEBUG] Selected collection: {selected_collection_name}")
+        
         if not selected_collection_name:
+            print(f"[CHUNKS_DEBUG] ERROR: No collection name found, returning empty")
             return [], ""
 
         # Lightweight logging to debug "no clauses found" issues in claims follow-up.
@@ -3380,6 +3497,7 @@ def _retrieve_policy_chunks_for_claims(docs: dict, query: str, k: int = 6):
         except Exception:
             pass
 
+        print(f"[CHUNKS_DEBUG] Connecting to Milvus...")
         vector_db1: Milvus = Milvus(
             embed,
             collection_name=selected_collection_name,
@@ -3387,35 +3505,222 @@ def _retrieve_policy_chunks_for_claims(docs: dict, query: str, k: int = 6):
         )
         retriever = vector_db1.as_retriever(search_kwargs={"k": max(1, min(int(k), 12))})
 
+        print(f"[CHUNKS_DEBUG] Querying Milvus with query: {query[:200]}...")
         raw_docs = retriever.get_relevant_documents(query)
+        
+        # Detailed logging after retrieval
+        print(f"[CHUNKS_DEBUG] Milvus returned {len(raw_docs or [])} documents")
+        print(f"[CHUNKS_DEBUG] raw_docs type: {type(raw_docs)}")
+        
         try:
             print(f"[CLAIMS_FOLLOWUP] Milvus returned {len(raw_docs or [])} docs")
         except Exception:
             pass
+            
         chunks_for_ui = []
         text_lines = []
+        
+        # Check if we have any docs
+        if not raw_docs or len(raw_docs) == 0:
+            print(f"[CHUNKS_DEBUG] WARNING: No documents retrieved from Milvus!")
+            return [], ""
+        
+        print(f"[CHUNKS_DEBUG] Processing {len(raw_docs)} documents...")
+        
         for i, d in enumerate(raw_docs or [], start=1):
+            print(f"\n[CHUNKS_DEBUG] ---------- Processing Document {i} ----------")
+            
+            # Check document type and attributes
+            print(f"[CHUNKS_DEBUG] Document type: {type(d)}")
+            print(f"[CHUNKS_DEBUG] Document attributes: {dir(d)}")
+            
             content = (getattr(d, "page_content", "") or "").strip()
             metadata = getattr(d, "metadata", {}) or {}
+            
+            print(f"[CHUNKS_DEBUG] Content length: {len(content)}")
+            print(f"[CHUNKS_DEBUG] Content preview (first 150 chars): {content[:150]}...")
+            print(f"[CHUNKS_DEBUG] Metadata type: {type(metadata)}")
+            
             if not content:
+                print(f"[CHUNKS_DEBUG] SKIPPING: No content in document {i}")
                 continue
-            chunks_for_ui.append({"content": content, "metadata": metadata})
-            # Build a readable blob for legacy referred clauses page
-            src = ""
+            
+            # Detailed metadata logging
             if isinstance(metadata, dict):
-                src = metadata.get("source") or metadata.get("file") or metadata.get("document") or ""
-            header = f"Clause {i}"
-            if src:
-                header += f" ({src})"
+                print(f"[CHUNKS_DEBUG] Metadata keys: {list(metadata.keys())}")
+                print(f"[CHUNKS_DEBUG] Full metadata:")
+                for key, value in metadata.items():
+                    print(f"[CHUNKS_DEBUG]   {key}: {value}")
+                print(f"[CHUNKS_DEBUG] Metadata JSON: {json.dumps(metadata, default=str, indent=2)}")
+            else:
+                print(f"[CHUNKS_DEBUG] Metadata is not a dict: {metadata}")
+            
+            # Generate meaningful name from metadata
+            chunk_name = _generate_chunk_name(metadata, i)
+            
+            # Log the generated name
+            print(f"[CHUNKS_DEBUG] Generated chunk name: '{chunk_name}'")
+            
+            # Add chunk with name, content, and metadata
+            chunk_obj = {
+                "content": content, 
+                "metadata": metadata,
+                "name": chunk_name  # Add meaningful name
+            }
+            chunks_for_ui.append(chunk_obj)
+            
+            # Log what we're adding - show the actual name being stored
+            print(f"[CHUNKS_DEBUG] Chunk object being added:")
+            print(f"[CHUNKS_DEBUG]   name: '{chunk_obj.get('name')}'")
+            print(f"[CHUNKS_DEBUG]   content length: {len(chunk_obj.get('content', ''))}")
+            print(f"[CHUNKS_DEBUG]   Full object (truncated): {json.dumps({k: (v[:50] + '...' if isinstance(v, str) and len(v) > 50 else v) for k, v in chunk_obj.items() if k != 'metadata'}, default=str)}")
+            
+            # Build a readable blob for legacy referred clauses page
+            # Use the generated name instead of generic "Clause {i}"
+            header = chunk_name
             text_lines.append(header)
             text_lines.append(content)
             text_lines.append("")
+            
+            print(f"[CHUNKS_DEBUG] Added chunk {i} to chunks_for_ui with name: '{chunk_name}'")
+            print(f"[CHUNKS_DEBUG] ----------------------------------------\n")
 
+        print(f"[CHUNKS_DEBUG] FINAL: Total chunks_for_ui: {len(chunks_for_ui)}")
+        print(f"[CHUNKS_DEBUG] FINAL: Total text_lines: {len(text_lines)}")
+        
         referred_docs_text = "\n".join(text_lines).strip()
         return chunks_for_ui, referred_docs_text
     except Exception as e:
+        print(f"[CHUNKS_DEBUG] EXCEPTION in _retrieve_policy_chunks_for_claims: {e}")
+        import traceback
+        traceback.print_exc()
         print(f"Warning: policy retrieval failed for claims followup: {e}")
         return [], ""
+
+
+def _normalize_chunks_with_names(chunks: list) -> list:
+    """
+    Normalize chunks to ensure they have a 'name' field.
+    If chunks are strings, convert them to objects.
+    If chunks are objects without names, generate names from metadata.
+    """
+    if not isinstance(chunks, list):
+        return []
+    
+    normalized = []
+    for idx, chunk in enumerate(chunks, start=1):
+        if isinstance(chunk, str):
+            # Convert string to object
+            normalized.append({
+                "content": chunk,
+                "name": f"Clause {idx}"
+            })
+        elif isinstance(chunk, dict):
+            # Ensure it has a name field
+            if "name" not in chunk or not chunk.get("name"):
+                # Generate name from metadata if available
+                metadata = chunk.get("metadata", {}) or {}
+                chunk["name"] = _generate_chunk_name(metadata, idx)
+            normalized.append(chunk)
+        else:
+            # Fallback for unknown types
+            normalized.append({
+                "content": str(chunk),
+                "name": f"Clause {idx}"
+            })
+    
+    return normalized
+
+
+def _generate_chunk_name(metadata: dict, index: int) -> str:
+    """
+    Generate a meaningful name for a chunk based on its metadata.
+    Priority order:
+    1. Extract filename from source path (most common case) - ONLY filename, not full path
+    2. section + clause/page number
+    3. heading/title + page number
+    4. clause number
+    5. Fallback to "Clause {index}"
+    """
+    if not isinstance(metadata, dict):
+        return f"Clause {index}"
+    
+    import os
+    
+    # Try to extract meaningful identifiers
+    source = metadata.get("source") or metadata.get("file") or metadata.get("document") or metadata.get("Source") or ""
+    section = metadata.get("section") or metadata.get("Section") or ""
+    clause = metadata.get("clause") or metadata.get("Clause") or metadata.get("clause_number") or ""
+    page = metadata.get("page") or metadata.get("Page") or metadata.get("page_number") or ""
+    heading = metadata.get("heading") or metadata.get("Heading") or metadata.get("title") or metadata.get("Title") or ""
+    
+    # Build name parts
+    name_parts = []
+    
+    # Priority 1: Extract ONLY filename from source path (most common case)
+    if source:
+        source_str = str(source).strip()
+        
+        # Extract just the filename part (last component of path)
+        # Use os.path.basename() for reliable cross-platform extraction
+        # Convert Windows backslashes to forward slashes first (os.path.basename handles both, but this ensures consistency)
+        normalized_path = source_str.replace("\\", "/")
+        source_name = os.path.basename(normalized_path)
+        
+        # Double-check: if basename still contains separators, manually extract last part
+        if "/" in source_name or "\\" in source_name:
+            # Manual fallback: take last part after any separator
+            if "\\" in source_str:
+                parts = [p.strip() for p in source_str.split("\\") if p.strip()]
+            elif "/" in source_str:
+                parts = [p.strip() for p in source_str.split("/") if p.strip()]
+            else:
+                parts = [source_str]
+            source_name = parts[-1] if parts else source_str
+        
+        print(f"[CHUNKS_DEBUG] 📁 Extracting filename from: '{source_str[:70]}...'")
+        print(f"[CHUNKS_DEBUG] 📁 Extracted filename (before extension removal): '{source_name}'")
+        
+        # Remove file extension for cleaner display (e.g., .docx, .doc, .pdf)
+        original_name = source_name
+        if "." in source_name:
+            source_name = source_name.rsplit(".", 1)[0]
+            print(f"[CHUNKS_DEBUG] 📁 Removed extension: '{original_name}' -> '{source_name}'")
+        
+        # Replace underscores and hyphens with spaces for better readability
+        source_name = source_name.replace("_", " ").replace("-", " ")
+        
+        # Capitalize first letter of each word
+        source_name = " ".join(word.capitalize() for word in source_name.split() if word.strip())
+        
+        # Log the final result
+        print(f"[CHUNKS_DEBUG] 📁 FINAL extracted filename: '{source_name}' (from path: '{source_str[:60]}...')")
+        
+        name_parts.append(source_name)
+    
+    # Priority 2: Section + Clause
+    if section and clause and not name_parts:
+        name_parts.append(f"{section} - Clause {clause}")
+    elif section and not name_parts:
+        name_parts.append(section)
+    
+    # Priority 3: Heading/Title
+    if heading and not name_parts:
+        name_parts.append(heading)
+    
+    # Add page number if available
+    if page:
+        name_parts.append(f"Page {page}")
+    
+    # If we have any meaningful parts, join them
+    if name_parts:
+        return " · ".join(name_parts)
+    
+    # Fallback to clause number or index
+    if clause:
+        return f"Clause {clause}"
+    
+    return f"Clause {index}"
 
 
 def _looks_like_plan_overview_question(q: str) -> bool:
@@ -3583,9 +3888,40 @@ def claims_followup_chat():
                 return jsonify({"error": "Missing case context for this conversation"}), 400
 
             # Hybrid: retrieve policy clauses from Milvus using the case's stored contract/plan/state
+            print(f"\n[CLAIMS_FOLLOWUP] About to call _retrieve_policy_chunks_for_claims")
+            print(f"[CLAIMS_FOLLOWUP] entered_query: {entered_query}")
+            print(f"[CLAIMS_FOLLOWUP] docs keys: {list(docs.keys()) if isinstance(docs, dict) else 'not_dict'}")
+            print(f"[CLAIMS_FOLLOWUP] contract_type: {docs.get('contract_type')}")
+            print(f"[CLAIMS_FOLLOWUP] selected_plan: {docs.get('selected_plan')}")
+            print(f"[CLAIMS_FOLLOWUP] selected_state: {docs.get('selected_state')}\n")
+            
             policy_chunks, referred_docs_text = _retrieve_policy_chunks_for_claims(docs, entered_query, k=6)
+
+            print(f"[CLAIMS_FOLLOWUP] Returned from _retrieve_policy_chunks_for_claims")
+            print(f"[CLAIMS_FOLLOWUP] policy_chunks count: {len(policy_chunks) if policy_chunks else 0}")
+            print(f"[CLAIMS_FOLLOWUP] referred_docs_text length: {len(referred_docs_text) if referred_docs_text else 0}\n")
+            
+            # Log the structure of chunks being stored - DETAILED
+            if policy_chunks:
+                print(f"\n{'='*80}")
+                print(f"[CLAIMS_FOLLOWUP] ===== CHUNKS BEING STORED IN MONGODB =====")
+                for idx, ch in enumerate(policy_chunks, start=1):
+                    print(f"[CLAIMS_FOLLOWUP] Chunk {idx}:")
+                    print(f"[CLAIMS_FOLLOWUP]   Type: {type(ch)}")
+                    if isinstance(ch, dict):
+                        print(f"[CLAIMS_FOLLOWUP]   Keys: {list(ch.keys())}")
+                        print(f"[CLAIMS_FOLLOWUP]   NAME: '{ch.get('name', 'MISSING NAME FIELD!')}'")
+                        print(f"[CLAIMS_FOLLOWUP]   Content preview: {str(ch.get('content', ''))[:80]}...")
+                        if ch.get('metadata'):
+                            source = ch.get('metadata', {}).get('source', '')
+                            print(f"[CLAIMS_FOLLOWUP]   Metadata.source: {source}")
+                    else:
+                        print(f"[CLAIMS_FOLLOWUP]   ERROR: Chunk is not a dict! Value: {ch}")
+                print(f"{'='*80}\n")
+            
             policy_section = ""
             if policy_chunks:
+                print(f"[CLAIMS_FOLLOWUP] policy_chunks is not empty, building policy_section")
                 lines = ["RETRIEVED POLICY CLAUSES (Vector DB)"]
                 for i, ch in enumerate(policy_chunks[:12], start=1):
                     if not isinstance(ch, dict):
@@ -3593,8 +3929,12 @@ def claims_followup_chat():
                     content = str(ch.get("content") or "").strip()
                     if not content:
                         continue
-                    lines.append(f"- Clause {i}: {content}")
+                    # Use the name if available, otherwise fall back to Clause {i}
+                    chunk_name = ch.get("name") or f"Clause {i}"
+                    lines.append(f"- {chunk_name}: {content[:100]}...")
                 policy_section = "\n".join(lines).strip()
+            else:
+                print(f"[CLAIMS_FOLLOWUP] policy_chunks is EMPTY - no chunks retrieved!")
 
             prompt = (
                 "You are an insurance claims copilot.\n"
@@ -5244,7 +5584,18 @@ def process_transcript_stream():
                 # Persist incremental chat to Mongo (so /history can show progress if needed)
                 try:
                     chunks = result.get("relevantChunks") or []
-                    relevant_docs_text = "\n\n---\n\n".join([str(c) for c in chunks if str(c).strip()])
+                    # Extract content for text blob
+                    chunk_contents = []
+                    for c in chunks:
+                        if isinstance(c, dict):
+                            chunk_contents.append(str(c.get("content", "")))
+                        else:
+                            chunk_contents.append(str(c))
+                    relevant_docs_text = "\n\n---\n\n".join([c for c in chunk_contents if c.strip()])
+                    
+                    # Ensure chunks are objects with names before storing
+                    normalized_chunks = _normalize_chunks_with_names(chunks)
+                    
                     qna_collection.update_one(
                         {"_id": conv_doc_id},
                         {
@@ -5253,7 +5604,7 @@ def process_transcript_stream():
                                     "chat_id": question_id,
                                     "entered_query": question_text,
                                     "response": result.get("answer", ""),
-                                    "relevant_chunks": chunks,
+                                    "relevant_chunks": normalized_chunks,
                                     "relevant_docs": relevant_docs_text,
                                     "gpt_model": "Calls",
                                     "underlying_model": gpt_model,
@@ -5821,16 +6172,23 @@ def process_transcript():
                     result["questionType"] = question_obj.get("questionType", "general")
                     result["userIntent"] = question_obj.get("userIntent", "")  # Include user intent if available
 
-                    # Enforce API contract: relevantChunks must be a non-empty list[str]
+                    # Handle relevantChunks - they should be objects with name, content, metadata
                     rc = result.get("relevantChunks") or []
-                    if isinstance(rc, list):
-                        rc = [str(x) for x in rc if str(x).strip()]
+                    if isinstance(rc, list) and len(rc) > 0:
+                        # Check if chunks are objects or strings
+                        if isinstance(rc[0], dict):
+                            # Already objects with names - use as is
+                            if MILVUS_MAX_RETURN_CHUNKS is not None:
+                                rc = rc[:MILVUS_MAX_RETURN_CHUNKS]
+                        else:
+                            # Strings - convert to objects (backward compatibility)
+                            # This shouldn't happen with new code, but handle old data
+                            print(f"[WARNING] Chunks are strings, converting to objects")
+                            rc = [{"content": str(x), "name": f"Clause {i+1}"} for i, x in enumerate(rc) if str(x).strip()]
+                            if MILVUS_MAX_RETURN_CHUNKS is not None:
+                                rc = rc[:MILVUS_MAX_RETURN_CHUNKS]
                     else:
-                        rc = []
-                    if not rc:
-                        rc = ["(No supporting excerpts found)"]
-                    if MILVUS_MAX_RETURN_CHUNKS is not None:
-                        rc = rc[:MILVUS_MAX_RETURN_CHUNKS]
+                        rc = [{"content": "(No supporting excerpts found)", "name": "Clause 1"}]
                     result["relevantChunks"] = rc
 
                     rc = result.get("relevantChunks", [])
@@ -6013,15 +6371,26 @@ def process_transcript():
             transcript_chats = []
             now_ts = datetime.utcnow()
             for res in results:
-                # chunks are list[str] in API contract; keep a text blob for legacy /referred-clauses
+                # chunks should be objects with name, content, metadata
                 chunks = res.get("relevantChunks", []) or []
-                relevant_docs_text = "\n\n---\n\n".join([str(c) for c in chunks if str(c).strip()])
+                # Extract content for text blob (legacy /referred-clauses)
+                chunk_contents = []
+                for c in chunks:
+                    if isinstance(c, dict):
+                        chunk_contents.append(str(c.get("content", "")))
+                    else:
+                        chunk_contents.append(str(c))
+                relevant_docs_text = "\n\n---\n\n".join([c for c in chunk_contents if c.strip()])
+                
+                # Ensure chunks are objects with names before storing
+                normalized_chunks = _normalize_chunks_with_names(chunks)
+                
                 transcript_chats.append({
                     "chat_id": res.get("questionId"),
                     "entered_query": res.get("question", ""),
                     "response": res.get("answer", ""),
-                    # For UI: keep chunks as JSON
-                    "relevant_chunks": chunks,
+                    # For UI: keep chunks as objects with names
+                    "relevant_chunks": normalized_chunks,
                     # For existing /referred-clauses UI: keep a text version too
                     "relevant_docs": relevant_docs_text,
                     # Conversation is a Calls mode conversation in UI; keep underlying model separately.
@@ -6585,16 +6954,22 @@ def process_transcript_internal():
                     result["questionType"] = question_obj.get("questionType", "general")
                     result["userIntent"] = question_obj.get("userIntent", "")
 
-                    # Enforce API contract: relevantChunks must be a non-empty list[str]
+                    # Handle relevantChunks - they should be objects with name, content, metadata
                     rc = result.get("relevantChunks") or []
-                    if isinstance(rc, list):
-                        rc = [str(x) for x in rc if str(x).strip()]
+                    if isinstance(rc, list) and len(rc) > 0:
+                        # Check if chunks are objects or strings
+                        if isinstance(rc[0], dict):
+                            # Already objects with names - use as is
+                            if MILVUS_MAX_RETURN_CHUNKS is not None:
+                                rc = rc[:MILVUS_MAX_RETURN_CHUNKS]
+                        else:
+                            # Strings - convert to objects (backward compatibility)
+                            print(f"[WARNING] Chunks are strings, converting to objects")
+                            rc = [{"content": str(x), "name": f"Clause {i+1}"} for i, x in enumerate(rc) if str(x).strip()]
+                            if MILVUS_MAX_RETURN_CHUNKS is not None:
+                                rc = rc[:MILVUS_MAX_RETURN_CHUNKS]
                     else:
-                        rc = []
-                    if not rc:
-                        rc = ["(No supporting excerpts found)"]
-                    if MILVUS_MAX_RETURN_CHUNKS is not None:
-                        rc = rc[:MILVUS_MAX_RETURN_CHUNKS]
+                        rc = [{"content": "(No supporting excerpts found)", "name": "Clause 1"}]
                     result["relevantChunks"] = rc
 
                     if "error" not in result:
@@ -6606,7 +6981,18 @@ def process_transcript_internal():
                     # Persist incremental chat to Mongo
                     try:
                         chunks = result.get("relevantChunks") or []
-                        relevant_docs_text = "\n\n---\n\n".join([str(c) for c in chunks if str(c).strip()])
+                        # Extract content for text blob
+                        chunk_contents = []
+                        for c in chunks:
+                            if isinstance(c, dict):
+                                chunk_contents.append(str(c.get("content", "")))
+                            else:
+                                chunk_contents.append(str(c))
+                        relevant_docs_text = "\n\n---\n\n".join([c for c in chunk_contents if c.strip()])
+                        
+                        # Ensure chunks are objects with names before storing
+                        normalized_chunks = _normalize_chunks_with_names(chunks)
+                        
                         qna_collection.update_one(
                             {"_id": conv_doc_id},
                             {
@@ -6615,7 +7001,7 @@ def process_transcript_internal():
                                         "chat_id": question_id,
                                         "entered_query": question_text,
                                         "response": result.get("answer", ""),
-                                        "relevant_chunks": chunks,
+                                        "relevant_chunks": normalized_chunks,
                                         "relevant_docs": relevant_docs_text,
                                         "gpt_model": "Calls",
                                         "underlying_model": gpt_model,
@@ -6819,6 +7205,10 @@ def process_transcript_internal():
 
 @app.route("/webhook", methods=["POST"])
 def transcript_event():
+    # simple shared-secret auth
+    # auth = request.headers.get("authorization", "")
+    # if auth != f"Bearer {os.getenv('FLASK_AUTH_TOKEN')}":
+    #     return {"error": "unauthorized"}, 401
 
     data = request.get_json()
     if not data:
@@ -6828,6 +7218,32 @@ def transcript_event():
     if not session_id:
         return jsonify({"error": "sessionId is required"}), 400
 
+    # Deduplication: Check if this exact transcript already exists
+    dedup_query = {
+        "sessionId": data.get("sessionId"),
+        "speaker": data.get("speaker"),
+        "text": data.get("text"),
+        "beginOffsetMillis": data.get("beginOffsetMillis"),
+        "endOffsetMillis": data.get("endOffsetMillis"),
+    }
+    
+    existing = transcripts_collection.find_one(dedup_query)
+    if existing:
+        # Already received this transcript, skip logging and storing
+        return jsonify({"ok": True, "duplicate": True}), 200
+
+    transcript_doc = {
+        "sessionId": data["sessionId"],
+        "contactId": data.get("contactId"),
+        "speaker": data.get("speaker"),
+        "text": data.get("text"),
+        "isPartial": data.get("isPartial", True),
+        "beginOffsetMillis": data.get("beginOffsetMillis"),
+        "endOffsetMillis": data.get("endOffsetMillis"),
+        "createdAt": data.get("createdAt")
+    }
+
+    transcripts_collection.insert_one(transcript_doc)
 
     # broadcast to UI via websocket
     # 🔥 LOG TRANSCRIPT EVENT
@@ -6860,60 +7276,57 @@ def transcript_event():
     if (
         LIVE_COPILOT_AVAILABLE
         and _flag_enabled("ENABLE_LIVE_COPILOT", "0")
-        and should_start_copilot(data)
+        and not data.get("isPartial", True)
     ):
-        def process_copilot_async():
-            try:
-                # Build copilot payload with session context
-                # Include phone, state, plan, contractType from transcript payload
-                copilot_payload = {
-                    "sessionId": session_id,
-                    "contactId": data.get("contactId"),
-                    "speaker": data.get("speaker"),
-                    "text": data.get("text"),
-                    "isPartial": data.get("isPartial", False),
-                    "beginOffsetMillis": data.get("beginOffsetMillis"),
-                    "endOffsetMillis": data.get("endOffsetMillis"),
-                    # New fields from transcript for session context
-                    # Support both 'phoneNumber' (Amazon Connect) and 'phone' keys
-                    "phoneNumber": data.get("phoneNumber") or data.get("phone"),
-                    "state": data.get("state"),
-                    "contractType": data.get("contractType"),
-                    "plan": data.get("plan"),
-                }
-                
-                # Call Live Copilot to process transcript under the session trace root (1 trace per sessionId)
-                parent_ctx = _get_or_create_session_trace_context(session_id)
-                copilot_result = handle_transcript_event(copilot_payload, parent_context=parent_ctx)
-                
-                if copilot_result:
-                    if include_payloads:
-                        try:
-                            limit = int(os.getenv("OTEL_TRACE_PAYLOAD_PREVIEW_CHARS", "500") or 500)
-                        except Exception:
-                            limit = 500
+        try:
+            # Build copilot payload with session context
+            # Include phone, state, plan, contractType from transcript payload
+            copilot_payload = {
+                "sessionId": session_id,
+                "contactId": data.get("contactId"),
+                "speaker": data.get("speaker"),
+                "text": data.get("text"),
+                "isPartial": data.get("isPartial", False),
+                "beginOffsetMillis": data.get("beginOffsetMillis"),
+                "endOffsetMillis": data.get("endOffsetMillis"),
+                # New fields from transcript for session context
+                # Support both 'phoneNumber' (Amazon Connect) and 'phone' keys
+                "phoneNumber": data.get("phoneNumber") or data.get("phone"),
+                "state": data.get("state"),
+                "contractType": data.get("contractType"),
+                "plan": data.get("plan"),
+            }
+            
+            # Call Live Copilot to process transcript under the session trace root (1 trace per sessionId)
+            parent_ctx = _get_or_create_session_trace_context(session_id)
+            copilot_result = handle_transcript_event(copilot_payload, parent_context=parent_ctx)
+            
+            if copilot_result:
+                if include_payloads:
+                    try:
+                        limit = int(os.getenv("OTEL_TRACE_PAYLOAD_PREVIEW_CHARS", "500") or 500)
+                    except Exception:
+                        limit = 500
+                    print(
+                        "🟢 COPILOT SUGGESTION (payload):",
+                        json.dumps(copilot_result, indent=2, default=str)[: max(0, limit)],
+                    )
+                else:
+                    try:
+                        cards = copilot_result.get("cards") or []
                         print(
-                            "🟢 COPILOT SUGGESTION (payload):",
-                            json.dumps(copilot_result, indent=2, default=str)[: max(0, limit)],
+                            "🟢 COPILOT SUGGESTION (summary): "
+                            f"sessionId={copilot_result.get('sessionId')}, intent={copilot_result.get('intent')}, cards={len(cards)}"
                         )
-                    else:
-                        try:
-                            cards = copilot_result.get("cards") or []
-                            print(
-                                "🟢 COPILOT SUGGESTION (summary): "
-                                f"sessionId={copilot_result.get('sessionId')}, intent={copilot_result.get('intent')}, cards={len(cards)}"
-                            )
-                        except Exception:
-                            pass
-                    # Emit suggestion to UI
-                    socketio.emit("suggestion_update", copilot_result)
-                    socketio.emit("suggestion_update", copilot_result, room=session_id)
-            except Exception as e:
-                print(f"⚠️ Copilot processing error (non-blocking): {e}")
-                import traceback
-                traceback.print_exc()
-        # threading.Thread(target=process_copilot_async, daemon=True).start()
-        socketio.start_background_task(process_copilot_async)
+                    except Exception:
+                        pass
+                # Emit suggestion to UI
+                socketio.emit("suggestion_update", copilot_result)
+                socketio.emit("suggestion_update", copilot_result, room=session_id)
+        except Exception as e:
+            print(f"⚠️ Copilot processing error (non-blocking): {e}")
+            import traceback
+            traceback.print_exc()
     # =============================================================
 
     return jsonify({"ok": True}), 200

@@ -33,10 +33,11 @@ echo ""
 
 # Kill any existing server processes
 echo "Stopping any existing server processes..."
-pkill -f "python.*app.py" 2>/dev/null
+pkill -f "python.*run.py" 2>/dev/null
+pkill -f "python.*app.py" 2>/dev/null  # Also kill old app.py processes
 sleep 2
 
-# Start the server
-echo "Starting server..."
-$PYTHON_BIN app.py
+# Start the server using the new modular entry point
+echo "Starting server with modular structure (run.py)..."
+$PYTHON_BIN run.py
 

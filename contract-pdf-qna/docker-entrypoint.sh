@@ -33,5 +33,5 @@ elif [ -n "${BIGQUERY_SERVICE_ACCOUNT_JSON:-}" ]; then
   export GOOGLE_APPLICATION_CREDENTIALS=/tmp/bigquery.json
 fi
 
-exec python app.py
+exec python run.py
 
