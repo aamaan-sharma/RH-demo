@@ -19,6 +19,30 @@ from langchain_core.output_parsers import StrOutputParser
 from monitoring_module import tracer, llm_trace_to_jaeger
 from token_module import CallbackHandler
 
+from utils.transcript_filters import is_trivial_utterance
+from utils.prompts import (
+    _rag_prompt,
+    _question_extract_prompt,
+    _suggest_prompt,
+    _intent_prompt,
+    _diagnostics_prompt
+)
+from utils.constants import (
+    CLEAR_STATE_ALIASES,
+    COPILOT_COOLDOWN_SECONDS,
+    COPILOT_MAX_VERIFICATION_ASKS,
+    _PHONE_RE,
+)
+
+from config import (
+    OPENAI_API_KEY,
+    MONGO_URI,
+    MILVUS_HOST,
+    MODEL_INTENT,
+    MODEL_SUGGEST,
+    VERBOSE_DEBUG
+)
+
 _live_session_id_var: ContextVar[str] = ContextVar("live_session_id", default="")
 _infer_handler_lock = threading.Lock()
 
@@ -78,15 +102,7 @@ Return payload shape (consumed by LiveTranscript UI):
 # -----------------------
 
 
-def _env_int(name: str, default: int) -> int:
-    try:
-        raw = (os.getenv(name) or "").strip()
-        if not raw:
-            return default
-        v = int(raw)
-        return v if v > 0 else default
-    except Exception:
-        return default
+# _env_int is now imported from utils.constants
 
 
 # -----------------------
@@ -201,19 +217,72 @@ def _infer_handler_context(handler: CallbackHandler):
                     pass
 
 
-# Hardcoded: emit suggestions at most once per second (no env needed)
-COPILOT_COOLDOWN_SECONDS = 1
-COPILOT_MAX_VERIFICATION_ASKS = _env_int("COPILOT_MAX_VERIFICATION_ASKS", 2)
+# COPILOT_COOLDOWN_SECONDS and COPILOT_MAX_VERIFICATION_ASKS are now imported from utils.constants
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-MILVUS_HOST = os.getenv("MILVUS_HOST")
-MONGO_URI = os.getenv("MONGO_URI")
 
-MODEL_INTENT = os.getenv("COPILOT_MODEL_INTENT", "gpt-4o")
-MODEL_SUGGEST = os.getenv("COPILOT_MODEL_SUGGEST", "gpt-4o")
+# -----------------------
+# LLM instance caching (thread-safe, global reuse)
+# -----------------------
 
-# Debug mode: set VERBOSE_DEBUG=1 to enable detailed logging
-VERBOSE_DEBUG = os.getenv("VERBOSE_DEBUG", "").lower() in ("1", "true", "yes")
+# Global cache for LLM instances - reused across all transcript events
+_llm_intent_cache: Optional[ChatOpenAI] = None
+_llm_suggest_cache: Optional[ChatOpenAI] = None
+_llm_diagnostics_cache: Optional[ChatOpenAI] = None
+_llm_cache_lock = threading.Lock()  # Thread-safe initialization
+
+
+def _get_intent_llm() -> ChatOpenAI:
+    """
+    Get or create cached intent detection LLM instance (thread-safe).
+    Reuses the same instance across all transcript events for efficiency.
+    """
+    global _llm_intent_cache
+    if _llm_intent_cache is None:
+        with _llm_cache_lock:  # Prevent race condition during initialization
+            if _llm_intent_cache is None:  # Double-check pattern
+                _llm_intent_cache = ChatOpenAI(
+                    temperature=0.0,
+                    model=MODEL_INTENT,
+                    max_tokens=200,  # Limit response length for speed
+                    timeout=10.0,  # Fail fast on slow API calls
+                )
+    return _llm_intent_cache
+
+
+def _get_suggest_llm() -> ChatOpenAI:
+    """
+    Get or create cached suggestion generation LLM instance (thread-safe).
+    Reuses the same instance across all transcript events for efficiency.
+    """
+    global _llm_suggest_cache
+    if _llm_suggest_cache is None:
+        with _llm_cache_lock:  # Prevent race condition during initialization
+            if _llm_suggest_cache is None:  # Double-check pattern
+                _llm_suggest_cache = ChatOpenAI(
+                    temperature=0.0,
+                    model=MODEL_SUGGEST,
+                    max_tokens=500,  # Limit response length
+                    timeout=15.0,  # Allow more time for suggestion generation
+                )
+    return _llm_suggest_cache
+
+
+def _get_diagnostics_llm() -> ChatOpenAI:
+    """
+    Get or create cached diagnostics LLM instance (thread-safe).
+    Reuses the same instance across all transcript events for efficiency.
+    """
+    global _llm_diagnostics_cache
+    if _llm_diagnostics_cache is None:
+        with _llm_cache_lock:  # Prevent race condition during initialization
+            if _llm_diagnostics_cache is None:  # Double-check pattern
+                _llm_diagnostics_cache = ChatOpenAI(
+                    temperature=0.2,
+                    model=MODEL_SUGGEST,
+                    max_tokens=300,  # Limit response length
+                    timeout=10.0,  # Fail fast on slow API calls
+                )
+    return _llm_diagnostics_cache
 
 
 def _log(level: str, icon: str, message: str, **kwargs):
@@ -419,31 +488,10 @@ def _should_extract_questions(text: str) -> bool:
     return any(c in t for c in cues)
 
 
-# -----------------------
-# Question extraction (LLM)
-# -----------------------
-
-_question_extract_prompt = ChatPromptTemplate.from_template(
-    """
-You extract customer-intent questions from a live insurance support call.
-
-Return ONLY valid JSON:
-{{"questions":["q1","q2"]}}
-
-Rules:
-- Extract ONLY customer-intent questions (coverage, limits, exclusions, service steps/timeline/costs).
-- If the customer described a problem but did not ask explicitly, infer a likely question.
-- Each question must be specific (include appliance/system + issue) unless it's a general policy/process question.
-- Max 3 questions.
-
-Transcript (most recent last):
-{transcript}
-"""
-)
 
 
 def _extract_questions_llm(*, transcript: str, handler: CallbackHandler, span) -> List[str]:
-    llm = ChatOpenAI(temperature=0.0, model=MODEL_SUGGEST)
+    llm = _get_suggest_llm()  # Use cached instance
     chain = _question_extract_prompt | llm | StrOutputParser()
     raw = (chain.invoke({"transcript": transcript}, config={"callbacks": [handler]}) or "").strip()
     if _trace_include_payloads():
@@ -504,7 +552,7 @@ def _queue_questions(st: _SessionState, questions: List[str]) -> bool:
 # -----------------------
 
 
-_PHONE_RE = re.compile(r"(?:(?:\+?1\s*)?)\(?\s*(\d{3})\s*\)?[\s.-]?(\d{3})[\s.-]?(\d{4})")
+# _PHONE_RE is now imported from utils.constants
 _mongo_client: Optional[MongoClient] = None
 
 
@@ -588,17 +636,7 @@ def _normalize_customer_doc(doc: Dict[str, Any], phone: str) -> Dict[str, Any]:
 # -----------------------
 
 
-CLEAR_STATE_ALIASES = {
-    "AZ": "Arizona",
-    "CA": "California",
-    "GA": "Georgia",
-    "MD": "Maryland",
-    "MN": "Minnesota",
-    "NV": "Nevada",
-    "TX": "Texas",
-    "UT": "Utah",
-    "WI": "Wisconsin",
-}
+# CLEAR_STATE_ALIASES is now imported from utils.constants
 
 
 def _normalize_contract_type(contract_type: str) -> str:
@@ -686,46 +724,10 @@ def _get_vector_db(collection_name: str) -> Milvus:
     return vector_db
 
 
-# -----------------------
-# Agent 1: intent classifier
-# -----------------------
-
-
-_intent_prompt = ChatPromptTemplate.from_template(
-    """
-You are an intent classifier for a live insurance customer support call.\n
-Return ONLY valid JSON in exactly this schema:\n
-{{
-  \"intent\": \"CUSTOMER_IDENTIFICATION|INQUIRY|PROBLEM|CLAIM_STATUS|COMPLAINT|SMALL_TALK|OTHER\",
-  \"confidence\": 0.0,
-  \"entities\": {{
-    \"phone\": \"string_or_empty\",
-    \"appliance\": \"string_or_empty\",
-    \"symptom\": \"string_or_empty\",
-    \"money_amount\": \"string_or_empty\",
-    \"timeline\": \"string_or_empty\",
-    \"claimId\": \"string_or_empty\",
-    \"question\": \"string_or_empty\"
-  }},
-  \"requiresVerification\": true,
-  \"evidenceQuote\": \"verbatim quote from the customer\"
-}}
-\nRules:\n
-- If you see a phone number, intent MUST be CUSTOMER_IDENTIFICATION with confidence >= 0.9 and entities.phone filled.\n
-- CLAIM_STATUS means the customer asks about an existing claim status/ETA/scheduling.\n
-- COMPLAINT means frustration, threats to cancel, anger, escalation requests.\n
-- INQUIRY means coverage/plan/policy/terms questions.\n
-- PROBLEM means a malfunction/issue report (\"not working\", \"leaking\", etc.).\n
-- SMALL_TALK greetings/thanks/off-topic.\n
-- requiresVerification should be true for CLAIM_STATUS and for plan-specific coverage confirmation.\n
-\nRecent transcript (most recent last):\n
-{transcript}\n
-"""
-)
 
 
 def _call_intent_llm(*, transcript: str, handler: CallbackHandler, span) -> Dict[str, Any]:
-    llm = ChatOpenAI(temperature=0.0, model=MODEL_INTENT)
+    llm = _get_intent_llm()  # Use cached instance
     chain = _intent_prompt | llm | StrOutputParser()
     raw = (chain.invoke({"transcript": transcript}, config={"callbacks": [handler]}) or "").strip()
     if _trace_include_payloads():
@@ -757,24 +759,6 @@ def _call_intent_llm(*, transcript: str, handler: CallbackHandler, span) -> Dict
     }
 
 
-# -----------------------
-# Verified RAG (Milvus) + generic tool results
-# -----------------------
-
-
-_rag_prompt = ChatPromptTemplate.from_template(
-    """
-You are assisting a customer care executive.\n
-Use ONLY the provided policy chunks to answer. If insufficient, say what is missing.\n
-Be concise and professional.\n
-Question:\n
-{question}\n
-Policy chunks:\n
-{chunks}\n
-Return ONLY JSON:\n
-{{\"answer\":\"...\",\"citedChunks\":[\"...\"]}}\n
-"""
-)
 
 
 def _simple_rag_answer(*, question: str, customer: Dict[str, Any], handler: CallbackHandler, span) -> Dict[str, Any]:
@@ -797,7 +781,7 @@ def _simple_rag_answer(*, question: str, customer: Dict[str, Any], handler: Call
             chunks.append(content.strip())
     if not chunks:
         return {"answer": "I couldn't find relevant policy language for that question.", "citedChunks": []}
-    llm = ChatOpenAI(temperature=0.0, model=MODEL_SUGGEST)
+    llm = _get_suggest_llm()  # Use cached instance
     chain = _rag_prompt | llm | StrOutputParser()
     payload = {"question": question, "chunks": "\n\n".join(chunks)}
     raw = (chain.invoke(payload, config={"callbacks": [handler]}) or "").strip()
@@ -881,16 +865,8 @@ def _rag_answer(*, question: str, customer: Dict[str, Any], handler: CallbackHan
 
 def _diagnostics_steps(*, transcript: str, handler: CallbackHandler, span) -> Dict[str, Any]:
     # Generic troubleshooting guidance without coverage promises
-    prompt = ChatPromptTemplate.from_template(
-        """
-You are a troubleshooting assistant for home appliance/system issues.\n
-Return only JSON: {{\"steps\":[\"...\"],\"questions\":[\"...\"]}}\n
-Transcript:\n
-{transcript}\n
-"""
-    )
-    llm = ChatOpenAI(temperature=0.2, model=MODEL_SUGGEST)
-    chain = prompt | llm | StrOutputParser()
+    llm = _get_diagnostics_llm()  # Use cached instance
+    chain = _diagnostics_prompt | llm | StrOutputParser()
     raw = (chain.invoke({"transcript": transcript}, config={"callbacks": [handler]}) or "").strip()
     if _trace_include_payloads():
         span.set_attribute("llm.prompt.preview", _preview(transcript))
@@ -901,65 +877,6 @@ Transcript:\n
         return {"steps": [], "questions": []}
 
 
-# -----------------------
-# Agent 2: suggestion generator
-# -----------------------
-
-
-_suggest_prompt = ChatPromptTemplate.from_template(
-    """
-You are a real-time copilot helping a CSR (Customer Service Representative) during a live home warranty insurance call.
-
-Your role is to generate PROFESSIONAL, CALM, and CONCISE suggestions that the CSR can say directly to the customer.
-
-STRICT GROUNDING RULES (CRITICAL - FOLLOW EXACTLY):
-- NEVER invent or guess dollar amounts, fees, limits, or coverage percentages
-- ONLY use specific numbers/values that appear in tool_result.newAnswers or tool_result.previousAnswers
-- If a specific fee/limit is NOT in tool_result, say "Let me verify the exact amount for your plan"
-- If you previously answered a question (check previousAnswers), use THE SAME answer - never contradict yourself
-- When tool_result contains an answer, quote the numbers EXACTLY as they appear
-
-OPERATING RULES:
-- Use conversation context below (do not ignore earlier customer questions).
-- Use tool_result + customer_context as your ground truth; do NOT invent coverage details.
-- If plan context (contractType/plan/state) is missing, suggest asking CSR to confirm it before making commitments.
-- If customer_context shows "verified": true, DO NOT ask for phone verification - the user is already verified!
-- When user is verified, focus on answering their questions using newAnswers from tool_result.
-- Do NOT re-answer questions already addressed; reference prior answer and suggest next step.
-- Generate 1-3 suggestion cards focused on the customer's actual questions/issues.
-
-CSR SCRIPT TONE REQUIREMENTS:
-- Be CALM and reassuring - avoid alarming language
-- Be CONCISE - 1-2 sentences maximum
-- Be PROFESSIONAL - use polite, helpful language
-- Be DIRECT about coverage decisions (Yes, covered / No, not covered / Partially covered)
-- Include specific details ONLY when they are in tool_result
-
-EXAMPLES OF GOOD CSR SCRIPTS:
-- "Good news! Your plan does cover water heater repairs. [Use exact fee from tool_result], and we can dispatch a technician within 24-48 hours."
-- "I understand your concern about the refrigerator. Unfortunately, cosmetic damage to the exterior panel is not covered under your plan, but I can help you with other options."
-- "Based on your plan, drain line stoppages are covered. Let me create a service request for you."
-
-Return ONLY valid JSON:
-{{
-  "cards": [
-    {{
-      "title": "Coverage Confirmation",
-      "csrScript": "The calm, professional sentence CSR says to customer",
-      "evidence": "Verbatim customer quote that triggered this",
-      "priority": "high|medium|low"
-    }}
-  ]
-}}
-
-intent: {intent}
-customer_context: {customer_context}
-tool_result: {tool_result}
-
-Conversation context (most recent last):
-{transcript}
-"""
-)
 
 
 def _call_suggest_llm(
@@ -992,7 +909,7 @@ def _call_suggest_llm_traced(
         _log("debug", "🔍", f"Generating suggestions | intent={intent} | verified={customer_verified}")
 
     # Use temperature=0.0 for deterministic, consistent outputs
-    llm = ChatOpenAI(temperature=0.0, model=MODEL_SUGGEST)
+    llm = _get_suggest_llm()  # Use cached instance
     chain = _suggest_prompt | llm | StrOutputParser()
     prompt_payload = {
         "intent": intent,
@@ -1060,6 +977,31 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
     if is_partial:
         return None
 
+    # Update buffer and session context (always needed for conversation history)
+    st = _get_state(session_id)
+    _update_session_context_from_payload(st, payload)
+    _append_buffer(st, speaker=speaker, text=text)
+
+    # Skip AI processing for CSR text - only process customer prompts for suggestions
+    if speaker == "agent":
+        # Still do minimal phone extraction and customer lookup if CSR mentions phone
+        # phone_candidates = _extract_phone_candidates(text)
+        # if phone_candidates and not st.customer:
+        #     doc = _lookup_user_by_phone([c for c in phone_candidates if c])
+        #     if doc:
+        #         st.customer = _normalize_customer_doc(doc, phone_candidates[0])
+        #         try:
+        #             st.contract_type = st.contract_type or _s(st.customer.get("contractType"))
+        #             st.selected_plan = st.selected_plan or _s(st.customer.get("plan"))
+        #             st.selected_state = st.selected_state or _s(st.customer.get("state"))
+        #         except Exception:
+        #             pass
+        # No AI suggestions needed for CSR text
+        return None
+    
+    if is_trivial_utterance(text):
+        return None
+
     handler = CallbackHandler()
     output: Optional[Dict[str, Any]] = None
     tok = _live_session_id_var.set(session_id)
@@ -1078,9 +1020,6 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                     from_agent="live_call.processing",
                 )
 
-                st = _get_state(session_id)
-                _update_session_context_from_payload(st, payload)
-                _append_buffer(st, speaker=speaker, text=text)
                 transcript = _buffer_text(st)
 
                 important_change = False
@@ -1096,15 +1035,7 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
 
                     phone_candidates = _extract_phone_candidates(text)
                     intent_obj: Dict[str, Any]
-                    if speaker == "csr" and _looks_like_verification_request(text):
-                        intent_obj = {
-                            "intent": "CUSTOMER_IDENTIFICATION",
-                            "confidence": 0.9,
-                            "entities": {"phone": "", "question": ""},
-                            "requiresVerification": True,
-                            "evidenceQuote": text[:200],
-                        }
-                    elif phone_candidates:
+                    if phone_candidates:
                         intent_obj = {
                             "intent": "CUSTOMER_IDENTIFICATION",
                             "confidence": 0.95,
@@ -1158,7 +1089,11 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                     customer_ctx = _effective_customer_context(st)
                     verified = bool(customer_ctx.get("verified"))
 
-                    should_extract = speaker == "customer" and _should_extract_questions(text)
+                    should_extract = (
+                        speaker == "customer" 
+                        and _should_extract_questions(text) 
+                        and intent not in ("CUSTOMER_IDENTIFICATION", "SMALL_TALK", "OTHER")
+                    )
                     if should_extract:
                         extracted = _extract_questions_llm(transcript=transcript, handler=handler, span=sp_ctx)
                         if not extracted:
