@@ -27,6 +27,12 @@ from utils.prompts import (
     _intent_prompt,
     _diagnostics_prompt
 )
+from utils.constants import (
+    CLEAR_STATE_ALIASES,
+    COPILOT_COOLDOWN_SECONDS,
+    COPILOT_MAX_VERIFICATION_ASKS,
+    _PHONE_RE,
+)
 
 from config import (
     OPENAI_API_KEY,
@@ -96,15 +102,7 @@ Return payload shape (consumed by LiveTranscript UI):
 # -----------------------
 
 
-def _env_int(name: str, default: int) -> int:
-    try:
-        raw = (os.getenv(name) or "").strip()
-        if not raw:
-            return default
-        v = int(raw)
-        return v if v > 0 else default
-    except Exception:
-        return default
+# _env_int is now imported from utils.constants
 
 
 # -----------------------
@@ -219,9 +217,7 @@ def _infer_handler_context(handler: CallbackHandler):
                     pass
 
 
-# Hardcoded: emit suggestions at most once per second (no env needed)
-COPILOT_COOLDOWN_SECONDS = 1
-COPILOT_MAX_VERIFICATION_ASKS = _env_int("COPILOT_MAX_VERIFICATION_ASKS", 2)
+# COPILOT_COOLDOWN_SECONDS and COPILOT_MAX_VERIFICATION_ASKS are now imported from utils.constants
 
 
 # -----------------------
@@ -556,7 +552,7 @@ def _queue_questions(st: _SessionState, questions: List[str]) -> bool:
 # -----------------------
 
 
-_PHONE_RE = re.compile(r"(?:(?:\+?1\s*)?)\(?\s*(\d{3})\s*\)?[\s.-]?(\d{3})[\s.-]?(\d{4})")
+# _PHONE_RE is now imported from utils.constants
 _mongo_client: Optional[MongoClient] = None
 
 
@@ -640,17 +636,7 @@ def _normalize_customer_doc(doc: Dict[str, Any], phone: str) -> Dict[str, Any]:
 # -----------------------
 
 
-CLEAR_STATE_ALIASES = {
-    "AZ": "Arizona",
-    "CA": "California",
-    "GA": "Georgia",
-    "MD": "Maryland",
-    "MN": "Minnesota",
-    "NV": "Nevada",
-    "TX": "Texas",
-    "UT": "Utah",
-    "WI": "Wisconsin",
-}
+# CLEAR_STATE_ALIASES is now imported from utils.constants
 
 
 def _normalize_contract_type(contract_type: str) -> str:
