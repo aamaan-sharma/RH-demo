@@ -18,6 +18,26 @@
   background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
 }
 
+.lt_layout_two_col {
+  .lt_left_ccp,
+  .lt_right {
+    width: 50%;
+    min-width: 50%;
+    max-width: 50%;
+    flex: 0 0 50%;
+  }
+}
+
+.lt_layout_three_col {
+  .lt_left_ccp,
+  .lt_right {
+    width: 440px;
+    min-width: 440px;
+    max-width: 440px;
+    flex: 0 0 440px;
+  }
+}
+
 // =====================================
 // LEFT PANEL - AMAZON CONNECT CCP
 // =====================================
@@ -590,6 +610,25 @@
   }
 }
 
+.lt_ai_transcript_button {
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  color: #334155;
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+
+  &:hover {
+    background: #f8fafc;
+    border-color: #cbd5e1;
+  }
+}
+
 @keyframes pulse_glow {
   0%, 100% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.3); }
   50% { box-shadow: 0 0 6px 2px rgba(22, 163, 74, 0.15); }
@@ -1154,6 +1193,29 @@
   font-size: 12px;
   line-height: 16px;
   font-weight: 600;
+}
+
+.lt_transcript_panel_wrap {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.lt_transcript_close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  color: #334155;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 2;
 }
 
 @keyframes badge_glow {
