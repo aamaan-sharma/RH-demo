@@ -50,6 +50,10 @@ const Home = ({ bearerToken, setBearerToken }) => {
   const [userImage, setUserImage] = useState("");
   const [isScrollable, setIsScrollable] = useState(false);
   const [isTranscriptModalOpen, setIsTranscriptModalOpen] = useState(false);
+  const [isTranscriptViewerOpen, setIsTranscriptViewerOpen] = useState(false);
+  const [isTranscriptViewerLoading, setIsTranscriptViewerLoading] = useState(false);
+  const [transcriptViewerContent, setTranscriptViewerContent] = useState("");
+  const [transcriptViewerError, setTranscriptViewerError] = useState(null);
   const [transcripts, setTranscripts] = useState([]);
   const [transcriptSearch, setTranscriptSearch] = useState("");
   // Transcript list status filter (modal)
@@ -142,6 +146,10 @@ const Home = ({ bearerToken, setBearerToken }) => {
 
     // Reset all state when switching modes to start a new chat/case
     setIsTranscriptModalOpen(false);
+    setIsTranscriptViewerOpen(false);
+    setIsTranscriptViewerLoading(false);
+    setTranscriptViewerContent("");
+    setTranscriptViewerError(null);
     setIsCheckingExistingTranscriptConversation(false);
     setCallsGenerationStage("idle");
     setCallsProgressText("");
@@ -248,6 +256,43 @@ const Home = ({ bearerToken, setBearerToken }) => {
     setGptModelState("Calls");
     setIsTranscriptModalOpen(true);
     fetchTranscripts("", transcriptStatusFilter, 0, false);
+  };
+
+  const handleToggleTranscriptViewer = async () => {
+    if (isTranscriptViewerOpen) {
+      setIsTranscriptViewerOpen(false);
+      return;
+    }
+    if (!callsTranscriptName) return;
+
+    const transcriptUrl = `${TRANSCRIPTS_API_BASE_URL}/transcripts/${encodeURIComponent(
+      callsTranscriptName
+    )}`;
+     console.log(transcriptUrl);
+    setIsTranscriptViewerOpen(true);
+    setIsTranscriptViewerLoading(true);
+    setTranscriptViewerContent("");
+    setTranscriptViewerError(null);
+
+    try {
+      const resp = await axios.get(transcriptUrl);
+      const payload = resp?.data || {};
+      const content =
+        payload?.textContent ||
+        payload?.content ||
+        payload?.parsedData?.content ||
+        payload?.parsedData?.transcript ||
+        payload?.parsedData?.text ||
+        "";
+      setTranscriptViewerContent(content);
+    } catch (err) {
+      console.error("Error fetching transcript from GCS:", err);
+      setTranscriptViewerError(
+        "Unable to load transcript. Please try again."
+      );
+    } finally {
+      setIsTranscriptViewerLoading(false);
+    }
   };
 
   const handleTranscriptSearchChange = (value) => {
@@ -1500,10 +1545,10 @@ const Home = ({ bearerToken, setBearerToken }) => {
                             >
                               {conversationStatus === "inactive" ? "Closed" : "Open"}
                             </div>
-                            {caseDisposition ? (
-                              <div
-                                className={`disposition_badge ${
-                                  String(caseDisposition).toLowerCase() === "approved"
+                              {caseDisposition ? (
+                                <div
+                                  className={`disposition_badge ${
+                                    String(caseDisposition).toLowerCase() === "approved"
                                     ? "approved"
                                     : String(caseDisposition).toLowerCase() === "rejected"
                                       ? "rejected"
@@ -1512,12 +1557,19 @@ const Home = ({ bearerToken, setBearerToken }) => {
                                 title={`Disposition: ${caseDisposition}`}
                               >
                                 {String(caseDisposition).toUpperCase()}
-                              </div>
-                            ) : null}
-                            <button
-                              type="button"
-                              className="review_approve_button"
-                              onClick={() => setIsReviewApproveOpen(true)}
+                                </div>
+                              ) : null}
+                              <button
+                                type="button"
+                                className="review_approve_button show_transcript_button"
+                                onClick={handleToggleTranscriptViewer}
+                              >
+                                Show Transcript
+                              </button>
+                              <button
+                                type="button"
+                                className="review_approve_button"
+                                onClick={() => setIsReviewApproveOpen(true)}
                               disabled={conversationStatus === "inactive"}
                               title={
                                 conversationStatus === "inactive"
@@ -1747,6 +1799,40 @@ const Home = ({ bearerToken, setBearerToken }) => {
           userName={loggedInUserName}
           caseDisposition={caseDisposition}
         />
+
+        {isTranscriptViewerOpen ? (
+          <div className="calls_modal_backdrop" role="dialog" aria-modal="true">
+            <div className="calls_modal transcript_viewer_modal">
+              <div className="calls_modal_header">
+                <div className="title">Transcript</div>
+                <button
+                  type="button"
+                  className="close_button"
+                  onClick={() => setIsTranscriptViewerOpen(false)}
+                  aria-label="Close transcript"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="calls_modal_body transcript_viewer_body">
+                {isTranscriptViewerLoading ? (
+                  <div className="loading">
+                    <span className="spinner" aria-hidden="true" />
+                    <span className="loading_text">Loading transcript…</span>
+                  </div>
+                ) : transcriptViewerError ? (
+                  <div className="error_state">
+                    <div className="error_text">{transcriptViewerError}</div>
+                  </div>
+                ) : (
+                  <pre className="transcript_viewer_content">
+                    {transcriptViewerContent || "No transcript content found."}
+                  </pre>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {justApproved ? (
           <div className="case_thankyou_toast" role="status" aria-live="polite">
