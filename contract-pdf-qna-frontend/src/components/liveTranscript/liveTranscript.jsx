@@ -674,13 +674,16 @@ const LiveTranscript = () => {
               <div className="lt_ai_count">{copilotCards.length}</div>
             )}
             <div className="lt_ai_badge">Live</div>
+            <div className="lt_ai_spacer" aria-hidden="true" />
             <button
               type="button"
               className="lt_ai_transcript_button"
               onClick={() => setIsTranscriptOpen((prev) => !prev)}
               aria-pressed={isTranscriptOpen}
+              aria-label={isTranscriptOpen ? "Collapse transcript" : "Expand transcript"}
+              title={isTranscriptOpen ? "Collapse transcript" : "Expand transcript"}
             >
-              Transcript
+              {isTranscriptOpen ? "<" : ">"}
             </button>
           </div>
 
@@ -787,7 +790,7 @@ const LiveTranscript = () => {
             onClick={() => setIsTranscriptOpen(false)}
             aria-label="Close transcript"
           >
-            ×
+            {"<"}
           </button>
           {transcriptPanel}
         </div>
