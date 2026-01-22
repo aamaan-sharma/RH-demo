@@ -11,6 +11,8 @@ _async_mode = "threading"
 import os
 import asyncio
 from dotenv import load_dotenv
+
+load_dotenv()
 from flask import Flask, request, jsonify, make_response, Response, stream_with_context, session
 from flask_socketio import SocketIO, emit, join_room, disconnect
 from pymongo import MongoClient, ReturnDocument
