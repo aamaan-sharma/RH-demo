@@ -36,7 +36,9 @@ import json
 import re
 from typing import List, Dict
 from pathlib import Path
+from dotenv import load_dotenv
 
+load_dotenv()
 # Live Copilot for real-time AI suggestions during calls
 try:
     from live_copilot import handle_transcript_event
