@@ -10,7 +10,6 @@ _async_mode = "threading"
 #     _async_mode = os.getenv("SOCKETIO_ASYNC_MODE", "threading")
 import os
 import asyncio
-from dotenv import load_dotenv
 from flask import Flask, request, jsonify, make_response, Response, stream_with_context, session
 from flask_socketio import SocketIO, emit, join_room, disconnect
 from pymongo import MongoClient, ReturnDocument
@@ -198,7 +197,6 @@ def _get_or_create_session_trace_context(session_id: str):
 # Note: This is only used to store previous Q&A for standalone prompt, not used in chains
 memory1 = InMemoryChatMessageHistory()
 handler = CallbackHandler()
-load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret")
 
@@ -1135,13 +1133,6 @@ def extract_relevant_customer_questions(transcript_content: str, llm) -> List[Di
 
 
 def extract_questions_with_agent(transcript_content: str, llm) -> List[Dict]:
-    """
-    Extract relevant customer questions from transcript using an agent-based approach.
-    Uses the same extraction prompt and filtering logic as extract_relevant_customer_questions()
-    to ensure consistency with Search/Infer functionality.
-    
-    This function is specifically designed for the Calls section (/transcripts/process endpoint).
-    """
     """
     Extract relevant customer questions from transcript using an agent-based approach.
     Uses the same extraction prompt and filtering logic as extract_relevant_customer_questions()
