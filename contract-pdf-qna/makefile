@@ -1,6 +1,10 @@
 include .env
 export
 
+init:
+	pyenv local
+	python3 -m venv venv
+	. venv/bin/activate; python3 -m pip install -r requirements.txt
 run:
 	. venv/bin/activate; python3 app.py
 attu:

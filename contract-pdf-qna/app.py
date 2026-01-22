@@ -2447,7 +2447,7 @@ def chat_history():
                 chat["relevantChunks"] = chat.get("relevant_chunks")
                 for chunk in chat["relevantChunks"]:
                     if type(chunk) is dict:
-                        chunk["metadata"]["source"] = chunk["metadata"]["source"].split("/")[-1].split("\\")[-1]
+                        chunk["metadata"]["source"] = chunk["metadata"]["source"].split("/")[-1].split("\\")[-1].split('.')[0]
             if "underlying_model" in chat and "underlyingModel" not in chat:
                 chat["underlyingModel"] = chat.get("underlying_model")
 
