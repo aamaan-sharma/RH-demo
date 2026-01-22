@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from "react";
 import MicrophoneIcon from "../../assets/microphone.svg";
 import SendIcon from "../../assets/send.svg";
-import "./InputField.scss";
+import "./inputField.scss";
 import recordIcon from "../../assets/record.svg";
 
 const InputField = ({
