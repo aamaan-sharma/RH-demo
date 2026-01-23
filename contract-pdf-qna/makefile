@@ -1,5 +1,4 @@
 
-
 init:
 	pyenv local
 	python3 -m venv venv

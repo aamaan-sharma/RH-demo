@@ -10,6 +10,7 @@ _async_mode = "threading"
 #     _async_mode = os.getenv("SOCKETIO_ASYNC_MODE", "threading")
 import os
 import asyncio
+from functools import lru_cache
 from flask import Flask, request, jsonify, make_response, Response, stream_with_context, session
 from flask_socketio import SocketIO, emit, join_room, disconnect
 from pymongo import MongoClient, ReturnDocument
@@ -2581,14 +2582,24 @@ def chat_history():
         ]
         for chat in chats:
             chat_id = chat.get("chat_id")
+            if "relevant_chunks" in chat and "relevantChunks" not in chat:
+                chat["relevantChunks"] = chat.get("relevant_chunks")
+
+            rel_chunks = chat.get("relevantChunks", [])
+            if type(rel_chunks) is list :
+                if rel_chunks and type(rel_chunks[0]) is str:
+                    chunks,_ = _retrieve_policy_chunks_for_claims(docs, chat["entered_query"], k=6)
+                    chat["relevantChunks"] = chunks
+
+
+
+            for chunk in chat.get("relevantChunks", []):
+                chunk["metadata"]["source"] = chunk["metadata"]["source"].split("/")[-1].split("\\")[-1]
+
             if chat_id in feedback_dict:
                 chat["reaction"] = feedback_dict[chat_id]
             # Normalize chunk fields for frontend consumption (keep backwards-compatible snake_case too)
-            if "relevant_chunks" in chat and "relevantChunks" not in chat:
-                chat["relevantChunks"] = chat.get("relevant_chunks")
-                for chunk in chat["relevantChunks"]:
-                    if type(chunk) is dict:
-                        chunk["metadata"]["source"] = chunk["metadata"]["source"].split("/")[-1].split("\\")[-1]
+                        
             if "underlying_model" in chat and "underlyingModel" not in chat:
                 chat["underlyingModel"] = chat.get("underlying_model")
 
@@ -3005,7 +3016,10 @@ def _build_claims_case_context_for_llm(docs: dict) -> str:
     return "\n".join(parts).strip()
 
 
-def _retrieve_policy_chunks_for_claims(docs: dict, query: str, k: int = 6):
+
+
+@lru_cache
+def _cached_retrieve_policy_chunks_for_claims(*, contract_type: str, selected_plan: str, selected_state: str, query: str, k: int):
     """Best-effort policy retrieval from Milvus for a transcript conversation.
 
     Returns: (chunks_for_ui, referred_docs_text)
@@ -3013,17 +3027,7 @@ def _retrieve_policy_chunks_for_claims(docs: dict, query: str, k: int = 6):
       - referred_docs_text: a readable text blob for /referred-clauses legacy page
     """
     try:
-        if not isinstance(docs, dict):
-            return [], ""
-        query = (query or "").strip()
-        if not query:
-            return [], ""
 
-        contract_type = docs.get("contract_type")
-        selected_plan = docs.get("selected_plan")
-        selected_state = docs.get("selected_state")
-        if not all([contract_type, selected_plan, selected_state]):
-            return [], ""
 
         # Get collection name using utility function
         selected_collection_name = get_milvus_collection_name(
@@ -3089,6 +3093,20 @@ def _retrieve_policy_chunks_for_claims(docs: dict, query: str, k: int = 6):
         print(f"Warning: policy retrieval failed for claims followup: {e}")
         return [], ""
 
+
+def _retrieve_policy_chunks_for_claims(docs: dict, query: str, k: int = 6):
+        if not isinstance(docs, dict):
+            return [], ""
+        query = (query or "").strip()
+        if not query:
+            return [], ""
+        contract_type = docs.get("contract_type")
+        selected_plan = docs.get("selected_plan")
+        selected_state = docs.get("selected_state")
+        if not all([contract_type, selected_plan, selected_state]):
+            return [], ""
+
+        return _cached_retrieve_policy_chunks_for_claims(contract_type=contract_type, selected_plan=selected_plan, selected_state=selected_state, query=query, k=k)
 
 def _looks_like_plan_overview_question(q: str) -> bool:
     """Heuristic: broad plan questions that benefit from a cached plan overview."""
