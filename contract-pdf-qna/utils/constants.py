@@ -1,6 +1,5 @@
 import os
 import re
-from dotenv import load_dotenv
 
 # ============================================================================
 # Helper functions for environment variable parsing
