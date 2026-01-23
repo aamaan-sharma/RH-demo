@@ -265,7 +265,7 @@ const Response = ({
                         ""
                       : "";
                   const refParts = [source, additional].filter(Boolean);
-                  const refSuffix = refParts.length ? ` — ${refParts.join(" · ")}` : "";
+                  const refSuffix = refParts.length ? `${refParts.join(" · ")}` : "";
                   const content =
                     chunk && typeof chunk === "object"
                       ? chunk.content || JSON.stringify(chunk, null, 2)
@@ -274,7 +274,7 @@ const Response = ({
                     <details className="chunk_item" key={index}>
                       <summary className="chunk_summary">
                         <span className="chunk_summary_text">
-                        {`Clause ${index + 1}${titleSuffix}${refSuffix}`}
+                        {`${titleSuffix}${refSuffix}`}
                         </span>
                         <button
                           type="button"
