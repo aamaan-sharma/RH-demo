@@ -338,6 +338,9 @@ class _SessionState:
 
     # Emission stability / dedupe
     last_emit_fingerprint: str = ""
+    
+    # MongoDB user details for display in UI header
+    mongo_user_details: Optional[Dict[str, Any]] = None
 
 
 _sessions: Dict[str, _SessionState] = {}
@@ -982,21 +985,51 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
     _update_session_context_from_payload(st, payload)
     _append_buffer(st, speaker=speaker, text=text)
 
+    # Fetch user details from MongoDB when phoneNumber is present in payload
+    # This is for display in the UI header, separate from the payload-based state/plan/contractType
+    payload_phone = _s(payload.get("phoneNumber"))
+    if payload_phone and not st.mongo_user_details:
+        # Normalize phone number - remove non-digits and handle +1 prefix
+        phone_clean = re.sub(r"\D+", "", payload_phone)
+        if len(phone_clean) == 10:
+            phone_candidates = [phone_clean, "+1" + phone_clean]
+        elif len(phone_clean) == 11 and phone_clean.startswith("1"):
+            phone_candidates = [phone_clean[1:], "+1" + phone_clean[1:], phone_clean]
+        else:
+            phone_candidates = [phone_clean]
+        
+        # Lookup user in MongoDB
+        doc = _lookup_user_by_phone(phone_candidates)
+        if doc:
+            # Extract user details for display
+            name = doc.get("name") or doc.get("fullName") or doc.get("firstName") or ""
+            if doc.get("lastName") and name and doc.get("lastName") not in str(name):
+                name = f"{name} {doc.get('lastName')}"
+            
+            st.mongo_user_details = {
+                "phone": f"***{phone_clean[-4:]}" if len(phone_clean) >= 4 else "***",
+                "name": name,
+                "email": _s(doc.get("email")),
+                "address": _s(doc.get("address")),
+                "plan": _s(doc.get("plan")) or _s(doc.get("selectedPlan")) or _s(doc.get("planName")),
+                "state": _s(doc.get("state")) or _s(doc.get("selectedState")) or _s(doc.get("stateName")),
+                "contractType": _s(doc.get("contractType")),
+            }
+            # Remove None values
+            st.mongo_user_details = {k: v for k, v in st.mongo_user_details.items() if v}
+            print(f"[LIVE_COPILOT] ✅ MongoDB user details fetched for display: {st.mongo_user_details.get('name')} ({st.mongo_user_details.get('phone')})", flush=True)
+
     # Skip AI processing for CSR text - only process customer prompts for suggestions
     if speaker == "agent":
-        # Still do minimal phone extraction and customer lookup if CSR mentions phone
-        # phone_candidates = _extract_phone_candidates(text)
-        # if phone_candidates and not st.customer:
-        #     doc = _lookup_user_by_phone([c for c in phone_candidates if c])
-        #     if doc:
-        #         st.customer = _normalize_customer_doc(doc, phone_candidates[0])
-        #         try:
-        #             st.contract_type = st.contract_type or _s(st.customer.get("contractType"))
-        #             st.selected_plan = st.selected_plan or _s(st.customer.get("plan"))
-        #             st.selected_state = st.selected_state or _s(st.customer.get("state"))
-        #         except Exception:
-        #             pass
         # No AI suggestions needed for CSR text
+        # But if user details were just fetched, send them for display
+        if st.mongo_user_details:
+            return {
+                "sessionId": session_id,
+                "intent": "OTHER",
+                "userDetails": st.mongo_user_details,
+                "createdAt": str(_now_epoch()),
+            }
         return None
     
     if is_trivial_utterance(text):
@@ -1215,11 +1248,29 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                     )
 
                     if cards is None:
-                        output = None
+                        # Even if no cards, send user details if available (for sticky header)
+                        if st.mongo_user_details:
+                            output = {
+                                "sessionId": session_id,
+                                "intent": intent or "OTHER",
+                                "userDetails": st.mongo_user_details,
+                                "createdAt": str(_now_epoch()),
+                            }
+                        else:
+                            output = None
                     else:
                         fp = _fingerprint({"intent": intent, "customer": customer_ctx, "cards": cards})
                         if fp == st.last_emit_fingerprint and not important_change:
-                            output = None
+                            # Even if deduplicated, send user details if available (for sticky header)
+                            if st.mongo_user_details:
+                                output = {
+                                    "sessionId": session_id,
+                                    "intent": intent,
+                                    "userDetails": st.mongo_user_details,
+                                    "createdAt": str(_now_epoch()),
+                                }
+                            else:
+                                output = None
                         else:
                             st.last_emit_fingerprint = fp
                             st.last_suggested_at = time()
@@ -1232,6 +1283,9 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                                 "cards": cards,
                                 "createdAt": str(_now_epoch()),
                             }
+                            # Add MongoDB user details as sticky header for UI display
+                            if st.mongo_user_details:
+                                output["userDetails"] = st.mongo_user_details
                             if _trace_include_payloads():
                                 sp_post.set_attribute("live.response.preview", _preview(output))
 
