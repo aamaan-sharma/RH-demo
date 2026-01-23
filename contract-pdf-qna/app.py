@@ -5315,9 +5315,13 @@ def process_transcript():
                     try:
                         transcript_data = json.loads(transcript_content)
                         if isinstance(transcript_data, dict):
-                            transcript_text = transcript_data.get("text", 
-                                transcript_data.get("transcript", 
-                                transcript_data.get("content", str(transcript_data))))
+                            transcript_text = transcript_data.get(
+                                "text",
+                                transcript_data.get(
+                                    "transcript",
+                                    transcript_data.get("content", str(transcript_data)),
+                                ),
+                            )
                         else:
                             transcript_text = transcript_content
                     except json.JSONDecodeError:

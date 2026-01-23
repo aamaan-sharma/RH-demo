@@ -233,20 +233,26 @@
             }
           }
 
-          .review_approve_button {
-            border: none;
-            border-radius: 10px;
-            padding: 10px 12px;
-            font-size: 13px;
-            font-weight: 800;
-            background: #5e7bc6;
-            color: #ffffff;
-            cursor: pointer;
-            &:disabled {
-              background: #b8c4e6;
-              cursor: not-allowed;
+            .review_approve_button {
+              border: none;
+              border-radius: 10px;
+              padding: 10px 12px;
+              font-size: 13px;
+              font-weight: 800;
+              background: #5e7bc6;
+              color: #ffffff;
+              cursor: pointer;
+              &:disabled {
+                background: #b8c4e6;
+                cursor: not-allowed;
+              }
             }
-          }
+
+            .show_transcript_button {
+              background: #ffffff;
+              color: #333333;
+              border: 1px solid #e6e6e6;
+            }
 
           .subtle_status {
             margin-top: 6px;
@@ -788,6 +794,24 @@
       }
     }
   }
+}
+
+.transcript_viewer_modal {
+  width: 1040px;
+  max-width: calc(100vw - 48px);
+}
+
+.transcript_viewer_body {
+  display: flex;
+  flex-direction: column;
+}
+
+.transcript_viewer_content {
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #333333;
 }
 
 @keyframes blocking_spinner {
