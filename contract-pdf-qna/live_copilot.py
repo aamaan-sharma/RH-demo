@@ -339,6 +339,9 @@ class _SessionState:
 
     # Emission stability / dedupe
     last_emit_fingerprint: str = ""
+    
+    # MongoDB user details for display in UI header
+    mongo_user_details: Optional[Dict[str, Any]] = None
 
 
 _sessions: Dict[str, _SessionState] = {}
@@ -1127,19 +1130,15 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
 
     # Skip AI processing for CSR text - only process customer prompts for suggestions
     if speaker == "agent":
-        # Still do minimal phone extraction and customer lookup if CSR mentions phone
-        # phone_candidates = _extract_phone_candidates(text)
-        # if phone_candidates and not st.customer:
-        #     doc = _lookup_user_by_phone([c for c in phone_candidates if c])
-        #     if doc:
-        #         st.customer = _normalize_customer_doc(doc, phone_candidates[0])
-        #         try:
-        #             st.contract_type = st.contract_type or _s(st.customer.get("contractType"))
-        #             st.selected_plan = st.selected_plan or _s(st.customer.get("plan"))
-        #             st.selected_state = st.selected_state or _s(st.customer.get("state"))
-        #         except Exception:
-        #             pass
         # No AI suggestions needed for CSR text
+        # But if user details were just fetched, send them for display
+        if st.mongo_user_details:
+            return {
+                "sessionId": session_id,
+                "intent": "OTHER",
+                "userDetails": st.mongo_user_details,
+                "createdAt": str(_now_epoch()),
+            }
         return None
     
     if is_trivial_utterance(text):
@@ -1378,11 +1377,29 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                     )
 
                     if cards is None:
-                        output = None
+                        # Even if no cards, send user details if available (for sticky header)
+                        if st.mongo_user_details:
+                            output = {
+                                "sessionId": session_id,
+                                "intent": intent or "OTHER",
+                                "userDetails": st.mongo_user_details,
+                                "createdAt": str(_now_epoch()),
+                            }
+                        else:
+                            output = None
                     else:
                         fp = _fingerprint({"intent": intent, "customer": customer_ctx, "cards": cards})
                         if fp == st.last_emit_fingerprint and not important_change:
-                            output = None
+                            # Even if deduplicated, send user details if available (for sticky header)
+                            if st.mongo_user_details:
+                                output = {
+                                    "sessionId": session_id,
+                                    "intent": intent,
+                                    "userDetails": st.mongo_user_details,
+                                    "createdAt": str(_now_epoch()),
+                                }
+                            else:
+                                output = None
                         else:
                             st.last_emit_fingerprint = fp
                             st.last_suggested_at = time()
@@ -1395,6 +1412,9 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                                 "cards": cards,
                                 "createdAt": str(_now_epoch()),
                             }
+                            # Add MongoDB user details as sticky header for UI display
+                            if st.mongo_user_details:
+                                output["userDetails"] = st.mongo_user_details
                             if _trace_include_payloads():
                                 sp_post.set_attribute("live.response.preview", _preview(output))
 
