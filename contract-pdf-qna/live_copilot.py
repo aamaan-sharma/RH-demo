@@ -75,40 +75,6 @@ def _get_infer_wrapper():
         return None
 
 
-"""
-Live Copilot Orchestrator (PoC)
-
-Invoked by app.py (in a SocketIO background task) ONLY when:
-- ENABLE_LIVE_COPILOT=1, AND
-- session is enabled by Analyze Live UI (copilot_enable), AND
-- transcript event arrives for that session.
-
-This module must be safe and fail-soft: callers will swallow exceptions so /webhook remains unchanged.
-
-Return payload shape (consumed by LiveTranscript UI):
-{
-  "sessionId": "...",
-  "intent": "...",
-  "confidence": 0.0,
-  "customer": { "verified": bool, "name": "...", "plan": "...", "contractType": "...", "state": "...", "phone": "..." },
-  "cards": [ { "title": "...", "csrScript": "...", "evidence": "...", "priority": "high|medium|low" } ],
-  "createdAt": "epoch_seconds"
-}
-"""
-
-
-# -----------------------
-# Env + config
-# -----------------------
-
-
-# _env_int is now imported from utils.constants
-
-
-# -----------------------
-# Tracing helpers (ADD ONLY)
-# -----------------------
-
 
 def _trace_include_payloads() -> bool:
     raw = (os.getenv("OTEL_TRACE_INCLUDE_PAYLOADS", "0") or "").strip().lower()
@@ -217,7 +183,6 @@ def _infer_handler_context(handler: CallbackHandler):
                     pass
 
 
-# COPILOT_COOLDOWN_SECONDS and COPILOT_MAX_VERIFICATION_ASKS are now imported from utils.constants
 
 
 # -----------------------
