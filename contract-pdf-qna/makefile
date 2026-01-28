@@ -1,3 +1,5 @@
+include .env
+export
 
 init:
 	pyenv local
