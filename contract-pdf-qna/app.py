@@ -3183,7 +3183,6 @@ def claims_followup_chat():
             now_ts = datetime.utcnow()
             underlying = docs.get("underlying_model") or "Search"
             try:
-                '''
                 qna_collection.update_one(
                     {"_id": ObjectId(conversation_id)},
                     {
@@ -3203,7 +3202,7 @@ def claims_followup_chat():
                         },
                         "$set": {"updated_at": now_ts},
                     },
-                )'''
+                )
                 pass
             except Exception:
                 pass
