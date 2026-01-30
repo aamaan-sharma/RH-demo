@@ -1447,8 +1447,11 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                     if not phone_candidates:
                         phone_candidates = _extract_phone_candidates(text)
                     
+                    # Only force CUSTOMER_IDENTIFICATION when we don't have customer yet (first-time lookup).
+                    # Once customer is known, use LLM for intent so coverage/inquiry questions get INQUIRY
+                    # and we extract questions + run RAG/Infer (VectorDB).
                     intent_obj: Dict[str, Any]
-                    if phone_candidates:
+                    if phone_candidates and not st.customer:
                         intent_obj = {
                             "intent": "CUSTOMER_IDENTIFICATION",
                             "confidence": 0.95,
@@ -1466,6 +1469,11 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                         }
                     else:
                         intent_obj = _call_intent_llm(transcript=transcript, handler=handler, span=sp_intent)
+                        # If LLM didn't return phone but we have payload phone, attach for context_retrieval
+                        if phone_candidates and (not intent_obj.get("entities") or not intent_obj.get("entities", {}).get("phone")):
+                            intent_obj = dict(intent_obj)
+                            intent_obj.setdefault("entities", {})
+                            intent_obj["entities"]["phone"] = intent_obj["entities"].get("phone") or phone_candidates[0]
 
                     intent = _s(intent_obj.get("intent")) or "OTHER"
                     confidence = float(intent_obj.get("confidence") or 0.0)
