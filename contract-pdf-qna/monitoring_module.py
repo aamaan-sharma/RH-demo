@@ -2,6 +2,8 @@ import os
 import json
 from datetime import datetime
 from pathlib import Path
+import socket
+from urllib.parse import urlparse
 
 # OpenTelemetry (single tracing implementation)
 from opentelemetry import trace
@@ -28,6 +30,27 @@ def _otlp_http_endpoint() -> str:
     return base.rstrip("/") + "/v1/traces"
 
 
+def _is_truthy_env(name: str) -> bool:
+    val = _env(name, "").lower()
+    return val in {"1", "true", "yes", "y", "on"}
+
+
+def _can_resolve_export_host(endpoint: str) -> bool:
+    """
+    Best-effort guard so local runs don't spam exporter errors when `jaeger`
+    (docker-compose hostname) isn't resolvable.
+    """
+    try:
+        parsed = urlparse(endpoint)
+        host = (parsed.hostname or "").strip()
+        if not host:
+            return False
+        socket.getaddrinfo(host, parsed.port or 80, proto=socket.IPPROTO_TCP)
+        return True
+    except Exception:
+        return False
+
+
 def _init_tracer_provider() -> None:
     # Safety: never create multiple tracer providers.
     current = trace.get_tracer_provider()
@@ -43,7 +66,21 @@ def _init_tracer_provider() -> None:
 
     resource = Resource.create({SERVICE_NAME: service_name})
     provider = TracerProvider(resource=resource)
-    exporter = OTLPSpanExporter(endpoint=_otlp_http_endpoint())
+
+    # Allow disabling exports explicitly for local dev.
+    # Standard env: OTEL_TRACES_EXPORTER=none
+    if _env("OTEL_TRACES_EXPORTER", "").lower() == "none" or _is_truthy_env("DISABLE_OTEL_EXPORT"):
+        trace.set_tracer_provider(provider)
+        return
+
+    endpoint = _otlp_http_endpoint()
+    if not _can_resolve_export_host(endpoint):
+        # Keep tracing API working, but skip exporter to avoid background errors.
+        # (Common when running app locally without docker-compose `jaeger` service.)
+        trace.set_tracer_provider(provider)
+        return
+
+    exporter = OTLPSpanExporter(endpoint=endpoint)
     provider.add_span_processor(BatchSpanProcessor(exporter))
     trace.set_tracer_provider(provider)
 

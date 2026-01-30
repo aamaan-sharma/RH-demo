@@ -36,7 +36,7 @@ def _env_int(name: str, default: int) -> int:
 # Milvus retrieval sizing:
 # - MILVUS_RETRIEVER_K controls the vector search top-k used by LangChain retrievers.
 # - MILVUS_MAX_RETURN_CHUNKS controls how many chunks we return to the API (None = no cap).
-MILVUS_RETRIEVER_K = _optional_positive_int_env("MILVUS_RETRIEVER_K") or 25
+MILVUS_RETRIEVER_K = _optional_positive_int_env("MILVUS_RETRIEVER_K") or 10
 MILVUS_FALLBACK_K = _optional_positive_int_env("MILVUS_FALLBACK_K") or MILVUS_RETRIEVER_K
 MILVUS_MAX_RETURN_CHUNKS = _optional_positive_int_env("MILVUS_MAX_RETURN_CHUNKS")
 
