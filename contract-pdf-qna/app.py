@@ -2225,72 +2225,86 @@ def process_live_copilot_question(
     Returns:
         Dict with keys: answer, relevantChunks, confidence, latency
     """
-    try:
-        print(
-            f"[LIVE_COPILOT_INFER] Processing question='{question[:100]}...', "
-            f"contract_type={contract_type}, plan={selected_plan}, state={selected_state}"
-        )
-        
-        # Get collection name using utility function
-        selected_collection_name = get_milvus_collection_name(
-            contract_type=contract_type,
-            selected_plan=selected_plan,
-            selected_state=selected_state
-        )
-        
-        if not selected_collection_name:
-            # Get normalized values for error logging
-            contract_type_norm = normalize_contract_type(contract_type)
-            selected_plan_norm = normalize_plan_for_milvus(contract_type_norm, selected_plan)
-            print(f"[LIVE_COPILOT_INFER] Could not determine collection name for contract_type={contract_type_norm}, plan={selected_plan_norm}")
+    with tracer.start_as_current_span("live_copilot.process_question") as span:
+        try:
+            span.set_attribute("live_copilot.question.preview", question[:200] if question else "")
+            span.set_attribute("live_copilot.contract_type", contract_type or "")
+            span.set_attribute("live_copilot.plan", selected_plan or "")
+            span.set_attribute("live_copilot.state", selected_state or "")
+            
+            print(
+                f"[LIVE_COPILOT_INFER] Processing question='{question[:100]}...', "
+                f"contract_type={contract_type}, plan={selected_plan}, state={selected_state}"
+            )
+            
+            # Get collection name using utility function
+            selected_collection_name = get_milvus_collection_name(
+                contract_type=contract_type,
+                selected_plan=selected_plan,
+                selected_state=selected_state
+            )
+            
+            if not selected_collection_name:
+                # Get normalized values for error logging
+                contract_type_norm = normalize_contract_type(contract_type)
+                selected_plan_norm = normalize_plan_for_milvus(contract_type_norm, selected_plan)
+                print(f"[LIVE_COPILOT_INFER] Could not determine collection name for contract_type={contract_type_norm}, plan={selected_plan_norm}")
+                span.set_attribute("live_copilot.error", "collection_not_found")
+                return {
+                    "answer": "Unable to determine the appropriate knowledge base for your query.",
+                    "relevantChunks": [],
+                    "confidence": 0.0,
+                    "latency": 0.0,
+                }
+            
+            span.set_attribute("live_copilot.collection_name", selected_collection_name)
+            print(f"[LIVE_COPILOT_INFER] Using Milvus collection: {selected_collection_name}")
+            
+            # Initialize Milvus vector DB
+            vector_db1 = get_vector_db(selected_collection_name)
+            
+            # Initialize retriever
+            retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
+            
+            # Initialize LLMs for Infer mode
+            llm = ChatOpenAI(temperature=0.0, model="gpt-4o")
+            llm2 = ChatOpenAI(temperature=0.0, model="gpt-4o")
+            
+            # Call the existing INFER implementation
+            result = process_single_transcript_question(
+                question=question,
+                contract_type=contract_type,
+                selected_plan=selected_plan,
+                selected_state=selected_state,
+                gpt_model="Infer",  # Use INFER mode with LangChain Agent
+                vector_db=vector_db1,
+                llm=llm,
+                llm2=llm2,
+                retriever=retriever,
+                handler=handler,
+                transcript_context=transcript_context,
+            )
+            
+            print(f"[LIVE_COPILOT_INFER] Result: answer_len={len(result.get('answer', ''))}, chunks={len(result.get('relevantChunks', []))}")
+            
+            if result:
+                span.set_attribute("live_copilot.answer_length", len(result.get("answer", "")))
+                span.set_attribute("live_copilot.chunks_count", len(result.get("relevantChunks", [])))
+                span.set_attribute("live_copilot.confidence", result.get("confidence", 0.0))
+            
+            return result
+            
+        except Exception as e:
+            print(f"[LIVE_COPILOT_INFER] Error: {e}")
+            import traceback
+            traceback.print_exc()
+            span.set_attribute("live_copilot.error", str(e)[:200])
             return {
-                "answer": "Unable to determine the appropriate knowledge base for your query.",
+                "answer": f"Error processing question: {str(e)}",
                 "relevantChunks": [],
                 "confidence": 0.0,
                 "latency": 0.0,
             }
-        
-        print(f"[LIVE_COPILOT_INFER] Using Milvus collection: {selected_collection_name}")
-        
-        # Initialize Milvus vector DB
-        vector_db1 = get_vector_db(selected_collection_name)
-        
-        # Initialize retriever
-        retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
-        
-        # Initialize LLMs for Infer mode
-        llm = ChatOpenAI(temperature=0.0, model="gpt-4o")
-        llm2 = ChatOpenAI(temperature=0.0, model="gpt-4o")
-        
-        # Call the existing INFER implementation
-        result = process_single_transcript_question(
-            question=question,
-            contract_type=contract_type,
-            selected_plan=selected_plan,
-            selected_state=selected_state,
-            gpt_model="Infer",  # Use INFER mode with LangChain Agent
-            vector_db=vector_db1,
-            llm=llm,
-            llm2=llm2,
-            retriever=retriever,
-            handler=handler,
-            transcript_context=transcript_context,
-        )
-        
-        print(f"[LIVE_COPILOT_INFER] Result: answer_len={len(result.get('answer', ''))}, chunks={len(result.get('relevantChunks', []))}")
-        
-        return result
-        
-    except Exception as e:
-        print(f"[LIVE_COPILOT_INFER] Error: {e}")
-        import traceback
-        traceback.print_exc()
-        return {
-            "answer": f"Error processing question: {str(e)}",
-            "relevantChunks": [],
-            "confidence": 0.0,
-            "latency": 0.0,
-        }
 
 
 # Feedback CRUD Operations
@@ -6877,110 +6891,116 @@ def transcript_event():
     # Accept either sessionId or contactId so room matches frontend (join_session uses contactId)
     session_id = data.get("sessionId") or data.get("contactId")
     if not session_id:
-        return jsonify({"error": "sessionId or contactId is required"}), 400
+        return jsonify({"error": "sessionId is required"}), 400
 
-    # broadcast to UI via websocket
-    # 🔥 LOG TRANSCRIPT EVENT
-    include_payloads = str(os.getenv("OTEL_TRACE_INCLUDE_PAYLOADS", "0") or "").strip().lower() in ("1", "true", "yes", "y", "on")
-    if include_payloads:
-        try:
-            limit = int(os.getenv("OTEL_TRACE_PAYLOAD_PREVIEW_CHARS", "500") or 500)
-        except Exception:
-            limit = 500
-        print("🔴 TRANSCRIPT RECEIVED (payload):", json.dumps(data, indent=2, default=str)[: max(0, limit)])
-    else:
-        try:
-            txt = str(data.get("text") or "")
-            print(
-                "🔴 TRANSCRIPT RECEIVED (summary): "
-                f"sessionId={data.get('sessionId')}, speaker={data.get('speaker')}, "
-                f"isPartial={bool(data.get('isPartial', True))}, text_len={len(txt)}"
-            )
-        except Exception:
-            pass
-    try:
-        socketio.emit("transcript_update", data, room=session_id)
-    except Exception as e:
-        print(f"⚠️ Transcript emission error (non-blocking): {e}")
-
-
-    # ========== LIVE COPILOT: Real-time AI suggestions ==========
-    # Process through Live Copilot if:
-    # 1. Module is available
-    # 2. Feature flag is enabled
-    # 3. Session has copilot enabled (via copilot_enable from UI), unless ENABLE_LIVE_COPILOT_REQUIRE_SESSION=0
-    # 4. Transcript is complete (not partial)
-    require_session = _flag_enabled("ENABLE_LIVE_COPILOT_REQUIRE_SESSION", "1")
-    copilot_ok = (
-        LIVE_COPILOT_AVAILABLE
-        and _flag_enabled("ENABLE_LIVE_COPILOT", "0")
-        and should_start_copilot(data)
-    )
-    if copilot_ok and (not require_session or _copilot_session_is_enabled(session_id)):
-        def process_copilot_async():
+    # Get or create session trace context for proper nesting
+    parent_ctx = _get_or_create_session_trace_context(session_id)
+    
+    with tracer.start_as_current_span("webhook.transcript_event", context=parent_ctx) as webhook_span:
+        webhook_span.set_attribute("live.session_id", session_id)
+        
+        # broadcast to UI via websocket
+        # 🔥 LOG TRANSCRIPT EVENT
+        include_payloads = str(os.getenv("OTEL_TRACE_INCLUDE_PAYLOADS", "0") or "").strip().lower() in ("1", "true", "yes", "y", "on")
+        if include_payloads:
             try:
-                # Build copilot payload with session context
-                # Include phone, state, plan, contractType from transcript payload
-                # Normalize speaker so live_copilot sees "customer" for customer-side utterances
-                raw_speaker = (data.get("speaker") or "").strip().lower()
-                speaker = "customer" if raw_speaker in ("user", "caller", "participant", "customer") else raw_speaker or "customer"
-                copilot_payload = {
-                    "sessionId": session_id,
-                    "contactId": data.get("contactId"),
-                    "speaker": speaker,
-                    "text": data.get("text"),
-                    "isPartial": data.get("isPartial", False),
-                    "beginOffsetMillis": data.get("beginOffsetMillis"),
-                    "endOffsetMillis": data.get("endOffsetMillis"),
-                    # New fields from transcript for session context
-                    # Support both 'phoneNumber' (Amazon Connect) and 'phone' keys
-                    "phoneNumber": data.get("phoneNumber") or data.get("phone"),
-                    "state": data.get("state"),
-                    "contractType": data.get("contractType"),
-                    "plan": data.get("plan"),
-                }
-                
-                # Call Live Copilot to process transcript under the session trace root (1 trace per sessionId)
-                parent_ctx = _get_or_create_session_trace_context(session_id)
-                copilot_result = handle_transcript_event(copilot_payload, parent_context=parent_ctx)
-                
-                if copilot_result:
-                    if include_payloads:
-                        try:
-                            limit = int(os.getenv("OTEL_TRACE_PAYLOAD_PREVIEW_CHARS", "500") or 500)
-                        except Exception:
-                            limit = 500
-                        print(
-                            "🟢 COPILOT SUGGESTION (payload):",
-                            json.dumps(copilot_result, indent=2, default=str)[: max(0, limit)],
-                        )
-                    else:
-                        try:
-                            cards = copilot_result.get("cards") or []
-                            print(
-                                "🟢 COPILOT SUGGESTION (summary): "
-                                f"sessionId={copilot_result.get('sessionId')}, intent={copilot_result.get('intent')}, cards={len(cards)}"
-                            )
-                        except Exception:
-                            pass
-                    # Emit suggestion to UI
-                    # socketio.emit("suggestion_update", copilot_result)
-                    socketio.emit("suggestion_update", copilot_result, room=session_id)
-            except Exception as e:
-                print(f"⚠️ Copilot processing error (non-blocking): {e}")
-                # Avoid spamming full tracebacks in normal demos; enable when debugging.
-                try:
-                    show_tb = str(os.getenv("COPILOT_TRACEBACK", "0") or "").lower() in ("1", "true", "yes")
-                except Exception:
-                    show_tb = False
-                if show_tb:
-                    import traceback
-                    traceback.print_exc()
-        # threading.Thread(target=process_copilot_async, daemon=True).start()
-        socketio.start_background_task(process_copilot_async)
-    # =============================================================
+                limit = int(os.getenv("OTEL_TRACE_PAYLOAD_PREVIEW_CHARS", "500") or 500)
+            except Exception:
+                limit = 500
+            print("🔴 TRANSCRIPT RECEIVED (payload):", json.dumps(data, indent=2, default=str)[: max(0, limit)])
+        else:
+            try:
+                txt = str(data.get("text") or "")
+                print(
+                    "🔴 TRANSCRIPT RECEIVED (summary): "
+                    f"sessionId={data.get('sessionId')}, speaker={data.get('speaker')}, "
+                    f"isPartial={bool(data.get('isPartial', True))}, text_len={len(txt)}"
+                )
+            except Exception:
+                pass
+        try:
+            socketio.emit("transcript_update", data, room=data["sessionId"])
+        except Exception as e:
+            print(f"⚠️ Transcript emission error (non-blocking): {e}")
 
-    return jsonify({"ok": True}), 200
+
+        # ========== LIVE COPILOT: Real-time AI suggestions ==========
+        # Process through Live Copilot if:
+        # 1. Module is available
+        # 2. Feature flag is enabled
+        # 3. Session has copilot enabled (via copilot_enable from UI), unless ENABLE_LIVE_COPILOT_REQUIRE_SESSION=0
+        # 4. Transcript is complete (not partial)
+        require_session = _flag_enabled("ENABLE_LIVE_COPILOT_REQUIRE_SESSION", "1")
+        copilot_ok = (
+            LIVE_COPILOT_AVAILABLE
+            and _flag_enabled("ENABLE_LIVE_COPILOT", "0")
+            and should_start_copilot(data)
+        )
+        if copilot_ok and (not require_session or _copilot_session_is_enabled(session_id)):
+            def process_copilot_async():
+                try:
+                    # Build copilot payload with session context
+                    # Include phone, state, plan, contractType from transcript payload
+                    # Normalize speaker so live_copilot sees "customer" for customer-side utterances
+                    raw_speaker = (data.get("speaker") or "").strip().lower()
+                    speaker = "customer" if raw_speaker in ("user", "caller", "participant", "customer") else raw_speaker or "customer"
+                    copilot_payload = {
+                        "sessionId": session_id,
+                        "contactId": data.get("contactId"),
+                        "speaker": speaker,
+                        "text": data.get("text"),
+                        "isPartial": data.get("isPartial", False),
+                        "beginOffsetMillis": data.get("beginOffsetMillis"),
+                        "endOffsetMillis": data.get("endOffsetMillis"),
+                        # New fields from transcript for session context
+                        # Support both 'phoneNumber' (Amazon Connect) and 'phone' keys
+                        "phoneNumber": data.get("phoneNumber") or data.get("phone"),
+                        "state": data.get("state"),
+                        "contractType": data.get("contractType"),
+                        "plan": data.get("plan"),
+                    }
+                    
+                    # Call Live Copilot to process transcript under the session trace root (1 trace per sessionId)
+                    # Use the same parent context so spans nest correctly
+                    copilot_result = handle_transcript_event(copilot_payload, parent_context=parent_ctx)
+                    
+                    if copilot_result:
+                        if include_payloads:
+                            try:
+                                limit = int(os.getenv("OTEL_TRACE_PAYLOAD_PREVIEW_CHARS", "500") or 500)
+                            except Exception:
+                                limit = 500
+                            print(
+                                "🟢 COPILOT SUGGESTION (payload):",
+                                json.dumps(copilot_result, indent=2, default=str)[: max(0, limit)],
+                            )
+                        else:
+                            try:
+                                cards = copilot_result.get("cards") or []
+                                print(
+                                    "🟢 COPILOT SUGGESTION (summary): "
+                                    f"sessionId={copilot_result.get('sessionId')}, intent={copilot_result.get('intent')}, cards={len(cards)}"
+                                )
+                            except Exception:
+                                pass
+                        # Emit suggestion to UI
+                        # socketio.emit("suggestion_update", copilot_result)
+                        socketio.emit("suggestion_update", copilot_result, room=session_id)
+                except Exception as e:
+                    print(f"⚠️ Copilot processing error (non-blocking): {e}")
+                    # Avoid spamming full tracebacks in normal demos; enable when debugging.
+                    try:
+                        show_tb = str(os.getenv("COPILOT_TRACEBACK", "0") or "").lower() in ("1", "true", "yes")
+                    except Exception:
+                        show_tb = False
+                    if show_tb:
+                        import traceback
+                        traceback.print_exc()
+            # threading.Thread(target=process_copilot_async, daemon=True).start()
+            socketio.start_background_task(process_copilot_async)
+        # =============================================================
+
+        return jsonify({"ok": True}), 200
 
 @socketio.on("connect")
 def on_connect(auth):

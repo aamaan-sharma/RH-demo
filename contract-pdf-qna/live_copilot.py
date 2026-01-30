@@ -157,23 +157,6 @@ def _set_session_attr(span) -> None:
         pass
 
 
-def _span_common(span, agent_name: str, agent_role: str, from_agent: str) -> None:
-    """
-    Apply consistent metadata across spans for correlation + agent attribution.
-    Do not change span names/hierarchy; this is additive metadata only.
-    """
-    try:
-        _set_session_attr(span)
-        if agent_name:
-            span.set_attribute("agent.name", agent_name)
-        if agent_role:
-            span.set_attribute("agent.role", agent_role)
-        if from_agent:
-            span.set_attribute("agent.from", from_agent)
-        span.set_attribute("agent.type", "simulated")
-        span.set_attribute("agent.orchestration", "sequential")
-    except Exception:
-        pass
 
 
 @contextmanager
@@ -1412,286 +1395,247 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
             if _trace_include_payloads():
                 root.set_attribute("live.transcript.preview", _preview(text))
 
-            with tracer.start_as_current_span("orchestrator_agent") as orch:
-                _span_common(
-                    orch,
-                    agent_name="orchestrator-agent.live-infer",
-                    agent_role="Coordinates intent detection, retrieval, and response generation",
-                    from_agent="live_call.processing",
+            transcript = _buffer_text(st)
+            important_change = False
+
+            # ---------------- phase: intent_detection ----------------
+            with tracer.start_as_current_span("live_copilot.intent_detection") as sp_intent:
+                _set_session_attr(sp_intent)
+                
+                # Prioritize phoneNumber from payload, fallback to regex extraction from text
+                phone_candidates = []
+                if payload_phone:
+                    phone_clean = re.sub(r"\D+", "", payload_phone)
+                    if len(phone_clean) == 10:
+                        phone_candidates = [phone_clean, "+1" + phone_clean]
+                    elif len(phone_clean) == 11 and phone_clean.startswith("1"):
+                        phone_candidates = [phone_clean[1:], "+1" + phone_clean[1:], phone_clean]
+                    else:
+                        phone_candidates = [phone_clean]
+                
+                if not phone_candidates:
+                    phone_candidates = _extract_phone_candidates(text)
+                
+                # Only force CUSTOMER_IDENTIFICATION when we don't have customer yet (first-time lookup).
+                # Once customer is known, use LLM for intent so coverage/inquiry questions get INQUIRY
+                # and we extract questions + run RAG/Infer (VectorDB).
+                intent_obj: Dict[str, Any]
+                if phone_candidates and not st.customer:
+                    intent_obj = {
+                        "intent": "CUSTOMER_IDENTIFICATION",
+                        "confidence": 0.95,
+                        "entities": {
+                            "phone": phone_candidates[0],
+                            "appliance": "",
+                            "symptom": "",
+                            "money_amount": "",
+                            "timeline": "",
+                            "claimId": "",
+                            "question": "",
+                        },
+                        "requiresVerification": True,
+                        "evidenceQuote": text[:200],
+                    }
+                else:
+                    intent_obj = _call_intent_llm(transcript=transcript, handler=handler, span=sp_intent)
+                    # If LLM didn't return phone but we have payload phone, attach for context_retrieval
+                    if phone_candidates and (not intent_obj.get("entities") or not intent_obj.get("entities", {}).get("phone")):
+                        intent_obj = dict(intent_obj)
+                        intent_obj.setdefault("entities", {})
+                        intent_obj["entities"]["phone"] = intent_obj["entities"].get("phone") or phone_candidates[0]
+
+                intent = _s(intent_obj.get("intent")) or "OTHER"
+                confidence = float(intent_obj.get("confidence") or 0.0)
+                evidence = _s(intent_obj.get("evidenceQuote")) or text[:200]
+                entities = intent_obj.get("entities") or {}
+                phone_entity = _s(entities.get("phone"))
+
+            # ---------------- phase: context_retrieval ----------------
+            with tracer.start_as_current_span("live_copilot.context_retrieval") as sp_ctx:
+                _set_session_attr(sp_ctx)
+                
+                tool_result: Dict[str, Any] = {}
+                customer = st.customer
+
+                if (phone_candidates or phone_entity) and not customer:
+                    candidates = phone_candidates or [phone_entity]
+                    doc = _lookup_user_by_phone([c for c in candidates if c])
+                    if doc:
+                        st.customer = _normalize_customer_doc(doc, candidates[0])
+                        customer = st.customer
+                        try:
+
+                            st.contract_type = st.contract_type or _s(customer.get("contractType"))
+                            st.selected_plan = st.selected_plan or _s(customer.get("plan"))
+                            st.selected_state = st.selected_state or _s(customer.get("state"))
+                            mongo_ct = _s(customer.get("contractType"))
+                            mongo_pl = _s(customer.get("plan")) or _s(customer.get("selectedPlan")) or _s(customer.get("planName"))
+                            mongo_st = _s(customer.get("state")) or _s(customer.get("selectedState")) or _s(customer.get("stateName"))
+                            if mongo_ct:
+                                st.contract_type = mongo_ct
+                            if mongo_pl:
+                                st.selected_plan = mongo_pl
+                            if mongo_st:
+                                st.selected_state = mongo_st
+                        except Exception:
+                            pass
+                        important_change = True
+
+                customer_ctx = _effective_customer_context(st)
+                verified = bool(customer_ctx.get("verified"))
+
+                should_extract = (
+                    speaker == "customer" 
+                    and _should_extract_questions(text) 
+                    and intent not in ("CUSTOMER_IDENTIFICATION", "SMALL_TALK", "OTHER")
+                )
+                if should_extract:
+                    extracted = _extract_questions_llm(transcript=transcript, handler=handler, span=sp_ctx, customer_ctx=customer_ctx)
+                    if not extracted:
+                        q1 = _s(entities.get("question"))
+                        if q1:
+                            extracted = [q1]
+                    if extracted:
+                        if _queue_questions(st, extracted):
+                            important_change = True
+
+                # Build tool_result snapshot (always present so the prompt has state + conversation context)
+                # Include previousAnswers so LLM doesn't contradict itself
+                previous_answers = [
+                    {
+                        "question": k,
+                        "answer": v.get("answer", ""),
+                        "citedChunks": v.get("citedChunks", []),
+                    }
+                    for k, v in st.answered.items()
+                    if v.get("answer")
+                ]
+
+                # Helper to strip context for display
+                def _strip_ctx(s: str) -> str:
+                    return re.sub(r"\[CALL_CONTEXT:.*?\]\s*", "", _s(s)).strip()
+
+                tool_result = {
+                    "mode": "verified" if verified else "unverified",
+                    "sessionContext": {
+                        "contractType": customer_ctx.get("contractType"),
+                        "plan": customer_ctx.get("plan"),
+                        "state": customer_ctx.get("state"),
+                    },
+                    "pendingQuestions": [_strip_ctx(x.get("q")) for x in st.pending_questions if _s(x.get("q"))],
+                    "answeredCount": len(st.answered),
+                    "previousAnswers": previous_answers,  # Include all previously answered questions for consistency
+                    "newAnswers": [],
+                    "verification": {
+                        "needsPhone": False,
+                        "askForPhone": False,
+                    },
+                }
+
+                requires_verification = bool(intent_obj.get("requiresVerification"))
+                if (requires_verification or st.pending_questions) and not verified:
+                    tool_result["verification"]["needsPhone"] = True
+                    if st.verification_asks < COPILOT_MAX_VERIFICATION_ASKS:
+                        st.verification_asks += 1
+                        tool_result["verification"]["askForPhone"] = True
+
+                can_rag = bool(
+                    customer_ctx.get("contractType") and customer_ctx.get("plan") and customer_ctx.get("state")
                 )
 
-                transcript = _buffer_text(st)
-
-                important_change = False
-
-                # ---------------- phase: intent_detection ----------------
-                with tracer.start_as_current_span("intent_detection") as sp_intent:
-                    _span_common(
-                        sp_intent,
-                        agent_name="atomic-agent.intent_detection",
-                        agent_role="Intent classification + entity extraction",
-                        from_agent="orchestrator-agent.live-infer",
-                    )
-
-                    # Prioritize phoneNumber from payload, fallback to regex extraction from text
-                    phone_candidates = []
-                    if payload_phone:
-                        phone_clean = re.sub(r"\D+", "", payload_phone)
-                        if len(phone_clean) == 10:
-                            phone_candidates = [phone_clean, "+1" + phone_clean]
-                        elif len(phone_clean) == 11 and phone_clean.startswith("1"):
-                            phone_candidates = [phone_clean[1:], "+1" + phone_clean[1:], phone_clean]
-                        else:
-                            phone_candidates = [phone_clean]
+            # ---------------- phase: rag_answer (where applicable) ----------------
+            if can_rag and st.pending_questions:
+                with tracer.start_as_current_span("live_copilot.rag_answer") as sp_rag:
+                    _set_session_attr(sp_rag)
                     
-                    if not phone_candidates:
-                        phone_candidates = _extract_phone_candidates(text)
-                    
-                    # Only force CUSTOMER_IDENTIFICATION when we don't have customer yet (first-time lookup).
-                    # Once customer is known, use LLM for intent so coverage/inquiry questions get INQUIRY
-                    # and we extract questions + run RAG/Infer (VectorDB).
-                    intent_obj: Dict[str, Any]
-                    if phone_candidates and not st.customer:
-                        intent_obj = {
-                            "intent": "CUSTOMER_IDENTIFICATION",
-                            "confidence": 0.95,
-                            "entities": {
-                                "phone": phone_candidates[0],
-                                "appliance": "",
-                                "symptom": "",
-                                "money_amount": "",
-                                "timeline": "",
-                                "claimId": "",
-                                "question": "",
-                            },
-                            "requiresVerification": True,
-                            "evidenceQuote": text[:200],
-                        }
-                    else:
-                        intent_obj = _call_intent_llm(transcript=transcript, handler=handler, span=sp_intent)
-                        # If LLM didn't return phone but we have payload phone, attach for context_retrieval
-                        if phone_candidates and (not intent_obj.get("entities") or not intent_obj.get("entities", {}).get("phone")):
-                            intent_obj = dict(intent_obj)
-                            intent_obj.setdefault("entities", {})
-                            intent_obj["entities"]["phone"] = intent_obj["entities"].get("phone") or phone_candidates[0]
-
-                    intent = _s(intent_obj.get("intent")) or "OTHER"
-                    confidence = float(intent_obj.get("confidence") or 0.0)
-                    evidence = _s(intent_obj.get("evidenceQuote")) or text[:200]
-                    entities = intent_obj.get("entities") or {}
-                    phone_entity = _s(entities.get("phone"))
-
-                # ---------------- phase: context_retrieval ----------------
-                with tracer.start_as_current_span("context_retrieval") as sp_ctx:
-                    _span_common(
-                        sp_ctx,
-                        agent_name="atomic-agent.context_retrieval",
-                        agent_role="Load customer context, DB lookups, and question extraction",
-                        from_agent="atomic-agent.intent_detection",
-                    )
-
-                    tool_result: Dict[str, Any] = {}
-                    customer = st.customer
-
-                    if (phone_candidates or phone_entity) and not customer:
-                        candidates = phone_candidates or [phone_entity]
-                        doc = _lookup_user_by_phone([c for c in candidates if c])
-                        if doc:
-                            st.customer = _normalize_customer_doc(doc, candidates[0])
-                            customer = st.customer
-                            try:
-                                # Always use MongoDB values when found (no payload fallback)
-                                mongo_ct = _s(customer.get("contractType"))
-                                mongo_pl = _s(customer.get("plan")) or _s(customer.get("selectedPlan")) or _s(customer.get("planName"))
-                                mongo_st = _s(customer.get("state")) or _s(customer.get("selectedState")) or _s(customer.get("stateName"))
-                                if mongo_ct:
-                                    st.contract_type = mongo_ct
-                                if mongo_pl:
-                                    st.selected_plan = mongo_pl
-                                if mongo_st:
-                                    st.selected_state = mongo_st
-                            except Exception:
-                                pass
-                            # Set UI-ready user details so frontend Customer Details card receives userDetails
-                            st.mongo_user_details = _build_mongo_user_details(doc, candidates[0])
-                            important_change = True
-
-                    customer_ctx = _effective_customer_context(st)
-                    verified = bool(customer_ctx.get("verified"))
-
-                    should_extract = (
-                        speaker == "customer" 
-                        and _should_extract_questions(text) 
-                        and intent not in ("CUSTOMER_IDENTIFICATION", "SMALL_TALK", "OTHER")
-                    )
-                    if should_extract:
-                        extracted = _extract_questions_llm(transcript=transcript, handler=handler, span=sp_ctx, customer_ctx=customer_ctx)
-                        if not extracted:
-                            q1 = _s(entities.get("question"))
-                            if q1:
-                                extracted = [q1]
-                        if extracted:
-                            if _queue_questions(st, extracted):
-                                important_change = True
-
-                    # Build tool_result snapshot (always present so the prompt has state + conversation context)
-                    # Include previousAnswers so LLM doesn't contradict itself
-                    previous_answers = [
-                        {
-                            "question": k,
-                            "answer": v.get("answer", ""),
-                            "citedChunks": v.get("citedChunks", []),
-                        }
-                        for k, v in st.answered.items()
-                        if v.get("answer")
-                    ]
-
-                    # Helper to strip context for display
-                    def _strip_ctx(s: str) -> str:
-                        return re.sub(r"\[CALL_CONTEXT:.*?\]\s*", "", _s(s)).strip()
-
-                    tool_result = {
-                        "mode": "verified" if verified else "unverified",
-                        "sessionContext": {
-                            "contractType": customer_ctx.get("contractType"),
-                            "plan": customer_ctx.get("plan"),
-                            "state": customer_ctx.get("state"),
-                        },
-                        "pendingQuestions": [_strip_ctx(x.get("q")) for x in st.pending_questions if _s(x.get("q"))],
-                        "answeredCount": len(st.answered),
-                        "previousAnswers": previous_answers,  # Include all previously answered questions for consistency
-                        "newAnswers": [],
-                        "verification": {
-                            "needsPhone": False,
-                            "askForPhone": False,
-                        },
-                    }
-
-                    requires_verification = bool(intent_obj.get("requiresVerification"))
-                    if (requires_verification or st.pending_questions) and not verified:
-                        tool_result["verification"]["needsPhone"] = True
-                        if st.verification_asks < COPILOT_MAX_VERIFICATION_ASKS:
-                            st.verification_asks += 1
-                            tool_result["verification"]["askForPhone"] = True
-
-                    can_rag = bool(
-                        customer_ctx.get("contractType") and customer_ctx.get("plan") and customer_ctx.get("state")
-                    )
-
-                # ---------------- phase: rag_answer (where applicable) ----------------
-                if can_rag and st.pending_questions:
-                    with tracer.start_as_current_span("rag_answer") as sp_rag:
-                        _span_common(
-                            sp_rag,
-                            agent_name="atomic-agent.rag_answer",
-                            agent_role="Answer queued questions via Infer pipeline (RAG)",
-                            from_agent="atomic-agent.context_retrieval",
-                        )
-                        answered_now = []
-                        for item in list(st.pending_questions)[:2]:
-                            k = _s(item.get("k"))
-                            q = _s(item.get("q"))
-                            if not k or not q:
-                                continue
-                            if k in st.answered:
-                                continue
-                            res = _rag_answer(question=q, customer=customer_ctx, handler=handler, span=sp_rag)
-                            st.answered[k] = {"ts": time(), **(res or {})}
-                            answered_now.append({"question": _strip_ctx(q), "result": res})
-                        if answered_now:
-                            st.pending_questions = [
-                                x for x in st.pending_questions if _s(x.get("k")) not in st.answered
-                            ]
-                            tool_result["newAnswers"] = answered_now
-                            important_change = True
-
-                if intent == "PROBLEM":
-                    # Keep within rag_answer when applicable (same operational bucket: "tools").
-                    with tracer.start_as_current_span("rag_answer") as sp_rag:
-                        _span_common(
-                            sp_rag,
-                            agent_name="atomic-agent.rag_answer",
-                            agent_role="Generate generic diagnostics steps (non-coverage)",
-                            from_agent="atomic-agent.context_retrieval",
-                        )
-                        tool_result["diagnostics"] = _diagnostics_steps(transcript=transcript, handler=handler, span=sp_rag)
-
-                # ---------------- phase: llm_call ----------------
-                with tracer.start_as_current_span("llm_call") as sp_llm:
-                    _span_common(
-                        sp_llm,
-                        agent_name="atomic-agent.llm_call",
-                        agent_role="Generate CSR suggestion cards",
-                        from_agent="atomic-agent.rag_answer" if can_rag else "atomic-agent.context_retrieval",
-                    )
-
-                    # Always generate cards for first suggestion in call (never emitted yet)
-                    if not st.last_suggested_at:
+                    answered_now = []
+                    for item in list(st.pending_questions)[:2]:
+                        k = _s(item.get("k"))
+                        q = _s(item.get("q"))
+                        if not k or not q:
+                            continue
+                        if k in st.answered:
+                            continue
+                        res = _rag_answer(question=q, customer=customer_ctx, handler=handler, span=sp_rag)
+                        st.answered[k] = {"ts": time(), **(res or {})}
+                        answered_now.append({"question": _strip_ctx(q), "result": res})
+                    if answered_now:
+                        st.pending_questions = [
+                            x for x in st.pending_questions if _s(x.get("k")) not in st.answered
+                        ]
+                        tool_result["newAnswers"] = answered_now
                         important_change = True
-                    if not _cooldown_ok(st) and not important_change:
-                        cards = None
-                    else:
-                        cards = _call_suggest_llm_traced(
-                            intent=intent,
-                            customer_verified=verified,
-                            customer_context=customer_ctx,
-                            tool_result=tool_result,
-                            transcript=transcript,
-                            evidence=evidence,
-                            handler=handler,
-                            span=sp_llm,
-                        )
 
-                # ---------------- phase: response_postprocessing ----------------
-                with tracer.start_as_current_span("response_postprocessing") as sp_post:
-                    _span_common(
-                        sp_post,
-                        agent_name="atomic-agent.response_postprocessing",
-                        agent_role="Dedupe and finalize response payload",
-                        from_agent="atomic-agent.llm_call",
+            if intent == "PROBLEM":
+                # Generate diagnostics steps
+                with tracer.start_as_current_span("live_copilot.diagnostics") as sp_diag:
+                    _set_session_attr(sp_diag)
+                    tool_result["diagnostics"] = _diagnostics_steps(transcript=transcript, handler=handler, span=sp_diag)
+
+            # ---------------- phase: suggestion_generation ----------------
+            with tracer.start_as_current_span("live_copilot.suggestion_generation") as sp_llm:
+                _set_session_attr(sp_llm)
+                
+                # Always generate cards for first suggestion in call (never emitted yet)
+                if not st.last_suggested_at:
+                    important_change = True
+                if not _cooldown_ok(st) and not important_change:
+                    cards = None
+                else:
+                    cards = _call_suggest_llm_traced(
+                        intent=intent,
+                        customer_verified=verified,
+                        customer_context=customer_ctx,
+                        tool_result=tool_result,
+                        transcript=transcript,
+                        evidence=evidence,
+                        handler=handler,
+                        span=sp_llm,
                     )
 
-                    if cards is None:
-                        # Even if no cards, send user details if available (for sticky header)
-                        if st.mongo_user_details:
-                            output = {
-                                "sessionId": session_id,
-                                "intent": intent or "OTHER",
-                                "userDetails": st.mongo_user_details,
-                                "createdAt": str(_now_epoch()),
-                            }
-                        else:
-                            output = None
+            # ---------------- phase: response_postprocessing ----------------
+            # In-memory deduplication and token aggregation - no span needed
+            if cards is None:
+                # Even if no cards, send user details if available (for sticky header)
+                if st.mongo_user_details:
+                    output = {
+                        "sessionId": session_id,
+                        "intent": intent or "OTHER",
+                        "userDetails": st.mongo_user_details,
+                        "createdAt": str(_now_epoch()),
+                    }
+                else:
+                    output = None
+            else:
+                fp = _fingerprint({"intent": intent, "customer": customer_ctx, "cards": cards})
+                if fp == st.last_emit_fingerprint and not important_change:
+                    # Even if deduplicated, send user details if available (for sticky header)
+                    if st.mongo_user_details:
+                        output = {
+                            "sessionId": session_id,
+                            "intent": intent,
+                            "userDetails": st.mongo_user_details,
+                            "createdAt": str(_now_epoch()),
+                        }
                     else:
-                        fp = _fingerprint({"intent": intent, "customer": customer_ctx, "cards": cards})
-                        if fp == st.last_emit_fingerprint and not important_change:
-                            # Even if deduplicated, send user details if available (for sticky header)
-                            if st.mongo_user_details:
-                                output = {
-                                    "sessionId": session_id,
-                                    "intent": intent,
-                                    "userDetails": st.mongo_user_details,
-                                    "createdAt": str(_now_epoch()),
-                                }
-                            else:
-                                output = None
-                        else:
-                            st.last_emit_fingerprint = fp
-                            st.last_suggested_at = time()
-                            st.last_intent = intent
-                            output = {
-                                "sessionId": session_id,
-                                "intent": intent,
-                                "confidence": confidence,
-                                "customer": customer_ctx,
-                                "cards": cards,
-                                "createdAt": str(_now_epoch()),
-                            }
-                            # Add MongoDB user details as sticky header for UI display
-                            if st.mongo_user_details:
-                                output["userDetails"] = st.mongo_user_details
-                            if _trace_include_payloads():
-                                sp_post.set_attribute("live.response.preview", _preview(output))
+                        output = None
+                else:
+                    st.last_emit_fingerprint = fp
+                    st.last_suggested_at = time()
+                    st.last_intent = intent
+                    output = {
+                        "sessionId": session_id,
+                        "intent": intent,
+                        "confidence": confidence,
+                        "customer": customer_ctx,
+                        "cards": cards,
+                        "createdAt": str(_now_epoch()),
+                    }
+                    # Add MongoDB user details as sticky header for UI display
+                    if st.mongo_user_details:
+                        output["userDetails"] = st.mongo_user_details
+                    if _trace_include_payloads():
+                        root.set_attribute("live.response.preview", _preview(output))
 
             # Handler aggregation EXACTLY ONCE at end; attach totals ONLY to this Live Copilot branch span.
             try:
