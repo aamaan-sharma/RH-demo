@@ -41,6 +41,7 @@ const LiveTranscript = () => {
   const [, setCopilotUser] = useState(null);
   const [copilotCards, setCopilotCards] = useState([]);
   const [, setCopilotStatus] = useState(null);
+  const [userDetails, setUserDetails] = useState(null);
 
   const getTurnRole = (speaker) => {
     const x = String(speaker ?? "")
@@ -289,8 +290,14 @@ const LiveTranscript = () => {
         : Array.isArray(msg?.suggestions)
         ? msg.suggestions
         : [];
+      const userDetailsData = msg?.userDetails || null;
 
       setCopilotUser(customer);
+      
+      // Update user details if present (for sticky header display)
+      if (userDetailsData) {
+        setUserDetails(userDetailsData);
+      }
 
       // ACCUMULATE suggestions - keep history of suggestions during the call
       // Add timestamp and unique ID to each new card for tracking
@@ -374,6 +381,13 @@ const LiveTranscript = () => {
       });
     }
   }, [copilotCards]);
+
+  // Reset user details and cards when contactId changes (new call)
+  useEffect(() => {
+    setUserDetails(null);
+    setCopilotCards([]);
+    seenSuggestionsRef.current.clear();
+  }, [contactId]);
 
   // Handle manual scroll detection for transcript scroller
   const handleTranscriptScroll = () => {
@@ -688,6 +702,76 @@ const LiveTranscript = () => {
           </div>
 
           <div className="lt_ai_body" ref={suggestionsScrollerRef}>
+            {/* User Details Card - Sticky Header */}
+            {userDetails && (
+              <div className="lt_user_details_card">
+                <div className="lt_user_details_header">
+                  <div className="lt_user_details_icon">
+                    <svg
+                      width="20"
+                      height="20"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      xmlns="http://www.w3.org/2000/svg"
+                    >
+                      <path
+                        d="M12 12C14.7614 12 17 9.76142 17 7C17 4.23858 14.7614 2 12 2C9.23858 2 7 4.23858 7 7C7 9.76142 9.23858 12 12 12Z"
+                        fill="currentColor"
+                      />
+                      <path
+                        d="M12.0002 14.5C7.99016 14.5 4.75016 16.57 3.52016 19.59C3.22016 20.31 3.68016 21 4.45016 21H19.5502C20.3202 21 20.7802 20.31 20.4802 19.59C19.2502 16.57 16.0102 14.5 12.0002 14.5Z"
+                        fill="currentColor"
+                      />
+                    </svg>
+                  </div>
+                  <div className="lt_user_details_title">Customer Details</div>
+                </div>
+                <div className="lt_user_details_content">
+                  {userDetails.name && (
+                    <div className="lt_user_detail_item">
+                      <span className="lt_user_detail_label">Name:</span>
+                      <span className="lt_user_detail_value">{userDetails.name}</span>
+                    </div>
+                  )}
+                  {userDetails.phone && (
+                    <div className="lt_user_detail_item">
+                      <span className="lt_user_detail_label">Phone:</span>
+                      <span className="lt_user_detail_value">{userDetails.phone}</span>
+                    </div>
+                  )}
+                  {userDetails.email && (
+                    <div className="lt_user_detail_item">
+                      <span className="lt_user_detail_label">Email:</span>
+                      <span className="lt_user_detail_value">{userDetails.email}</span>
+                    </div>
+                  )}
+                  {userDetails.plan && (
+                    <div className="lt_user_detail_item">
+                      <span className="lt_user_detail_label">Plan:</span>
+                      <span className="lt_user_detail_value">{userDetails.plan}</span>
+                    </div>
+                  )}
+                  {userDetails.state && (
+                    <div className="lt_user_detail_item">
+                      <span className="lt_user_detail_label">State:</span>
+                      <span className="lt_user_detail_value">{userDetails.state}</span>
+                    </div>
+                  )}
+                  {userDetails.contractType && (
+                    <div className="lt_user_detail_item">
+                      <span className="lt_user_detail_label">Contract Type:</span>
+                      <span className="lt_user_detail_value">{userDetails.contractType}</span>
+                    </div>
+                  )}
+                  {userDetails.address && (
+                    <div className="lt_user_detail_item">
+                      <span className="lt_user_detail_label">Address:</span>
+                      <span className="lt_user_detail_value">{userDetails.address}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
             {copilotCards && copilotCards.length > 0 ? (
               <div className="lt_suggestion_list">
                 {/* Show most recent suggestions first */}
