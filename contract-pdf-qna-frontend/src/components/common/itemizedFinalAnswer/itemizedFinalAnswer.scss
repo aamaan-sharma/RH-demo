@@ -103,7 +103,8 @@
     background: #e9fbf2;
     color: #0f5f3a;
   }
-  .ifa_badge_rejected {
+  .ifa_badge_rejected,
+  .ifa_badge_denied {
     border-color: #ffd0d0;
     background: #fff2f2;
     color: #a11a1a;
@@ -247,6 +248,76 @@
       font-weight: 900;
       color: #333333;
       margin-bottom: 4px;
+    }
+  }
+
+  &.ifa_editable {
+    .ifa_input,
+    .ifa_textarea {
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid #dfe6ff;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 12px;
+      line-height: 18px;
+      font-family: inherit;
+      color: #333333;
+      outline: none;
+    }
+    .ifa_input {
+      min-height: 32px;
+    }
+    .ifa_textarea {
+      resize: vertical;
+      min-height: 48px;
+    }
+    .ifa_select_decision {
+      width: 100%;
+      min-width: 140px;
+      box-sizing: border-box;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 12px;
+      font-weight: 800;
+      font-family: inherit;
+      outline: none;
+      cursor: pointer;
+      appearance: auto;
+    }
+    .ifa_select_decision.ifa_decision_approved {
+      border: 1px solid #bfead6;
+      background: #e9fbf2;
+      color: #0f5f3a;
+    }
+    .ifa_select_decision.ifa_decision_denied {
+      border: 1px solid #ffd0d0;
+      background: #fff2f2;
+      color: #a11a1a;
+    }
+    .ifa_select_decision.ifa_decision_no_decision {
+      border: 1px solid #e6e6e6;
+      background: #fafafa;
+      color: #888888;
+      font-style: italic;
+    }
+    .ifa_keyfacts_row .v,
+    .ifa_meta .v {
+      display: block;
+    }
+  }
+
+  .ifa_overall_next_edit {
+    margin-top: 14px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid rgba(94, 123, 198, 0.18);
+    background: linear-gradient(180deg, #fbfcff 0%, #ffffff 100%);
+    .h {
+      font-size: 12px;
+      font-weight: 900;
+      color: #2f3a57;
+      margin-bottom: 8px;
     }
   }
 }

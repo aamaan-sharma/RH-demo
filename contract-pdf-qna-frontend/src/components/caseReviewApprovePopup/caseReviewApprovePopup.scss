@@ -53,11 +53,232 @@
     background: #fbfbfb;
     margin-bottom: 12px;
 
+    .section_title_row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
     .section_title {
       font-size: 13px;
       font-weight: 800;
       color: #333333;
+    }
+
+    .edit_summary_btn {
+      flex-shrink: 0;
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 700;
+      border-radius: 8px;
+      border: 1px solid #5e7bc6;
+      background: #ffffff;
+      color: #5e7bc6;
+      cursor: pointer;
+      &:hover {
+        background: #f0f4ff;
+      }
+    }
+
+    .ai_draft_edit_wrapper {
+      margin: 0;
+      padding: 0;
+      border: none;
+      background: transparent;
+    }
+
+    .ai_draft_textarea {
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid #e6e6e6;
+      border-radius: 14px;
+      padding: 12px 14px;
+      font-size: 13px;
+      line-height: 18px;
+      font-family: inherit;
+      resize: vertical;
+      outline: none;
+      background: #ffffff;
+      color: #333333;
+      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.07);
+      min-height: 280px;
+    }
+
+    .save_draft_row {
+      margin-top: 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .cancel_draft_btn {
+      padding: 8px 16px;
+      font-size: 13px;
+      font-weight: 700;
+      border-radius: 10px;
+      border: 1px solid #e0e0e0;
+      background: #ffffff;
+      color: #666666;
+      cursor: pointer;
+      &:hover:not(:disabled) {
+        background: #f7f7f7;
+        border-color: #d0d0d0;
+      }
+      &:disabled {
+        opacity: 0.7;
+        cursor: not-allowed;
+      }
+    }
+
+    .save_draft_btn {
+      padding: 8px 16px;
+      font-size: 13px;
+      font-weight: 700;
+      border-radius: 10px;
+      border: none;
+      background: #5e7bc6;
+      color: #ffffff;
+      cursor: pointer;
+      &:hover:not(:disabled) {
+        background: #4a6ab8;
+      }
+      &:disabled {
+        background: #b8c4e6;
+        cursor: not-allowed;
+      }
+    }
+
+    .change_log_section {
+      margin-top: 16px;
+      padding-top: 12px;
+      border-top: 1px solid #e6e6e6;
+    }
+
+    .change_log_title {
+      font-size: 12px;
+      font-weight: 800;
+      color: #2f3a57;
+      margin-bottom: 10px;
+    }
+
+    .change_log_list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .change_log_entry {
+      border: 1px solid #e6e6e6;
+      border-radius: 12px;
+      background: #fbfbfb;
+      padding: 12px 14px;
+      margin-bottom: 12px;
+    }
+
+    .change_log_item_header {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 10px;
+      font-size: 12px;
+    }
+
+    .change_log_header_row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+    }
+
+    .change_log_date {
+      color: #6b6b6b;
+      font-weight: 600;
+      text-align: left;
+    }
+
+    .change_log_user {
+      font-weight: 800;
+      color: #5e7bc6;
+    }
+
+    .change_log_item_name {
+      font-size: 12px;
+      font-weight: 700;
+      color: #2f3a57;
+      text-align: left;
+    }
+
+    .change_log_table_group {
+      margin-bottom: 14px;
+
+      &:last-child {
+        margin-bottom: 0;
+      }
+    }
+
+    .change_log_table_heading {
+      font-size: 13px;
+      font-weight: 800;
+      color: #2f3a57;
       margin-bottom: 8px;
+    }
+
+    .change_log_table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      background: #ffffff;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid #e0e0e0;
+    }
+
+    .change_log_th {
+      text-align: left;
+      padding: 10px 12px;
+      font-weight: 800;
+      color: #2f3a57;
+      background: #f5f6fa;
+      border-bottom: 1px solid #e0e0e0;
+    }
+
+    .change_log_th_field {
+      min-width: 120px;
+    }
+
+    .change_log_th_prev,
+    .change_log_th_curr {
+      min-width: 140px;
+    }
+
+    .change_log_td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #eee;
+      vertical-align: top;
+      word-break: break-word;
+      white-space: pre-wrap;
+    }
+
+    .change_log_td_field {
+      font-weight: 700;
+      color: #2f3a57;
+    }
+
+    .change_log_td_prev {
+      color: #555;
+      font-weight: 600;
+    }
+
+    .change_log_td_curr {
+      color: #333;
+      font-weight: 600;
+    }
+
+    .change_log_table tbody tr:last-child td {
+      border-bottom: none;
     }
 
     .hint {

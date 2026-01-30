@@ -2998,8 +2998,98 @@ def chat_history():
             ),
             "transcriptId": docs.get("transcript_id"),
             "transcriptMetadata": docs.get("transcript_metadata"),
+            "summaryEditLog": docs.get("summary_edit_log") or [],
         }
         return make_response(jsonify(output_json), 200)
+
+
+@app.route("/conversation/draft-summary", methods=["PATCH"])
+def update_draft_summary():
+    """Update the AI draft summary for a conversation and append a change-log entry.
+
+    Query params:
+      - conversation-id (str)
+
+    Body:
+      - finalSummary (str, required): new draft summary text
+      - previousSummary (str, optional): previous value for change log
+      - changes (list, optional): list of { fieldName, previousValue, updatedValue }
+        If omitted, a single change "AI draft summary" is derived from previousSummary and finalSummary.
+    """
+    try:
+        with tracer.start_as_current_span("api/conversation/draft-summary"):
+            authorization_header = request.headers.get("Authorization")
+            if authorization_header is None:
+                return jsonify({"message": "Token is missing"}), 401
+            if authorization_header:
+                token_data = token_process(authorization_header)
+                if token_data[1] == 401 or token_data[1] == 403:
+                    return (token_data[0].get_json()), token_data[1]
+
+            conversation_id = request.args.get("conversation-id")
+            if not conversation_id:
+                return jsonify({"error": "conversation-id is required"}), 400
+
+            data = request.get_json() or {}
+            new_summary = (data.get("finalSummary") or "").strip()
+            previous_summary = (data.get("previousSummary") or "").strip()
+            supplied_changes = data.get("changes") or []
+
+            user_email = token_data[0]["email"]
+            qna_collection_user = f"chats_{user_email}"
+            qna_collection = db[qna_collection_user]
+
+            if supplied_changes:
+                changes = [
+                    {
+                        "fieldName": c.get("fieldName") or c.get("field_name", ""),
+                        "previousValue": c.get("previousValue") or c.get("previous_value", ""),
+                        "updatedValue": c.get("updatedValue") or c.get("updated_value", ""),
+                    }
+                    for c in supplied_changes
+                ]
+            else:
+                changes = [
+                    {
+                        "fieldName": "AI draft summary",
+                        "previousValue": previous_summary,
+                        "updatedValue": new_summary,
+                    }
+                ]
+
+            now_ts = datetime.utcnow()
+            now_iso = now_ts.isoformat() + "Z"
+            log_entry = {
+                "editedAt": now_iso,
+                "editedBy": user_email,
+                "changes": changes,
+            }
+
+            updated = qna_collection.find_one_and_update(
+                {"_id": ObjectId(conversation_id)},
+                {
+                    "$set": {"final_summary": new_summary, "updated_at": now_ts},
+                    "$push": {"summary_edit_log": log_entry},
+                },
+                return_document=ReturnDocument.AFTER,
+            )
+            if not updated:
+                return jsonify({"error": "Conversation not found"}), 404
+
+            # Keep the final_answer chat in sync so /history and the main screen show the updated draft.
+            qna_collection.update_one(
+                {"_id": ObjectId(conversation_id), "chats.chat_id": "final_answer"},
+                {"$set": {"chats.$.response": new_summary}},
+            )
+
+            summary_edit_log = updated.get("summary_edit_log") or []
+            return jsonify({
+                "conversationId": conversation_id,
+                "finalSummary": new_summary,
+                "summaryEditLog": summary_edit_log,
+            }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/conversation/authorize", methods=["PATCH"])
@@ -3901,6 +3991,27 @@ def list_transcripts():
             
             if not gcs_fs:
                 return jsonify({"error": "GCP Storage not configured or unavailable"}), 500
+
+                limit_param = request.args.get("limit", "9")
+                offset_param = request.args.get("offset", "0")
+                try:
+                    limit = int(limit_param) if limit_param else 9
+                except (ValueError, TypeError):
+                    limit = 9
+                try:
+                    offset = int(offset_param) if offset_param else 0
+                except (ValueError, TypeError):
+                    offset = 0
+                return jsonify({
+                    "transcripts": [],
+                    "totalCount": 0,
+                    "limit": limit,
+                    "offset": offset,
+                    "hasMore": False,
+                    "search": request.args.get("search") or request.args.get("q"),
+                    "status": request.args.get("status"),
+                    "message": "GCP Storage not configured. Add bigquery.json (service account) to list transcripts.",
+                }), 200
             
             # Get query parameters - default limit is 9 (popup shows 3x3 grid)
             limit_param = request.args.get("limit", "9")
