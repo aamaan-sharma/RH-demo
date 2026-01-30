@@ -108,6 +108,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
   const [isLoadingConversation, setIsLoadingConversation] = useState(false);
   const [loggedInUserName, setLoggedInUserName] = useState("");
   const [isReviewApproveOpen, setIsReviewApproveOpen] = useState(false);
+  const [summaryEditLog, setSummaryEditLog] = useState([]);
   const [isApprovingCase, setIsApprovingCase] = useState(false);
   const [isRejectingCase, setIsRejectingCase] = useState(false);
   const [justApproved, setJustApproved] = useState(false);
@@ -1039,6 +1040,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
           setSelectedContract(response.data.contractType);
           setSelectedPlan(response.data.selectedPlan);
           setFinalSummary(response.data.finalSummary || "");
+          setSummaryEditLog(response.data.summaryEditLog || []);
           setCallsClaimDecision(response?.data?.claimDecision || null);
           const isProcessing = Boolean(response?.data?.processing);
           const hasFinal = Boolean((response?.data?.finalSummary || "").trim());
@@ -1096,7 +1098,6 @@ const Home = ({ bearerToken, setBearerToken }) => {
           }
         })
         .finally(() => {
-          if (historyRequestIdRef.current !== requestId) return;
           setIsLoadingConversation(false);
         });
     },
@@ -1105,21 +1106,6 @@ const Home = ({ bearerToken, setBearerToken }) => {
 
   useEffect(() => {
     if (conversationId !== "") {
-      if (
-        skipNextHistoryFetchRef.current &&
-        String(skipNextHistoryFetchRef.current) === String(conversationId)
-      ) {
-        skipNextHistoryFetchRef.current = null;
-        try {
-          if (historyAbortRef.current) historyAbortRef.current.abort();
-        } catch {
-          // ignore
-        } finally {
-          historyAbortRef.current = null;
-        }
-        setIsLoadingConversation(false);
-        return;
-      }
       runHistoryFetch(conversationId, { clearChats: true });
     } else {
       try {
@@ -1183,6 +1169,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
         // Always keep chats up-to-date while processing (ChatGPT-style incremental updates).
         setChats(resp?.data?.chats || []);
         setFinalSummary(resp?.data?.finalSummary || "");
+        setSummaryEditLog(resp?.data?.summaryEditLog || []);
         setCallsClaimDecision(resp?.data?.claimDecision || null);
         setAuthorizedFinalAnswer(
           resp?.data?.authorizedFinalAnswer || resp?.data?.finalSummary || "",
@@ -1253,6 +1240,36 @@ const Home = ({ bearerToken, setBearerToken }) => {
       })
       .finally(() => {
         setIsApprovingCase(false);
+      });
+  };
+
+  const handleSaveDraftSummary = (previousSummary, updatedSummary, changes = []) => {
+    if (!conversationId) return Promise.reject(new Error("No conversation"));
+    const body = {
+      finalSummary: updatedSummary,
+      previousSummary: previousSummary,
+    };
+    if (Array.isArray(changes) && changes.length > 0) {
+      body.changes = changes.map((c) => ({
+        fieldName: c.fieldName,
+        previousValue: c.previousValue,
+        updatedValue: c.updatedValue,
+      }));
+    }
+    const newSummary = updatedSummary;
+    return axios
+      .patch(`${API_BASE_URL}/conversation/draft-summary?conversation-id=${conversationId}`, body)
+      .then((resp) => {
+        const savedSummary = resp?.data?.finalSummary ?? newSummary;
+        setFinalSummary(savedSummary);
+        setSummaryEditLog(resp?.data?.summaryEditLog ?? []);
+        setChats((prev) =>
+          (prev || []).map((c) =>
+            c?.questionId === "final_answer" || c?.entered_query === "Final Answer for transcript"
+              ? { ...c, response: savedSummary }
+              : c
+          )
+        );
       });
   };
 
@@ -2140,6 +2157,8 @@ const Home = ({ bearerToken, setBearerToken }) => {
           isClosed={conversationStatus === "inactive"}
           userName={loggedInUserName}
           caseDisposition={caseDisposition}
+          summaryEditLog={summaryEditLog}
+          onSaveDraftSummary={handleSaveDraftSummary}
         />
 
         {isTranscriptViewerOpen ? (
