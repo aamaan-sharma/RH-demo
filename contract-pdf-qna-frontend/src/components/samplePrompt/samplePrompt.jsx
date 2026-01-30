@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import "./SamplePrompt.scss";
+import "./samplePrompt.scss";
 import shuffleIcon from "../../assets/shuffle.svg";
 import { searchPrompts, inferPrompts } from "../../constant.js";
 import PromptCard from "../common/promptCard/promptCard.jsx";

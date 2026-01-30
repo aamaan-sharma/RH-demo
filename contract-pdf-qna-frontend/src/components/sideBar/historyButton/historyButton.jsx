@@ -6,7 +6,7 @@ import CheckIcon from "../../../assets/check.svg";
 import PenIcon from "../../../assets/pen.svg";
 import TrashIcon from "../../../assets/trash.svg";
 import { API_BASE_URL } from "../../../config";
-import "./HistoryButton.scss";
+import "./historyButton.scss";
 
 const HistoryButton = ({
   setError,
