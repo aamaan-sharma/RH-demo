@@ -1,6 +1,7 @@
 import { googleLogout, useGoogleLogin } from "@react-oauth/google";
 import axios from "axios";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import PropTypes from "prop-types";
 import { useLocation, useNavigate } from "react-router-dom";
 import plusIcon from "../../assets/plus.svg";
 import "./sideBar.scss";
@@ -36,6 +37,8 @@ const SideBar = (props) => {
   const cleanedAuthUrlRef = useRef(false);
   const lastModeRef = useRef(null);
   const claimsPollTimerRef = useRef(null);
+  const sidebarAbortRef = useRef(null);
+  const sidebarRequestIdRef = useRef(0);
 
   let navigate = useNavigate();
 
@@ -84,16 +87,33 @@ const SideBar = (props) => {
         mode: mode || "Search",
       },
     };
+
+    // Latest-wins: cancel any previous sidebar request
+    try {
+      if (sidebarAbortRef.current) sidebarAbortRef.current.abort();
+    } catch {
+      // ignore
+    }
+    const requestId = (sidebarRequestIdRef.current += 1);
+    const abortController = new AbortController();
+    sidebarAbortRef.current = abortController;
+    config.signal = abortController.signal;
+
     if (showLoading) setIsLoadingHistory(true);
     axios
       .get(apiUrl, config)
       .then((response) => {
+        if (sidebarRequestIdRef.current !== requestId) return;
         setSidebarError(null);
         // Backend returns an array; keep this resilient.
         const data = response?.data;
         setSidebarHistory(Array.isArray(data) ? data : []);
       })
       .catch((error) => {
+        if (error?.name === "CanceledError" || error?.code === "ERR_CANCELED") {
+          return;
+        }
+        if (sidebarRequestIdRef.current !== requestId) return;
         // Handle errors
         console.error("Error:", error);
         const status = error?.response?.status;
@@ -117,12 +137,13 @@ const SideBar = (props) => {
         }
       })
       .finally(() => {
+        if (sidebarRequestIdRef.current !== requestId) return;
         setIsLoadingHistory(false);
       });
   };
 
   const login = useGoogleLogin({
-    onSuccess: (codeResponse) => {
+    onSuccess: () => {
       setIsLoggedIn(true);
     },
     flow: "auth-code",
@@ -194,7 +215,7 @@ const SideBar = (props) => {
             cleanedAuthUrlRef.current = true;
             navigate(
               { pathname: location.pathname, search: "", hash: location.hash },
-              { replace: true }
+              { replace: true },
             );
           }
         })
@@ -219,7 +240,7 @@ const SideBar = (props) => {
         cleanedAuthUrlRef.current = true;
         navigate(
           { pathname: location.pathname, search: "", hash: location.hash },
-          { replace: true }
+          { replace: true },
         );
       }
     }
@@ -236,7 +257,9 @@ const SideBar = (props) => {
     lastModeRef.current = mode;
     // Only show the sidebar loader on first load or when switching modes.
     // For background refreshes (e.g. transcript processing updates), keep the list visible.
-    const showLoading = modeChanged || !(Array.isArray(sidebarHistory) && sidebarHistory.length > 0);
+    const showLoading =
+      modeChanged ||
+      !(Array.isArray(sidebarHistory) && sidebarHistory.length > 0);
     getSidebarHistory(getIdToken(), mode, { showLoading });
   }, [isLoggedIn, props.selectedModel, props.sidebarRefreshTick]);
 
@@ -263,7 +286,7 @@ const SideBar = (props) => {
       if (!token) return;
       // Silent refresh; keep list visible.
       getSidebarHistory(token, "Calls", { showLoading: false });
-    }, 1500);
+    }, 5000);
 
     return () => {
       if (claimsPollTimerRef.current) {
@@ -286,7 +309,7 @@ const SideBar = (props) => {
               status: "inactive",
               updatedAt: new Date().toISOString(),
             }
-          : c
+          : c,
       );
     });
   }, [props.recentlyClosedConversationId]);
@@ -332,7 +355,7 @@ const SideBar = (props) => {
       // Set another timeout for the next refresh
       let nextTimeoutId = setTimeout(
         handleTimeout,
-        (50 * 60 - elapsedTime) * 1000
+        (50 * 60 - elapsedTime) * 1000,
       );
       sessionStorage.setItem("timeoutId", nextTimeoutId);
     } else {
@@ -347,7 +370,7 @@ const SideBar = (props) => {
       try {
         sessionStorage.setItem(
           "lastActiveTime",
-          String(Math.floor(Date.now() / 1000))
+          String(Math.floor(Date.now() / 1000)),
         );
       } catch {
         // ignore
@@ -356,8 +379,16 @@ const SideBar = (props) => {
 
     // Mark active immediately on mount, then on common interactions.
     markActive();
-    const events = ["mousemove", "mousedown", "keydown", "touchstart", "scroll"];
-    events.forEach((evt) => window.addEventListener(evt, markActive, { passive: true }));
+    const events = [
+      "mousemove",
+      "mousedown",
+      "keydown",
+      "touchstart",
+      "scroll",
+    ];
+    events.forEach((evt) =>
+      window.addEventListener(evt, markActive, { passive: true }),
+    );
     return () => {
       events.forEach((evt) => window.removeEventListener(evt, markActive));
     };
@@ -422,13 +453,13 @@ const SideBar = (props) => {
                   return bt - at;
                 });
               const openCases = sortedHistory.filter(
-                (c) => (c?.status || "active").toLowerCase() !== "inactive"
+                (c) => (c?.status || "active").toLowerCase() !== "inactive",
               );
               const closedCases = sortedHistory.filter(
-                (c) => (c?.status || "active").toLowerCase() === "inactive"
+                (c) => (c?.status || "active").toLowerCase() === "inactive",
               );
               const shouldOpenClosed = Boolean(
-                props.recentlyClosedConversationId
+                props.recentlyClosedConversationId,
               );
 
               const renderCaseRow = (chat, index) => (
@@ -482,27 +513,25 @@ const SideBar = (props) => {
                 </div>
               );
             })()
+          ) : sidebarHistory && sidebarHistory.length > 0 ? (
+            sidebarHistory.map((chat, index) => (
+              <HistoryButton
+                key={index}
+                setError={props.setError}
+                name={chat.conversationName}
+                conversationId={chat.conversationId}
+                conversationMode={chat.conversationMode}
+                setGptModel={props.setGptModel}
+                isActive={isActive}
+                setIsActive={setIsActive}
+                bearerToken={props.bearerToken}
+                getSidebarHistory={(token) =>
+                  getSidebarHistory(token, props.selectedModel || "Search")
+                }
+              />
+            ))
           ) : (
-            sidebarHistory && sidebarHistory.length > 0 ? (
-              sidebarHistory.map((chat, index) => (
-                <HistoryButton
-                  key={index}
-                  setError={props.setError}
-                  name={chat.conversationName}
-                  conversationId={chat.conversationId}
-                  conversationMode={chat.conversationMode}
-                  setGptModel={props.setGptModel}
-                  isActive={isActive}
-                  setIsActive={setIsActive}
-                  bearerToken={props.bearerToken}
-                  getSidebarHistory={(token) =>
-                    getSidebarHistory(token, props.selectedModel || "Search")
-                  }
-                />
-              ))
-            ) : (
-              <div className="empty_state">No recent chats.</div>
-            )
+            <div className="empty_state">No recent chats.</div>
           )}
         </div>
         <div className="gredient"></div>
@@ -521,7 +550,7 @@ const SideBar = (props) => {
             window.open(
               `${window.location.origin}/live-transcript`,
               "_blank",
-              "noopener,noreferrer"
+              "noopener,noreferrer",
             );
           }}
         >
@@ -563,3 +592,22 @@ const SideBar = (props) => {
 };
 
 export default SideBar;
+
+SideBar.propTypes = {
+  bearerToken: PropTypes.any,
+  setBearerToken: PropTypes.func,
+  refreshToken: PropTypes.any,
+  setRefreshToken: PropTypes.func,
+  error: PropTypes.any,
+  setError: PropTypes.func,
+  userEmail: PropTypes.any,
+  setUserEmail: PropTypes.func,
+  setGptModel: PropTypes.func,
+  selectedModel: PropTypes.any,
+  sidebarRefreshTick: PropTypes.any,
+  recentlyClosedConversationId: PropTypes.any,
+  setSelectedContract: PropTypes.func,
+  setSelectedPlan: PropTypes.func,
+  setSelectedState: PropTypes.func,
+  setUserImage: PropTypes.func,
+};

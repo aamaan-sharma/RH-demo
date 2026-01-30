@@ -10,6 +10,8 @@ _async_mode = "threading"
 #     _async_mode = os.getenv("SOCKETIO_ASYNC_MODE", "threading")
 import os
 import asyncio
+from dotenv import load_dotenv
+load_dotenv(override=True)
 from flask import Flask, request, jsonify, make_response, Response, stream_with_context, session
 from flask_socketio import SocketIO, emit, join_room, disconnect
 from pymongo import MongoClient, ReturnDocument
@@ -34,11 +36,8 @@ from langchain.memory import ConversationBufferMemory
 # Add imports for transcript processing
 import json
 import re
-from typing import List, Dict
+from typing import List, Dict, Any, Optional
 from pathlib import Path
-from dotenv import load_dotenv
-
-load_dotenv()
 # Live Copilot for real-time AI suggestions during calls
 try:
     from live_copilot import handle_transcript_event
@@ -106,23 +105,23 @@ from monitoring_module import q_monitor, tracer, llm_trace_to_jaeger
 from token_module import token_calculator, CallbackHandler
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+import time as _time_mod
 
 from utils.transcript_filters import should_start_copilot
 from utils.prompts import (
     _retrieval_qa_prompt,
     _retrieval_qa_prompt_template,
     _agent_system_message,
-    _extraction_prompt,
-    _atomic_questions_prompt,
-    _search_mode_prompt,
     _standalone_question_prompt_v1,
     _standalone_question_prompt_v2,
     _plan_coverage_summary_prompt_template,
     _claims_copilot_prompt_template,
     _transcript_to_chat_prompt,
-    _claims_adjudication_prompt,
-    _final_answer_summary_prompt_v1,
-    _final_answer_summary_prompt_v2,
+    # Canonical aliases (transcript processing - Claims 4 Core Prompts)
+    QUESTION_EXTRACTION_PROMPT,
+    ANSWERING_PROMPT_SEARCH,
+    CLAIM_DECISION_PROMPT,
+    get_final_summary_prompt,
 )
 from utils.constants import (
     MILVUS_RETRIEVER_K,
@@ -150,6 +149,8 @@ from config import (
     MOTORHEAD_API_KEY,
     MOTORHEAD_CLIENT_ID
 )
+
+from utils.kb import get_vector_db, _retrieve_policy_chunks_for_claims
 # -----------------------------------------------------------------------------
 # Session-level trace context (1 trace per live sessionId)
 # -----------------------------------------------------------------------------
@@ -282,8 +283,6 @@ def health():
 mongo_client = MongoClient(MONGO_URI, unicode_decode_error_handler='ignore')
 db = mongo_client["FrontDoorDB"]
 
-model_name = "text-embedding-ada-002"
-embed = OpenAIEmbeddings(model=model_name, openai_api_key=OPENAI_API_KEY)
 
 # GCP_SERVICE_ACCOUNT_PATH and TRANSCRIPT_METADATA_CACHE_VERSION are now imported from utils.constants
 gcs_fs = None  # fsspec filesystem instance for GCS
@@ -1072,12 +1071,20 @@ def filter_relevant_customer_questions(questions: List[Dict]) -> List[Dict]:
         'good evening'
     ]
     
+    # Generic question patterns to exclude (regex)
+    generic_regex = re.compile(r"^(is (this|it|this issue) covered(\s+or not)?|is this covered)\??\s*$", re.IGNORECASE)
+    
     filtered_questions = []
     
     for question_obj in questions:
         question_text_raw = (question_obj.get('question', '') or '').strip()
         if not question_text_raw:
             continue
+            
+        # Check for generic questions
+        if generic_regex.match(question_text_raw):
+            continue
+            
         question_text = question_text_raw.lower()
         context_text = (question_obj.get('context', '') or '').lower()
         combined_text = f"{question_text} {context_text}"
@@ -1096,42 +1103,109 @@ def filter_relevant_customer_questions(questions: List[Dict]) -> List[Dict]:
 
 def extract_relevant_customer_questions(transcript_content: str, llm) -> List[Dict]:
     """
-    Extract only relevant atomic questions asked by end customers from transcript.
-    Focuses on coverage lookup, damage repair, and customer problems.
-    Filters out customer service representative questions and non-relevant queries.
-    
-    This function is specifically designed for the Calls section (/transcripts/process endpoint).
+    Extracts questions for Policy Verification.
+    Distinct from Live Copilot: does NOT perform call reconciliation.
     """
+    print(f"[DEBUG] Extracting Policy Questions for Claims...")
 
-    # Using extraction prompt from utils.prompts
-    extraction_prompt = _extraction_prompt
-    
+    # Use the new "Policy Analyst" prompt we defined above
+    extraction_prompt = QUESTION_EXTRACTION_PROMPT 
     extraction_chain = extraction_prompt | llm | StrOutputParser()
     
+    def _parse_questions_json(raw_text: str) -> List[Dict]:
+        """
+        Best-effort parser for the question extractor output.
+        The LLM is instructed to return a JSON array, but may still wrap it in text/markdown.
+        """
+        def _normalize_items(maybe_items: Any) -> List[Dict]:
+            """
+            Normalize common extractor output shapes into the canonical list[dict] with at least:
+              - question (str)
+              - context (str)
+              - questionType (str)
+              - userIntent (str)
+            """
+            if maybe_items is None:
+                return []
+
+            # If the model returns an object wrapper, unwrap common keys.
+            if isinstance(maybe_items, dict):
+                for key in ("questions", "items", "data", "result"):
+                    if isinstance(maybe_items.get(key), list):
+                        maybe_items = maybe_items.get(key)
+                        break
+
+            if not isinstance(maybe_items, list):
+                return []
+
+            normalized: List[Dict] = []
+            for x in maybe_items:
+                if isinstance(x, dict):
+                    q = (x.get("question") or "").strip()
+                    # Some models return {"text": "..."} or {"q": "..."}; accept best-effort.
+                    if not q:
+                        q = (x.get("text") or x.get("q") or "").strip()
+                    if not q:
+                        continue
+                    normalized.append(
+                        {
+                            "question": q,
+                            "context": str(x.get("context") or "").strip(),
+                            "questionType": str(x.get("questionType") or x.get("type") or "claim_review").strip(),
+                            "userIntent": str(x.get("userIntent") or x.get("intent") or "").strip(),
+                        }
+                    )
+                elif isinstance(x, str):
+                    q = x.strip()
+                    if not q:
+                        continue
+                    normalized.append(
+                        {
+                            "question": q,
+                            "context": "",
+                            "questionType": "claim_review",
+                            "userIntent": "",
+                        }
+                    )
+            return normalized
+
+        if raw_text is None:
+            return []
+        txt = str(raw_text)
+        # Strip markdown code fences if present
+        txt = re.sub(r'```json\\n?', '', txt)
+        txt = re.sub(r'```\\n?', '', txt)
+        txt = txt.strip()
+
+        # If the response contains leading/trailing text, try to extract the first JSON array.
+        if not txt.startswith("["):
+            m = re.search(r"\\[[\\s\\S]*\\]", txt)
+            if m:
+                txt = m.group(0).strip()
+
+        data: Any = None
+        try:
+            data = json.loads(txt)
+        except Exception:
+            # Try object form: {"questions":[...]} or similar
+            try:
+                m_obj = re.search(r"\\{[\\s\\S]*\\}", txt)
+                if not m_obj:
+                    return []
+                data = json.loads(m_obj.group(0))
+            except Exception:
+                return []
+
+        return _normalize_items(data)
+
+    questions: List[Dict] = []
     try:
         result = extraction_chain.invoke({"transcript": transcript_content})
-        # Clean the result - remove markdown code blocks if present
-        result = re.sub(r'```json\n?', '', result)
-        result = re.sub(r'```\n?', '', result)
-        result = result.strip()
-        
-        questions = json.loads(result)
-        
-        # Apply post-extraction filtering for additional safety
-        questions = filter_relevant_customer_questions(questions)
-        
-        # Add question IDs
-        for idx, q in enumerate(questions):
-            q["questionId"] = f"q{idx + 1}"
-        
-        return questions
-    except json.JSONDecodeError as e:
-        print(f"Error parsing JSON from LLM: {e}")
-        print(f"LLM Response: {result[:500]}")
-        return []
+        questions = _parse_questions_json(result)
     except Exception as e:
-        print(f"Error extracting relevant customer questions: {e}")
-        return []
+        print(f"Error extracting questions: {e}")
+
+    return questions
 
 
 def extract_questions_with_agent(transcript_content: str, llm) -> List[Dict]:
@@ -1144,66 +1218,12 @@ def extract_questions_with_agent(transcript_content: str, llm) -> List[Dict]:
     """
     # Using extraction prompt from utils.prompts
     # Optimized extraction prompt with 3-step process: Understand Intent → Frame Question → Extract
-#     extraction_prompt_template = """
-# You are extracting customer-intent questions for an insurance claim from a transcript.
-
-# Extract items ONLY if they represent a customer intent, need, question, confusion, objection, request, or decision point.
-# Include both explicit questions and implicit questions (e.g., “I’m not sure what to do” → “What should I do next?”).
-
-# Do NOT extract agent/CSR questions unless the customer repeats/endorses them as their own concern.
-# Do NOT include pleasantries, small talk, or purely informational statements unless they imply a need.
-
-# No speculation. No invented facts.
-
-# You MUST capture the claim situation:
-# - Always include at least one canonical item that summarizes the primary claim the customer is calling about (what happened, what is damaged, what the customer wants us to do).
-# - If multiple items/damages are involved, include one item per distinct issue AND a primary claim item tying them together.
- 
-# Coverage-model completeness (extract questions that map to real claim handling):
-# - Claim intake/triage: who is reporting, what happened (alleged cause), when, where, how discovered, urgency/safety/ongoing damage.
-# - Policy & eligibility gating: correct insured/asset/location, policy in force/waiting period, eligibility, limits & deductibles/sublimits.
-# - Coverage trigger: what must be true for coverage to apply (based on policy wording in general terms; do not invent).
-# - Causation/mechanism ("because"): sudden vs gradual, wear/tear vs accidental, contributing causes, sequence of events.
-# - Exclusions/limitations: identify likely carve-outs the customer is worried about and turn them into questions.
-# - Conditions/duties: notice, mitigation, documentation, proof-of-loss, preserve evidence, cooperation.
-# - Damages/scope/valuation: what is being claimed (repair/replacement/reimbursement), amounts/estimates, valuation method if implied.
-# - Process/timeline: claim filing steps, documents needed, expected timeline, next steps, appeal/dispute options.
-
-# For EACH extracted item:
-# - Make it atomic and customer-voiced (what the customer wants to know/do).
-# - Include a brief situation summary in context.
-# - Include 1–2 verbatim evidence quotes from the transcript inside the context field as:
-#   Evidence: “...” / “...”
-# - Assign an appropriate questionType.
-# - Include userIntent.
-
-# De-duplicate repeated intents into one canonical question (keep the most specific wording).
-
-# Completeness rule:
-# - Do NOT limit the number of extracted items. Include ALL distinct customer intents present in the transcript.
-#  - If the transcript implies uncertainty that blocks a decision, extract a targeted question to resolve it (exactly what is missing).
-
-# Transcript:
-# {transcript}
-
-# Return ONLY valid JSON (no markdown, no extra text) as a JSON array:
-# [
-#   {{
-#     "question": "string",
-#     "context": "1–3 sentences situation summary. Evidence: “...” / “...”",
-#     "questionType": "coverage|limit|exclusion|eligibility|process|cost|timeline|status|next_steps|repair|damage|policy|claim|other",
-#     "userIntent": "string"
-#   }}
-# ]
-
-# If no relevant customer intents are present, return [].
-#     """
     
     # Create a tool that uses the extraction prompt
     def extract_questions_tool(transcript: str) -> str:
         """Tool to extract relevant customer questions from transcript using the standard extraction prompt."""
-        # Using extraction prompt from utils.prompts
-        extraction_prompt = _extraction_prompt
+        # Using canonical extraction prompt from utils.prompts
+        extraction_prompt = QUESTION_EXTRACTION_PROMPT
         extraction_chain = extraction_prompt | llm | StrOutputParser()
         
         try:
@@ -1309,24 +1329,58 @@ Return the final JSON array and nothing else.
         print(f"DEBUG: Cleaned result text length: {len(result_text)}")
         print(f"DEBUG: Cleaned result text (first 500 chars): {result_text[:500]}")
         
-        # Parse JSON
+        # Parse JSON (best-effort, consistent with direct extraction)
+        questions = []
+        def _normalize_agent_items(maybe_items: Any) -> List[Dict]:
+            # Accept list[dict], list[str], or wrapper objects.
+            if maybe_items is None:
+                return []
+            if isinstance(maybe_items, dict):
+                for key in ("questions", "items", "data", "result"):
+                    if isinstance(maybe_items.get(key), list):
+                        maybe_items = maybe_items.get(key)
+                        break
+            if not isinstance(maybe_items, list):
+                return []
+            out: List[Dict] = []
+            for x in maybe_items:
+                if isinstance(x, dict):
+                    q = (x.get("question") or x.get("text") or x.get("q") or "").strip()
+                    if not q:
+                        continue
+                    out.append(
+                        {
+                            "question": q,
+                            "context": str(x.get("context") or "").strip(),
+                            "questionType": str(x.get("questionType") or x.get("type") or "claim_review").strip(),
+                            "userIntent": str(x.get("userIntent") or x.get("intent") or "").strip(),
+                        }
+                    )
+                elif isinstance(x, str):
+                    q = x.strip()
+                    if not q:
+                        continue
+                    out.append(
+                        {
+                            "question": q,
+                            "context": "",
+                            "questionType": "claim_review",
+                            "userIntent": "",
+                        }
+                    )
+            return out
         try:
-            questions = json.loads(result_text)
-            print(f"DEBUG: Successfully parsed {len(questions)} questions from agent")
-        except json.JSONDecodeError as json_err:
-            print(f"DEBUG: JSON decode error: {json_err}")
-            print(f"DEBUG: Attempting to extract JSON from text...")
-            # Try to extract JSON array from the text
-            json_match = re.search(r'\[.*\]', result_text, re.DOTALL)
+            # Prefer array extraction if response contains extra text
+            json_match = re.search(r"\[[\s\S]*\]", result_text)
             if json_match:
-                try:
-                    questions = json.loads(json_match.group())
-                    print(f"DEBUG: Extracted JSON array with {len(questions)} questions")
-                except:
-                    print(f"DEBUG: Failed to parse extracted JSON")
-                    raise json_err
+                questions = json.loads(json_match.group(0))
             else:
-                raise json_err
+                questions = json.loads(result_text)
+        except Exception as json_err:
+            print(f"DEBUG: JSON decode error: {json_err}")
+            questions = []
+
+        questions = _normalize_agent_items(questions)
         
         # Apply post-extraction filtering using existing function (same as Search/Infer)
         print(f"DEBUG: Before filtering: {len(questions)} questions")
@@ -1349,6 +1403,182 @@ Return the final JSON array and nothing else.
         # Add question IDs
         for idx, q in enumerate(questions):
             q["questionId"] = f"q{idx + 1}"
+        return questions
+
+        # CONTEXT EXTRACTION & ENRICHMENT
+        t_lower = transcript_content.lower()
+        
+        # Extract facts
+        contract_start = ""
+        start_match = re.search(r"may (the )?(2nd|second)", t_lower)
+        if start_match:
+            contract_start = "May 2"
+        
+        outcome_str = "normal"
+        if "deny everything" in t_lower or "go ahead and deny" in t_lower:
+            outcome_str = "denied due to pre-existing" if "pre existing" in t_lower or "pre-existing" in t_lower else "denied"
+        elif "pre existing" in t_lower or "pre-existing" in t_lower:
+            outcome_str = "pre-existing claimed"
+            
+        auth_scope = "none"
+        auth_total = ""
+        
+        # Authorization logic
+        if "only authorize" in t_lower or "will only authorize" in t_lower or "successfully got this authorized" in t_lower:
+            auth_scope = "partial authorization"
+            if "diagnostics" in t_lower or "diagnosis" in t_lower:
+                auth_scope = "diagnosis"
+            if "outlet" in t_lower:
+                auth_scope += "+outlets"
+                
+        # Amount extraction (authorized total)
+        amount_match = re.search(r"total of \$?(\d+)", t_lower)
+        if amount_match:
+            auth_total = amount_match.group(1)
+        
+        # Helper function to extract money amounts for a specific item context
+        def extract_item_money(item_keywords, transcript_text, transcript_lower):
+            """Extract money amounts (parts, labor, tax, estimate, total) associated with an item."""
+            money_parts = []
+            # Find positions where item keywords appear
+            item_positions = []
+            for keyword in item_keywords:
+                idx = transcript_lower.find(keyword)
+                if idx != -1:
+                    item_positions.append(idx)
+            
+            if not item_positions:
+                return ""
+            
+            # Look for money patterns within 200 chars before/after item mentions
+            for pos in item_positions:
+                start = max(0, pos - 200)
+                end = min(len(transcript_text), pos + 200)
+                context = transcript_lower[start:end]
+                
+                # Extract parts cost
+                parts_match = re.search(r"parts?[:\s]+\$?(\d+)", context)
+                if parts_match:
+                    money_parts.append(f"${parts_match.group(1)} parts")
+                
+                # Extract labor cost
+                labor_match = re.search(r"labor[:\s]+\$?(\d+)", context)
+                if labor_match:
+                    money_parts.append(f"${labor_match.group(1)} labor")
+                
+                # Extract tax
+                tax_match = re.search(r"tax[:\s]+\$?(\d+)", context)
+                if tax_match:
+                    money_parts.append(f"${tax_match.group(1)} tax")
+                
+                # Extract estimate
+                est_match = re.search(r"estimate[:\s]+\$?(\d+)", context)
+                if est_match:
+                    money_parts.append(f"${est_match.group(1)} estimate")
+                
+                # Extract total for this item (if not already captured)
+                item_total_match = re.search(r"(?:for|of|is|are)\s+\$?(\d+)", context)
+                if item_total_match:
+                    val = item_total_match.group(1)
+                    # Only add if not already captured as parts/labor/tax
+                    if not any(val in p for p in money_parts):
+                        money_parts.append(f"${val} total")
+                
+                # Extract standalone dollar amounts near item (within 50 chars)
+                close_context = transcript_lower[max(0, pos - 50):min(len(transcript_text), pos + 50)]
+                dollar_matches = re.findall(r"\$(\d+)", close_context)
+                if dollar_matches and not money_parts:
+                    # If no specific labels found, capture all dollar amounts
+                    for amt in dollar_matches:
+                        money_parts.append(f"${amt}")
+            
+            # Deduplicate and format
+            if money_parts:
+                return "[" + ", ".join(money_parts) + "]"
+            return ""
+            
+        # Specific Item extraction with money
+        items_found = []
+        if "burned" in t_lower and "outlet" in t_lower:
+            item_desc = "Outlet(burned)@Dining room"
+            money = extract_item_money(["outlet", "burned", "dining"], transcript_content, t_lower)
+            items_found.append(item_desc + money)
+        elif "outlet" in t_lower:
+            item_desc = "Outlet"
+            money = extract_item_money(["outlet"], transcript_content, t_lower)
+            items_found.append(item_desc + money)
+            
+        if "doorbell" in t_lower and ("not work" in t_lower or "broken" in t_lower):
+            item_desc = "Doorbell(not working)"
+            money = extract_item_money(["doorbell"], transcript_content, t_lower)
+            items_found.append(item_desc + money)
+        elif "doorbell" in t_lower:
+            item_desc = "Doorbell"
+            money = extract_item_money(["doorbell"], transcript_content, t_lower)
+            items_found.append(item_desc + money)
+            
+        if "heater" in t_lower and "bathroom" in t_lower:
+            item_desc = "Surface mount heater(replace)@Master bathroom"
+            money = extract_item_money(["heater", "bathroom"], transcript_content, t_lower)
+            items_found.append(item_desc + money)
+        elif "heater" in t_lower:
+            item_desc = "Heater"
+            money = extract_item_money(["heater"], transcript_content, t_lower)
+            items_found.append(item_desc + money)
+            
+        if "porch light" in t_lower and "wiring" in t_lower:
+            item_desc = "Porch light(exposed wiring)@Outside"
+            money = extract_item_money(["porch", "light", "wiring"], transcript_content, t_lower)
+            items_found.append(item_desc + money)
+        elif "light" in t_lower:
+            item_desc = "Light"
+            money = extract_item_money(["light"], transcript_content, t_lower)
+            items_found.append(item_desc + money)
+            
+        if "junction" in t_lower and "attic" in t_lower:
+            item_desc = "Junction boxes(open splices)@Attic"
+            money = extract_item_money(["junction", "attic"], transcript_content, t_lower)
+            items_found.append(item_desc + money)
+        elif "junction" in t_lower:
+            item_desc = "JunctionBox"
+            money = extract_item_money(["junction"], transcript_content, t_lower)
+            items_found.append(item_desc + money)
+            
+        items_str = "|".join(items_found) if items_found else "Unknown"
+
+        # Build Context String
+        ctx_parts = []
+        # Try to get plan/state from transcript if possible (simple heuristic)
+        plan = "Unknown"
+        if "shieldessential" in t_lower: plan = "ShieldEssential"
+        elif "shieldplus" in t_lower: plan = "ShieldPlus"
+        elif "shieldgold" in t_lower: plan = "ShieldGold"
+        
+        state = "Unknown" 
+        if "texas" in t_lower: state = "Texas"
+        
+        contract_type = "Unknown"
+        if "real estate" in t_lower: contract_type = "RE"
+        
+        if plan != "Unknown": ctx_parts.append(f"plan={plan}")
+        if contract_type != "Unknown": ctx_parts.append(f"contractType={contract_type}")
+        if state != "Unknown": ctx_parts.append(f"state={state}")
+        
+        if contract_start: ctx_parts.append(f"contractStart={contract_start}")
+        if items_str != "Unknown": ctx_parts.append(f"items={items_str}")
+        if outcome_str != "normal": ctx_parts.append(f"callOutcome={outcome_str}")
+        if auth_scope != "none": ctx_parts.append(f"authorizedScope={auth_scope}")
+        if auth_total: ctx_parts.append(f"authorizedTotal={auth_total}")
+        
+        context_prefix = f"[CALL_CONTEXT: {'; '.join(ctx_parts)}]"
+        
+        for q in questions:
+            if "question" in q:
+                q["question"] = f"{context_prefix} {q['question']}"
+        
+        # Add question IDs
+        for idx, q in enumerate(questions):
+            q["questionId"] = f"q{idx + 1}"
         
         return questions
         
@@ -1362,6 +1592,7 @@ Return the final JSON array and nothing else.
         except Exception as fallback_err:
             print(f"ERROR: Fallback extraction also failed: {fallback_err}")
             return []
+
     except Exception as e:
         print(f"ERROR: Exception in agent extraction: {e}")
         import traceback
@@ -1375,6 +1606,132 @@ Return the final JSON array and nothing else.
             return []
 
 
+def heuristic_extract_claim_questions(transcript_text: str, max_items: int = 100) -> List[Dict]:
+    """
+    Deterministic fallback when LLM-based extraction fails.
+    Goal: produce multiple, transcript-grounded claim-review questions (no invented facts).
+    """
+    text = str(transcript_text or "").strip()
+    if not text:
+        return []
+
+    lower = text.lower()
+    has_eligibility_signals = any(
+        s in lower
+        for s in (
+            "pre-existing",
+            "pre existing",
+            "waiting period",
+            "first month",
+            "contract just started",
+            "contract started",
+            "effective date",
+        )
+    )
+
+    # Common claim items/systems. Keep broad; we only emit questions when a keyword appears in the transcript.
+    candidates = [
+        ("Water heater", ["water heater", "hot water heater"]),
+        ("HVAC / Air conditioning", ["hvac", "air conditioner", "air conditioning", "a/c", "ac ", "furnace"]),
+        ("Refrigerator", ["refrigerator", "fridge"]),
+        ("Dishwasher", ["dishwasher"]),
+        ("Washer", ["washer", "washing machine"]),
+        ("Dryer", ["dryer"]),
+        ("Garbage disposal", ["garbage disposal", "disposal"]),
+        ("Electrical outlet", ["outlet", "receptacle"]),
+        ("Junction box", ["junction box", "junction", "open splice", "open splices"]),
+        ("Light / fixture", ["light", "porch light", "fixture"]),
+        ("Doorbell", ["doorbell"]),
+        ("Plumbing / leak", ["leak", "plumbing", "pipe", "faucet", "toilet", "drain"]),
+    ]
+
+    location_words = [
+        "kitchen", "bathroom", "master bathroom", "attic", "garage", "basement", "living room",
+        "dining room", "bedroom", "outside", "porch", "laundry", "hallway",
+    ]
+
+    def _first_occurrence_index(keys: List[str]) -> int:
+        idxs = [lower.find(k) for k in keys if lower.find(k) != -1]
+        return min(idxs) if idxs else -1
+
+    def _snippet_at(idx: int, window: int = 220) -> str:
+        if idx < 0:
+            return ""
+        start = max(0, idx - window // 2)
+        end = min(len(text), idx + window // 2)
+        snip = text[start:end].replace("\n", " ").strip()
+        snip = re.sub(r"\s+", " ", snip)
+        return snip[:260]
+
+    def _find_location(snip_lower: str) -> str:
+        for w in location_words:
+            if w in snip_lower:
+                return w
+        return ""
+
+    def _find_amounts(s: str) -> List[str]:
+        # Simple capture of explicit dollar amounts
+        vals = re.findall(r"\$\s?\d+(?:,\d{3})*(?:\.\d{2})?", s)
+        # Deduplicate preserving order
+        out = []
+        for v in vals:
+            v2 = v.replace(" ", "")
+            if v2 not in out:
+                out.append(v2)
+        return out[:4]
+
+    questions: List[Dict] = []
+    for title, keys in candidates:
+        if len(questions) >= max_items:
+            break
+        idx = _first_occurrence_index(keys)
+        if idx == -1:
+            continue
+
+        snippet = _snippet_at(idx)
+        snippet_lower = snippet.lower()
+        loc = _find_location(snippet_lower)
+        # Prefer money amounts close to the item mention to avoid mixing unrelated $ values.
+        money_window = _snippet_at(idx, window=700)
+        amounts = _find_amounts(money_window)
+
+        loc_part = f" in/at the {loc}" if loc else ""
+        amt_part = f" Amounts mentioned: {', '.join(amounts)}." if amounts else " Amounts mentioned: Not provided."
+
+        context = (
+            f"Claimed item: {title}{loc_part}. "
+            f"{amt_part} "
+            f"Evidence: \"{snippet}\""
+        )
+
+        # Keep questions short (UI friendly) and vary phrasing to avoid repetitive Q1/Q2/Q3.
+        item_ref = f"{title}{loc_part}"
+        elig_part = (
+            "Eligibility: verify waiting period / pre-existing / contract timing."
+            if has_eligibility_signals
+            else "Eligibility: verify if any waiting period / pre-existing gate applies."
+        )
+        docs_part = "Docs: confirm cause/timeline and required proof per transcript."
+        costs_part = (
+            f"Costs: reconcile stated amounts ({', '.join(amounts)})."
+            if amounts
+            else "Costs: not stated in transcript—request estimate/authorization amounts to reconcile."
+        )
+        q = (
+            f"{item_ref}: Coverage decision for requested service (diagnose/repair/replace). "
+            f"{elig_part} {docs_part} {costs_part}"
+        )
+
+        questions.append(
+            {
+                "question": q,
+                "context": context,
+                "questionType": "claim_review",
+                "userIntent": "adjudicate_claim_coverage_and_costs",
+            }
+        )
+
+    return questions
 
 
 def process_single_transcript_question(
@@ -1415,7 +1772,7 @@ def process_single_transcript_question(
 
         if gpt_model == "Search":
             # Using search mode prompt from utils.prompts
-            PROMPT = _search_mode_prompt
+            PROMPT = ANSWERING_PROMPT_SEARCH
             chain_type_kwargs = {"prompt": PROMPT}
             qa = RetrievalQA.from_chain_type(
                 llm=llm,
@@ -1896,11 +2253,7 @@ def process_live_copilot_question(
         print(f"[LIVE_COPILOT_INFER] Using Milvus collection: {selected_collection_name}")
         
         # Initialize Milvus vector DB
-        vector_db1 = Milvus(
-            embed,
-            collection_name=selected_collection_name,
-            connection_args={"host": MILVUS_HOST, "port": "19530"},
-        )
+        vector_db1 = get_vector_db(selected_collection_name)
         
         # Initialize retriever
         retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
@@ -2155,11 +2508,7 @@ def start():
                 )
             with tracer.start_as_current_span('vector_db-initialization'):
                 # Selecting collection dynamically
-                vector_db1: Milvus = Milvus(
-                    embed,
-                    collection_name=selected_collection_name,
-                    connection_args={"host": MILVUS_HOST, "port": "19530"},
-                )
+                vector_db1 = get_vector_db(selected_collection_name)
             
             # Initialize variables to prevent undefined errors
             agent_resp = None
@@ -3015,89 +3364,6 @@ def _build_claims_case_context_for_llm(docs: dict) -> str:
     return "\n".join(parts).strip()
 
 
-def _retrieve_policy_chunks_for_claims(docs: dict, query: str, k: int = 6):
-    """Best-effort policy retrieval from Milvus for a transcript conversation.
-
-    Returns: (chunks_for_ui, referred_docs_text)
-      - chunks_for_ui: list[dict] where each dict has {content, metadata}
-      - referred_docs_text: a readable text blob for /referred-clauses legacy page
-    """
-    try:
-        if not isinstance(docs, dict):
-            return [], ""
-        query = (query or "").strip()
-        if not query:
-            return [], ""
-
-        contract_type = docs.get("contract_type")
-        selected_plan = docs.get("selected_plan")
-        selected_state = docs.get("selected_state")
-        if not all([contract_type, selected_plan, selected_state]):
-            return [], ""
-
-        # Get collection name using utility function
-        selected_collection_name = get_milvus_collection_name(
-            contract_type=contract_type,
-            selected_plan=selected_plan,
-            selected_state=selected_state
-        )
-        if not selected_collection_name:
-            return [], ""
-
-        # Get normalized values for logging
-        milvus_state = normalize_state_for_milvus(selected_state)
-        contract_type_norm = normalize_contract_type(contract_type)
-        selected_plan_norm = normalize_plan_for_milvus(contract_type_norm, selected_plan)
-
-        # Lightweight logging to debug "no clauses found" issues in claims follow-up.
-        try:
-            print(
-                "[CLAIMS_FOLLOWUP] Milvus retrieval "
-                f"state={selected_state!r}->{milvus_state!r}, "
-                f"contract_type={contract_type!r}->{contract_type_norm!r}, "
-                f"selected_plan={selected_plan!r}->{selected_plan_norm!r}, "
-                f"collection={selected_collection_name!r}, "
-                f"k={k}"
-            )
-        except Exception:
-            pass
-
-        vector_db1: Milvus = Milvus(
-            embed,
-            collection_name=selected_collection_name,
-            connection_args={"host": MILVUS_HOST, "port": "19530"},
-        )
-        retriever = vector_db1.as_retriever(search_kwargs={"k": max(1, min(int(k), 12))})
-
-        raw_docs = retriever.get_relevant_documents(query)
-        try:
-            print(f"[CLAIMS_FOLLOWUP] Milvus returned {len(raw_docs or [])} docs")
-        except Exception:
-            pass
-        chunks_for_ui = []
-        text_lines = []
-        for i, d in enumerate(raw_docs or [], start=1):
-            content = (getattr(d, "page_content", "") or "").strip()
-            metadata = getattr(d, "metadata", {}) or {}
-            if not content:
-                continue
-            chunks_for_ui.append({"content": content, "metadata": metadata})
-            # Build a readable blob for legacy referred clauses page
-            src = ""
-            if isinstance(metadata, dict):
-                src = metadata.get("source") or metadata.get("file") or metadata.get("document") or ""
-            header = f"Clause {i}"
-            if src:
-                header += f" ({src})"
-            text_lines.append(header)
-            text_lines.append(content)
-            text_lines.append("")
-
-        referred_docs_text = "\n".join(text_lines).strip()
-        return chunks_for_ui, referred_docs_text
-    except Exception as e:
-        print(f"Warning: policy retrieval failed for claims followup: {e}")
-        return [], ""
 
 
 def _looks_like_plan_overview_question(q: str) -> bool:
@@ -4191,6 +4457,522 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {payload}\n\n"
 
 
+# -----------------------------------------------------------------------------
+# Claims transcript processing: background jobs + event fanout (SSE + Socket.IO)
+# -----------------------------------------------------------------------------
+# Goal:
+# - Keep transcript processing running even if the SSE client disconnects
+# - Stream incremental updates to any connected UI via Socket.IO rooms (conversationId)
+# - Preserve existing /transcripts/process/stream behavior for current clients
+#
+# Notes:
+# - This is intentionally in-process (thread-based) for PoC/demo.
+# - MongoDB remains the source of truth; UI can always refresh via /history.
+#
+_claims_stream_lock = threading.Lock()
+_claims_streams: Dict[str, Dict[str, Any]] = {}  # conversationId -> {"cv": Condition, "events": list[tuple[str,dict]], "done": bool, "ts": float}
+_claims_jobs_running: Dict[str, float] = {}  # conversationId -> started_at_epoch
+
+
+def _claims_get_stream(conversation_id: str) -> Dict[str, Any]:
+    cid = str(conversation_id or "")
+    if not cid:
+        cid = "UNKNOWN"
+    with _claims_stream_lock:
+        st = _claims_streams.get(cid)
+        if st is None:
+            st = {
+                "cv": threading.Condition(_claims_stream_lock),
+                "events": [],  # list[(event, payload)]
+                "done": False,
+                "ts": _time_mod.time(),
+            }
+            _claims_streams[cid] = st
+        else:
+            st["ts"] = _time_mod.time()
+        return st
+
+
+def _claims_publish_event(*, conversation_id: str, event: str, payload: Dict[str, Any]) -> None:
+    """Publish an event to:
+    - in-process stream (for SSE subscribers)
+    - Socket.IO room keyed by conversationId (for UI that navigates around)
+    """
+    cid = str(conversation_id or "")
+    if not cid:
+        return
+    # Ensure conversationId present for consumers
+    if isinstance(payload, dict) and "conversationId" not in payload:
+        payload = dict(payload)
+        payload["conversationId"] = cid
+
+    # 1) SSE in-process fanout
+    with _claims_stream_lock:
+        st = _claims_streams.get(cid)
+        if st is None:
+            st = {
+                "cv": threading.Condition(_claims_stream_lock),
+                "events": [],  # list[(event, payload)]
+                "done": False,
+                "ts": _time_mod.time(),
+            }
+            _claims_streams[cid] = st
+        else:
+            st["ts"] = _time_mod.time()
+        try:
+            evq = st.get("events")
+            if evq is not None:
+                evq.append((event, payload))
+        except Exception:
+            pass
+        if event in ("done", "error"):
+            st["done"] = True
+        try:
+            st["cv"].notify_all()
+        except Exception:
+            pass
+
+    # 2) Socket.IO room fanout (safe no-op if no listeners)
+    try:
+        socketio.emit(event, payload, room=cid)
+    except Exception:
+        pass
+
+
+def _claims_mark_job_running(conversation_id: str) -> bool:
+    """Return True if caller should start job; False if already running."""
+    cid = str(conversation_id or "")
+    if not cid:
+        return False
+    with _claims_stream_lock:
+        if cid in _claims_jobs_running:
+            return False
+        _claims_jobs_running[cid] = _time_mod.time()
+        return True
+
+
+def _claims_mark_job_finished(conversation_id: str) -> None:
+    cid = str(conversation_id or "")
+    if not cid:
+        return
+    with _claims_stream_lock:
+        _claims_jobs_running.pop(cid, None)
+        # Mark stream done (in case job ended without sending "done")
+        st = _claims_streams.get(cid)
+        if st is not None:
+            st["ts"] = _time_mod.time()
+            try:
+                st["cv"].notify_all()
+            except Exception:
+                pass
+
+
+def _claims_background_process_transcript(
+    *,
+    conversation_id: str,
+    user_email: str,
+    transcript_file_name: str,
+    contract_type: str,
+    selected_plan: str,
+    selected_state: str,
+    gpt_model: str,
+    extract_questions: bool,
+    provided_questions: List[Dict[str, Any]],
+    transcript_id: str,
+    transcript_status: str,
+    conversation_name: str,
+) -> None:
+    """Background worker for Claims transcript processing.
+
+    This mirrors the core logic of /transcripts/process/stream, but it:
+    - continues running even if the SSE client disconnects
+    - publishes incremental events to Socket.IO room + in-process SSE bus
+    - persists incremental progress to Mongo (existing behavior)
+    """
+    cid = str(conversation_id or "")
+    try:
+        qna_collection_user = f"chats_{user_email}"
+        qna_collection = db[qna_collection_user]
+
+        # Ensure the conversation exists and is marked processing
+        try:
+            qna_collection.update_one(
+                {"_id": ObjectId(cid)},
+                {
+                    "$set": {
+                        "processing": True,
+                        "updated_at": datetime.utcnow(),
+                        "conversation_mode": "Calls",
+                        "underlying_model": gpt_model,
+                        "transcript_id": transcript_id,
+                        "contract_type": contract_type,
+                        "selected_plan": selected_plan,
+                        "selected_state": selected_state,
+                    }
+                },
+            )
+        except Exception:
+            pass
+
+        if not gcs_fs:
+            _claims_publish_event(
+                conversation_id=cid,
+                event="error",
+                payload={"error": "GCP Storage not configured or unavailable"},
+            )
+            return
+
+        start_time = _time_mod.time()
+
+        # --- transcript loading ---
+        _claims_publish_event(conversation_id=cid, event="status", payload={"stage": "transcript_loading"})
+        transcript_content, file_metadata = read_transcript_file_gcp(transcript_file_name)
+        transcript_text = transcript_content
+        try:
+            transcript_data = json.loads(transcript_content)
+            if isinstance(transcript_data, dict):
+                transcript_text = transcript_data.get(
+                    "text",
+                    transcript_data.get(
+                        "transcript",
+                        transcript_data.get("content", str(transcript_data)),
+                    ),
+                )
+        except Exception:
+            transcript_text = transcript_content
+
+        _claims_publish_event(
+            conversation_id=cid,
+            event="status",
+            payload={
+                "stage": "transcript_loaded",
+                "transcriptMetadata": {
+                    "fileName": (file_metadata or {}).get("fileName"),
+                    "uploadDate": (file_metadata or {}).get("uploadDate"),
+                    "fileSize": (file_metadata or {}).get("fileSize"),
+                },
+            },
+        )
+
+        # --- question extraction ---
+        extraction_warning = None
+        questions: List[Dict[str, Any]] = []
+        if extract_questions:
+            _claims_publish_event(conversation_id=cid, event="status", payload={"stage": "extracting_questions"})
+            llm_extract = ChatOpenAI(temperature=0.0, model="gpt-4o")
+            questions = extract_relevant_customer_questions(transcript_text, llm_extract) or []
+            if not questions:
+                questions = extract_questions_with_agent(transcript_text, llm_extract) or []
+            if not questions:
+                extraction_warning = "LLM extraction failed; using deterministic item-based fallback questions."
+                questions = heuristic_extract_claim_questions(transcript_text) or []
+            if not questions:
+                extraction_warning = "No questions could be extracted from transcript; inferring from context."
+                questions = [
+                    {
+                        "question": f"Is this issue covered: {transcript_text[:120]}",
+                        "context": transcript_text[:400],
+                        "questionType": "coverage",
+                        "userIntent": "Customer wants to know if the described issue is covered",
+                        "questionId": "q1",
+                    }
+                ]
+        else:
+            questions = provided_questions or []
+            if not questions:
+                _claims_publish_event(conversation_id=cid, event="error", payload={"error": "No questions provided"})
+                return
+
+        for i, q in enumerate(questions):
+            if isinstance(q, dict):
+                q["questionId"] = f"q{i + 1}"
+
+        _claims_publish_event(
+            conversation_id=cid,
+            event="status",
+            payload={"stage": "questions_ready", "totalQuestions": len(questions), "warning": extraction_warning},
+        )
+
+        # --- retriever init ---
+        _claims_publish_event(conversation_id=cid, event="status", payload={"stage": "initializing_retriever"})
+        selected_collection_name = get_milvus_collection_name(
+            contract_type=contract_type,
+            selected_plan=selected_plan,
+            selected_state=selected_state,
+        )
+        vector_db1 = get_vector_db(selected_collection_name)
+        retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
+
+        if gpt_model == "Search":
+            llm2 = ChatOpenAI(temperature=0.0, model="ft:gpt-3.5-turbo-0613:mindstix::8YYD56aA")
+            llm = ChatOpenAI(temperature=0.0, model="gpt-4o")
+        elif gpt_model == "Infer":
+            llm = ChatOpenAI(temperature=0.0, model="gpt-4o")
+            llm2 = ChatOpenAI(temperature=0.0, model="gpt-4o")
+        else:
+            _claims_publish_event(
+                conversation_id=cid,
+                event="error",
+                payload={"error": f"Invalid gpt_model: {gpt_model}. Must be 'Search' or 'Infer'"},
+            )
+            return
+
+        _claims_publish_event(conversation_id=cid, event="status", payload={"stage": "answering"})
+
+        results: List[Dict[str, Any]] = []
+        total_latency = 0.0
+        now_ts = datetime.utcnow()
+
+        for idx, question_obj in enumerate(questions):
+            question_text = str((question_obj or {}).get("question") or "")
+            question_id = str((question_obj or {}).get("questionId") or f"q{idx + 1}")
+
+            _claims_publish_event(
+                conversation_id=cid,
+                event="status",
+                payload={"stage": "answering_question", "index": idx + 1, "questionId": question_id},
+            )
+
+            result = process_single_transcript_question(
+                question_text,
+                contract_type,
+                selected_plan,
+                selected_state,
+                gpt_model,
+                vector_db1,
+                llm,
+                llm2,
+                retriever,
+                handler,
+                transcript_context=(question_obj or {}).get("context", ""),
+            )
+
+            display_question_text = re.sub(r"\[CALL_CONTEXT:.*?\]\s*", "", question_text).strip()
+            result["questionId"] = question_id
+            result["question"] = display_question_text
+            result["context"] = (question_obj or {}).get("context", "")
+            result["questionType"] = (question_obj or {}).get("questionType", "general")
+            result["userIntent"] = (question_obj or {}).get("userIntent", "")
+
+            rc = result.get("relevantChunks") or []
+            if isinstance(rc, list):
+                rc = [str(x) for x in rc if str(x).strip()]
+            else:
+                rc = []
+            if not rc:
+                rc = ["(No supporting excerpts found)"]
+            if MILVUS_MAX_RETURN_CHUNKS is not None:
+                rc = rc[:MILVUS_MAX_RETURN_CHUNKS]
+            result["relevantChunks"] = rc
+
+            if "error" not in result:
+                try:
+                    total_latency += float(result.get("latency", 0.0) or 0.0)
+                except Exception:
+                    pass
+
+            results.append(result)
+
+            # Persist incremental chat to Mongo
+            try:
+                chunks = result.get("relevantChunks") or []
+                relevant_docs_text = "\n\n---\n\n".join([str(c) for c in chunks if str(c).strip()])
+                qna_collection.update_one(
+                    {"_id": ObjectId(cid)},
+                    {
+                        "$push": {
+                            "chats": {
+                                "chat_id": question_id,
+                                "entered_query": display_question_text,
+                                "response": result.get("answer", ""),
+                                "relevant_chunks": chunks,
+                                "relevant_docs": relevant_docs_text,
+                                "gpt_model": "Calls",
+                                "underlying_model": gpt_model,
+                                "chat_timestamp": now_ts,
+                                "latency": result.get("latency", 0.0),
+                                "confidence": result.get("confidence", 0.0),
+                            }
+                        },
+                        "$set": {"updated_at": datetime.utcnow()},
+                    },
+                )
+            except Exception:
+                pass
+
+            _claims_publish_event(
+                conversation_id=cid,
+                event="answer",
+                payload={
+                    "questionId": question_id,
+                    "question": display_question_text,
+                    "answer": result.get("answer", ""),
+                    "relevantChunks": result.get("relevantChunks", []),
+                    "confidence": result.get("confidence", 0.0),
+                    "latency": result.get("latency", 0.0),
+                    "questionType": result.get("questionType"),
+                    "userIntent": result.get("userIntent"),
+                },
+            )
+
+        # --- final summary + claim decision ---
+        final_summary_text = ""
+        claim_decision = None
+
+        def _generate_final_summary() -> str:
+            try:
+                llm_summary = ChatOpenAI(temperature=0.0, model="gpt-4o")
+                qa_lines = []
+                for r in results or []:
+                    if not r:
+                        continue
+                    q = str(r.get("question") or "").strip()
+                    if not q:
+                        continue
+                    ctx = str(r.get("context") or "").strip()
+                    a = (str(r.get("answer") or "").strip()) or "(No answer was generated for this question.)"
+                    if ctx:
+                        qa_lines.append(f"Q: {q}\nSituation: {ctx}\nA: {a}")
+                    else:
+                        qa_lines.append(f"Q: {q}\nA: {a}")
+                qa_blob = "\n\n".join(qa_lines)
+                if qa_blob.strip():
+                    summary_prompt = get_final_summary_prompt(streaming=True)
+                    summary_chain = summary_prompt | llm_summary | StrOutputParser()
+                    return (summary_chain.invoke({"qa_blob": qa_blob}) or "").strip()
+            except Exception:
+                pass
+            return ""
+
+        def _generate_claim_decision() -> Optional[Dict[str, Any]]:
+            try:
+                all_chunks: List[str] = []
+                for r in results or []:
+                    rc2 = r.get("relevantChunks") or []
+                    if isinstance(rc2, list):
+                        all_chunks.extend([str(x) for x in rc2 if str(x).strip()])
+                seen = set()
+                deduped = []
+                for c in all_chunks:
+                    if c in seen:
+                        continue
+                    seen.add(c)
+                    deduped.append(c)
+                claims_context = []
+                for r in results or []:
+                    if not isinstance(r, dict):
+                        continue
+                    claims_context.append(
+                        {
+                            "claimId": (r.get("questionId") or ""),
+                            "customerClaim": (r.get("question") or ""),
+                            "situation": (r.get("context") or ""),
+                        }
+                    )
+                return generate_claim_decision_from_chunks(deduped, claims_context=claims_context)
+            except Exception:
+                return None
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            summary_future = executor.submit(_generate_final_summary)
+            claim_future = executor.submit(_generate_claim_decision)
+            try:
+                final_summary_text = summary_future.result() or ""
+            except Exception:
+                final_summary_text = ""
+            try:
+                claim_decision = claim_future.result()
+            except Exception:
+                claim_decision = None
+
+        if claim_decision:
+            _claims_publish_event(conversation_id=cid, event="claimDecision", payload=claim_decision)
+
+        # Finalize Mongo doc (mirrors streaming endpoint)
+        try:
+            processed_questions = [r for r in results if "error" not in r]
+            avg_confidence = (
+                sum(r.get("confidence", 0.0) for r in processed_questions) / len(processed_questions)
+                if processed_questions
+                else 0.0
+            )
+            qna_collection.update_one(
+                {"_id": ObjectId(cid)},
+                {
+                    "$push": {
+                        "chats": {
+                            "$each": [
+                                {
+                                    "chat_id": "final_answer",
+                                    "entered_query": "Final Answer for transcript",
+                                    "response": final_summary_text,
+                                    "relevant_chunks": [],
+                                    "relevant_docs": "",
+                                    "gpt_model": "Calls",
+                                    "underlying_model": gpt_model,
+                                    "chat_timestamp": datetime.utcnow(),
+                                    "latency": 0.0,
+                                    "confidence": 0.0,
+                                },
+                            ]
+                        },
+                    },
+                    "$set": {
+                        "processing": False,
+                        "updated_at": datetime.utcnow(),
+                        "final_summary": final_summary_text,
+                        "claim_decision": claim_decision,
+                        "summary": {
+                            "totalQuestions": len(questions),
+                            "processedQuestions": len(processed_questions),
+                            "averageConfidence": round(avg_confidence, 2),
+                            "totalLatency": round(total_latency, 2),
+                        },
+                        "transcript_metadata": {
+                            "fileName": (file_metadata or {}).get("fileName"),
+                            "uploadDate": (file_metadata or {}).get("uploadDate"),
+                            "fileSize": (file_metadata or {}).get("fileSize"),
+                        },
+                    },
+                },
+            )
+        except Exception:
+            pass
+
+        _claims_publish_event(conversation_id=cid, event="final", payload={"finalSummary": final_summary_text})
+        _claims_publish_event(
+            conversation_id=cid,
+            event="done",
+            payload={
+                "elapsedSec": round(_time_mod.time() - start_time, 2),
+                "conversationId": cid,
+                "conversationName": conversation_name or "",
+                "status": transcript_status,
+            },
+        )
+    except Exception as e:
+        try:
+            # Best-effort mark processing false if possible
+            try:
+                qna_collection_user = f"chats_{user_email}"
+                qna_collection = db[qna_collection_user]
+                qna_collection.update_one(
+                    {"_id": ObjectId(cid)},
+                    {"$set": {"processing": False, "updated_at": datetime.utcnow()}},
+                )
+            except Exception:
+                pass
+            _claims_publish_event(
+                conversation_id=cid,
+                event="error",
+                payload={"error": "An error occurred while processing transcript", "details": str(e)},
+            )
+        except Exception:
+            pass
+    finally:
+        _claims_mark_job_finished(cid)
+
+
 def generate_claim_decision_from_chunks(chunks: List[str], llm=None, claims_context: List[Dict] = None) -> Dict:
     """
     Produce a single claim authorization decision grounded ONLY in provided policy chunks.
@@ -4252,8 +5034,8 @@ def generate_claim_decision_from_chunks(chunks: List[str], llm=None, claims_cont
         if not claims_blob:
             claims_blob = "- claimId: c1\n  claim: (No explicit claim description provided)\n  situation: (Not provided)"
 
-        # Using claims adjudication prompt from utils.prompts
-        prompt = _claims_adjudication_prompt
+        # Using canonical claim-decision prompt from utils.prompts
+        prompt = CLAIM_DECISION_PROMPT
 
         chain = prompt | llm | StrOutputParser()
         chunks_blob = "\n\n---\n\n".join(cleaned[:12])
@@ -4482,9 +5264,6 @@ def process_transcript_stream():
             contract_type = data.get("contractType")
             selected_plan = data.get("selectedPlan")
             selected_state = data.get("selectedState")
-            milvus_state = normalize_state_for_milvus(selected_state)
-            contract_type_norm = normalize_contract_type(contract_type)
-            selected_plan_norm = normalize_plan_for_milvus(contract_type_norm, selected_plan)
             gpt_model = data.get("gptModel", "Search")
             extract_questions = data.get("extractQuestions", True)
             provided_questions = data.get("questions", [])
@@ -4538,28 +5317,8 @@ def process_transcript_stream():
                     )
                     conv_name = existing.get("conversation_name") or requested_conversation_name or transcript_file_name
                     transcript_status = (existing.get("status") or "active")
-                    # Emit started AFTER confirming stub exists.
-                    yield _sse(
-                        "status",
-                        {
-                            "stage": "started",
-                            "transcriptId": transcript_id,
-                            "transcriptFileName": transcript_file_name,
-                            "gptModel": gpt_model,
-                            "conversationId": str(conv_doc_id),
-                            "conversationName": conv_name,
-                            "status": transcript_status,
-                        },
-                    )
-                    yield _sse(
-                        "status",
-                        {
-                            "stage": "conversation_created",
-                            "conversationId": str(conv_doc_id),
-                            "conversationName": conv_name,
-                            "status": transcript_status,
-                        },
-                    )
+                    # Note: we publish initial stages once, after we have a stable conversationId,
+                    # in the unified "start background job" block below.
                     # Ensure we don't prematurely return via the cached fast-path for this stub.
                     force_reprocess = True
                 except Exception:
@@ -4651,31 +5410,6 @@ def process_transcript_stream():
                 }
                 inserted = qna_collection.insert_one(stub)
                 conv_doc_id = inserted.inserted_id
-
-                # Emit a "started" status only AFTER the Mongo stub exists, so the UI can refresh the sidebar
-                # and show the in-progress (yellow) case immediately.
-                yield _sse(
-                    "status",
-                    {
-                        "stage": "started",
-                        "transcriptId": transcript_id,
-                        "transcriptFileName": transcript_file_name,
-                        "gptModel": gpt_model,
-                        "conversationId": str(conv_doc_id),
-                        "conversationName": conv_name,
-                        "status": transcript_status,
-                    },
-                )
-
-                yield _sse(
-                    "status",
-                    {
-                        "stage": "conversation_created",
-                        "conversationId": str(conv_doc_id),
-                        "conversationName": conv_name,
-                        "status": transcript_status,
-                    },
-                )
             else:
                 # Frontend stub exists: mark it as processing before continuing.
                 qna_collection.update_one(
@@ -4683,387 +5417,85 @@ def process_transcript_stream():
                     {"$set": {"processing": True, "updated_at": now_ts}},
                 )
 
-            # Read transcript from GCS
-            if not gcs_fs:
-                yield _sse("error", {"error": "GCP Storage not configured or unavailable"})
-                return
+            cid = str(conv_doc_id)
 
-            yield _sse("status", {"stage": "transcript_loading"})
-            transcript_content, file_metadata = read_transcript_file_gcp(transcript_file_name)
-            transcript_text = transcript_content
-            try:
-                transcript_data = json.loads(transcript_content)
-                if isinstance(transcript_data, dict):
-                    transcript_text = transcript_data.get(
-                        "text",
-                        transcript_data.get(
-                            "transcript",
-                            transcript_data.get("content", str(transcript_data)),
-                        ),
-                    )
-            except Exception:
-                transcript_text = transcript_content
+            # Start background job once (idempotent per conversationId)
+            should_start = _claims_mark_job_running(cid)
+            if should_start:
+                # Reset event stream for this new run.
+                with _claims_stream_lock:
+                    st = _claims_streams.get(cid)
+                    if st is not None:
+                        st["events"] = []
+                        st["done"] = False
+                        st["ts"] = _time_mod.time()
 
-            yield _sse(
-                "status",
-                {
-                    "stage": "transcript_loaded",
-                    "transcriptMetadata": {
-                        "fileName": file_metadata.get("fileName"),
-                        "uploadDate": file_metadata.get("uploadDate"),
-                        "fileSize": file_metadata.get("fileSize"),
-                    },
-                },
-            )
-
-            # Extract questions
-            extraction_warning = None
-            questions = []
-            if extract_questions:
-                yield _sse("status", {"stage": "extracting_questions"})
-                llm_extract = ChatOpenAI(temperature=0.0, model="gpt-4o")
-                questions = extract_relevant_customer_questions(transcript_text, llm_extract)
-                if not questions:
-                    questions = extract_questions_with_agent(transcript_text, llm_extract)
-                if not questions:
-                    extraction_warning = "No questions could be extracted from transcript; inferring from context."
-                    inferred_question = {
-                        "question": f"Is this issue covered: {transcript_text[:120]}",
-                        "context": transcript_text[:400],
-                        "questionType": "coverage",
-                        "userIntent": "Customer wants to know if the described issue is covered",
-                        "questionId": "q1",
-                    }
-                    questions = [inferred_question]
-            else:
-                questions = provided_questions
-                if not questions:
-                    yield _sse("error", {"error": "No questions provided"})
-                    return
-
-            yield _sse(
-                "status",
-                {
-                    "stage": "questions_ready",
-                    "totalQuestions": len(questions),
-                    "warning": extraction_warning,
-                },
-            )
-
-            # Initialize vector DB + LLMs
-            yield _sse("status", {"stage": "initializing_retriever"})
-            selected_collection_name = get_milvus_collection_name(
-                contract_type=contract_type,
-                selected_plan=selected_plan,
-                selected_state=selected_state
-            )
-            vector_db1 = Milvus(
-                embed,
-                collection_name=selected_collection_name,
-                connection_args={"host": MILVUS_HOST, "port": "19530"},
-            )
-            retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
-
-            if gpt_model == "Search":
-                llm2 = ChatOpenAI(temperature=0.0, model="ft:gpt-3.5-turbo-0613:mindstix::8YYD56aA")
-                llm = ChatOpenAI(temperature=0.0, model="gpt-4o")
-            elif gpt_model == "Infer":
-                llm3 = ChatOpenAI(temperature=0.0, model="ft:gpt-3.5-turbo-0613:mindstix::8YYD56aA")
-                llm = ChatOpenAI(temperature=0.0, model="gpt-4o")
-                llm2 = ChatOpenAI(temperature=0.0, model="gpt-4o")
-            else:
-                yield _sse("error", {"error": f"Invalid gpt_model: {gpt_model}. Must be 'Search' or 'Infer'"})
-                return
-
-            yield _sse("status", {"stage": "answering"})
-
-            results = []
-            confidences = []
-            total_latency = 0.0
-            now_ts = datetime.utcnow()
-
-            # Process questions in parallel and stream results in order
-            yield _sse(
-                "status",
-                {"stage": "answering", "totalQuestions": len(questions)},
-            )
-            
-            # Process questions in parallel and stream as they complete (in order)
-            results_dict = {}
-            next_expected_idx = 0
-            
-            with ThreadPoolExecutor(max_workers=min(32, len(questions))) as executor:
-                # Submit all tasks
-                future_to_idx = {
-                    executor.submit(
-                        _process_question_with_index,
-                        idx,
-                        question_obj,
-                        contract_type,
-                        selected_plan,
-                        selected_state,
-                        gpt_model,
-                        vector_db1,
-                        llm,
-                        llm2,
-                        retriever,
-                        handler,
-                    ): idx
-                    for idx, question_obj in enumerate(questions)
-                }
-                
-                # Collect results as they complete and stream in order
-                completed_futures = {}
-                for future in as_completed(future_to_idx):
-                    try:
-                        idx, result = future.result()
-                        completed_futures[idx] = result
-                        
-                        # Stream results in order as they become available
-                        while next_expected_idx in completed_futures:
-                            result = completed_futures.pop(next_expected_idx)
-                            results_dict[next_expected_idx] = result
-                            
-                            if "error" not in result:
-                                confidences.append(result.get("confidence", 0.0))
-                                total_latency += float(result.get("latency", 0.0) or 0.0)
-                            
-                            # Persist incremental chat to Mongo
-                            try:
-                                question_id = result.get("questionId")
-                                question_text = result.get("question", "")
-                                chunks = result.get("relevantChunks") or []
-                                relevant_docs_text = "\n\n---\n\n".join([str(c) for c in chunks if str(c).strip()])
-                                qna_collection.update_one(
-                                    {"_id": conv_doc_id},
-                                    {
-                                        "$push": {
-                                            "chats": {
-                                                "chat_id": question_id,
-                                                "entered_query": question_text,
-                                                "response": result.get("answer", ""),
-                                                "relevant_chunks": chunks,
-                                                "relevant_docs": relevant_docs_text,
-                                                "gpt_model": "Calls",
-                                                "underlying_model": gpt_model,
-                                                "chat_timestamp": now_ts,
-                                                "latency": result.get("latency", 0.0),
-                                                "confidence": result.get("confidence", 0.0),
-                                            }
-                                        },
-                                        "$set": {"updated_at": datetime.utcnow()},
-                                    },
-                                )
-                            except Exception as e:
-                                print(f"Warning: failed to persist incremental transcript chat: {e}")
-                            
-                            # Stream this answer immediately
-                            yield _sse(
-                                "answer",
-                                {
-                                    "questionId": result.get("questionId"),
-                                    "question": result.get("question"),
-                                    "answer": result.get("answer", ""),
-                                    "relevantChunks": result.get("relevantChunks", []),
-                                    "confidence": result.get("confidence", 0.0),
-                                    "latency": result.get("latency", 0.0),
-                                    "questionType": result.get("questionType"),
-                                    "userIntent": result.get("userIntent"),
-                                },
-                            )
-                            
-                            next_expected_idx += 1
-                            
-                    except Exception as e:
-                        idx = future_to_idx[future]
-                        print(f"Error processing question at index {idx}: {e}")
-                        error_result = {
-                            "questionId": questions[idx].get("questionId", f"q{idx + 1}"),
-                            "question": questions[idx].get("question", ""),
-                            "answer": f"Error processing question: {str(e)}",
-                            "relevantChunks": ["(No supporting excerpts found)"],
-                            "confidence": 0.0,
-                            "latency": 0.0,
-                            "error": str(e),
-                        }
-                        completed_futures[idx] = error_result
-                        
-                        # Stream error result in order
-                        while next_expected_idx in completed_futures:
-                            result = completed_futures.pop(next_expected_idx)
-                            results_dict[next_expected_idx] = result
-                            
-                            yield _sse(
-                                "answer",
-                                {
-                                    "questionId": result.get("questionId"),
-                                    "question": result.get("question"),
-                                    "answer": result.get("answer", ""),
-                                    "relevantChunks": result.get("relevantChunks", []),
-                                    "confidence": result.get("confidence", 0.0),
-                                    "latency": result.get("latency", 0.0),
-                                    "questionType": result.get("questionType"),
-                                    "userIntent": result.get("userIntent"),
-                                },
-                            )
-                            
-                            next_expected_idx += 1
-            
-            # Store results for final summary
-            results = [results_dict[i] for i in range(len(questions))]
-
-            avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
-
-            # Helper functions for parallel execution
-            def generate_final_summary():
-                """Generate final summary from results."""
-                final_summary_text = ""
-                try:
-                    llm_summary = ChatOpenAI(temperature=0.0, model="gpt-4o")
-                    qa_lines = []
-                    for r in results or []:
-                        if not r:
-                            continue
-                        q = (r.get("question") or "").strip()
-                        if not q:
-                            continue
-                        ctx = (r.get("context") or "").strip()
-                        a = (r.get("answer") or "").strip() or "(No answer was generated for this question.)"
-                        # Provide structured evidence for the final summarizer to cluster by appliance/item.
-                        if ctx:
-                            qa_lines.append(f"Q: {q}\nSituation: {ctx}\nA: {a}")
-                        else:
-                            qa_lines.append(f"Q: {q}\nA: {a}")
-                    qa_blob = "\n\n".join(qa_lines)
-                    if qa_blob.strip():
-                        # Using final answer summary prompt v1 from utils.prompts
-                        summary_prompt = _final_answer_summary_prompt_v1
-                        summary_chain = summary_prompt | llm_summary | StrOutputParser()
-                        final_summary_text = summary_chain.invoke({"qa_blob": qa_blob}).strip()
-                except Exception as e:
-                    print(f"Warning: failed to generate final transcript summary (stream): {e}")
-
-                if (not final_summary_text.strip()) and results:
-                    final_summary_text = "\n".join(
-                        [
-                            f"- {((r.get('answer') or '').strip() or '(No answer was generated for this question.)')}"
-                            for r in results
-                            if r and (r.get("question") or "").strip()
-                        ]
-                    ).strip()
-                
-                return final_summary_text
-
-            def generate_claim_decision_parallel():
-                """Generate claim decision from retrieved chunks."""
-                try:
-                    all_chunks = []
-                    for r in results or []:
-                        rc = r.get("relevantChunks") or []
-                        if isinstance(rc, list):
-                            all_chunks.extend([str(x) for x in rc if str(x).strip()])
-                    seen = set()
-                    deduped = []
-                    for c in all_chunks:
-                        if c in seen:
-                            continue
-                        seen.add(c)
-                        deduped.append(c)
-                    claims_context = []
-                    for r in results or []:
-                        if not isinstance(r, dict):
-                            continue
-                        claims_context.append(
-                            {
-                                "claimId": (r.get("questionId") or ""),
-                                "customerClaim": (r.get("question") or ""),
-                                "situation": (r.get("context") or ""),
-                            }
-                        )
-                    claim_decision = generate_claim_decision_from_chunks(deduped, claims_context=claims_context)
-                    return claim_decision
-                except Exception as e:
-                    print(f"Warning: failed to generate claimDecision: {e}")
-                    return None
-
-            # Run final summary and claim decision generation in parallel
-            final_summary_text = ""
-            claim_decision = None
-            
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                summary_future = executor.submit(generate_final_summary)
-                claim_future = executor.submit(generate_claim_decision_parallel)
-                
-                # Wait for both to complete and get results
-                try:
-                    final_summary_text = summary_future.result()
-                except Exception as e:
-                    print(f"Warning: failed to generate final transcript summary (stream): {e}")
-                    final_summary_text = ""
-                
-                try:
-                    claim_decision = claim_future.result()
-                    if claim_decision:
-                        yield _sse("claimDecision", claim_decision)
-                except Exception as e:
-                    print(f"Warning: failed to generate/stream claimDecision: {e}")
-                    claim_decision = None
-
-            # Store final answer as last chat entry and finalize conversation doc
-            try:
-                qna_collection.update_one(
-                    {"_id": conv_doc_id},
-                    {
-                        "$push": {
-                            "chats": {
-                                "$each": [
-                                    {
-                                        "chat_id": "final_answer",
-                                        "entered_query": "Final Answer for transcript",
-                                        "response": final_summary_text,
-                                        "relevant_chunks": [],
-                                        "relevant_docs": "",
-                                        "gpt_model": "Calls",
-                                        "underlying_model": gpt_model,
-                                        "chat_timestamp": datetime.utcnow(),
-                                        "latency": 0.0,
-                                        "confidence": 0.0,
-                                    },
-                                ]
-                            },
-                        },
-                        "$set": {
-                            "processing": False,
-                            "updated_at": datetime.utcnow(),
-                            "final_summary": final_summary_text,
-                            "claim_decision": claim_decision,
-                            "summary": {
-                                "totalQuestions": len(questions),
-                                "processedQuestions": len([r for r in results if "error" not in r]),
-                                "averageConfidence": round(avg_confidence, 2),
-                                "totalLatency": round(total_latency, 2),
-                            },
-                            "transcript_metadata": {
-                                "fileName": file_metadata.get("fileName"),
-                                "uploadDate": file_metadata.get("uploadDate"),
-                                "fileSize": file_metadata.get("fileSize"),
-                            },
-                        },
+                # Publish initial stages (SSE bus + Socket.IO room)
+                _claims_publish_event(
+                    conversation_id=cid,
+                    event="status",
+                    payload={
+                        "stage": "started",
+                        "transcriptId": transcript_id,
+                        "transcriptFileName": transcript_file_name,
+                        "gptModel": gpt_model,
+                        "conversationId": cid,
+                        "conversationName": conv_name,
+                        "status": transcript_status,
                     },
                 )
-            except Exception as e:
-                print(f"Warning: failed to finalize transcript conversation doc (stream): {e}")
+                _claims_publish_event(
+                    conversation_id=cid,
+                    event="status",
+                    payload={
+                        "stage": "conversation_created",
+                        "conversationId": cid,
+                        "conversationName": conv_name,
+                        "status": transcript_status,
+                    },
+                )
+                socketio.start_background_task(
+                    _claims_background_process_transcript,
+                    conversation_id=cid,
+                    user_email=user_email,
+                    transcript_file_name=transcript_file_name,
+                    contract_type=contract_type,
+                    selected_plan=selected_plan,
+                    selected_state=selected_state,
+                    gpt_model=gpt_model,
+                    extract_questions=bool(extract_questions),
+                    provided_questions=provided_questions or [],
+                    transcript_id=transcript_id,
+                    transcript_status=transcript_status,
+                    conversation_name=conv_name or "",
+                )
 
-            yield _sse("final", {"finalSummary": final_summary_text})
-            yield _sse(
-                "done",
-                {
-                    "elapsedSec": round(time() - start_time, 2),
-                    "conversationId": str(conv_doc_id) if conv_doc_id else "",
-                    "conversationName": conv_name or "",
-                    "status": transcript_status,
-                },
-            )
+            # Stream events to this SSE client until done/error.
+            st = _claims_get_stream(cid)
+            # If the job was already running, avoid replaying old events (frontend can hydrate via /history).
+            try:
+                idx = len(st["events"]) if not should_start else 0
+            except Exception:
+                idx = 0
+            while True:
+                with _claims_stream_lock:
+                    while idx >= len(st["events"]) and not st.get("done"):
+                        try:
+                            st["cv"].wait(timeout=15)
+                        except Exception:
+                            break
+
+                    if idx < len(st["events"]):
+                        ev, pl = st["events"][idx]
+                        idx += 1
+                    elif st.get("done"):
+                        break
+                    else:
+                        continue
+
+                yield _sse(ev, pl)
+                if ev in ("done", "error"):
+                    break
             return
 
         except Exception as e:
@@ -5328,9 +5760,13 @@ def process_transcript():
                     try:
                         transcript_data = json.loads(transcript_content)
                         if isinstance(transcript_data, dict):
-                            transcript_text = transcript_data.get("text", 
-                                transcript_data.get("transcript", 
-                                transcript_data.get("content", str(transcript_data))))
+                            transcript_text = transcript_data.get(
+                                "text",
+                                transcript_data.get(
+                                    "transcript",
+                                    transcript_data.get("content", str(transcript_data)),
+                                ),
+                            )
                         else:
                             transcript_text = transcript_content
                     except json.JSONDecodeError:
@@ -5360,21 +5796,29 @@ def process_transcript():
                         print(f"ERROR: No questions extracted from transcript '{transcript_file_name}'")
                         print(f"ERROR: Transcript length: {len(transcript_text)} characters")
                         print(f"ERROR: First 500 chars of transcript: {transcript_text[:500]}")
+                        extraction_warning = "LLM extraction failed; using deterministic item-based fallback questions."
+                        questions = heuristic_extract_claim_questions(transcript_text)
+                    
+                    if not questions:
                         extraction_warning = (
                             "No questions could be extracted from transcript; inferring from context."
                         )
-                        inferred_question = {
+                        questions = [{
                             "question": f"Is this issue covered: {transcript_text[:120]}",
                             "context": transcript_text[:400],
                             "questionType": "coverage",
                             "userIntent": "Customer wants to know if the described issue is covered",
                             "questionId": "q1",
-                        }
-                        questions = [inferred_question]
+                        }]
             else:
                 questions = provided_questions
                 if not questions:
                     return jsonify({"error": "No questions provided"}), 400
+            
+            # Ensure stable, unique question IDs (prevents UI key collisions)
+            for i, q in enumerate(questions):
+                if isinstance(q, dict):
+                    q["questionId"] = f"q{i + 1}"
             
             # Initialize vector DB and LLM
             with tracer.start_as_current_span('vector_db-initialization'):
@@ -5397,11 +5841,8 @@ def process_transcript():
                     f"collection={selected_collection_name!r}"
                 )
                 
-                vector_db1 = Milvus(
-                    embed,
-                    collection_name=selected_collection_name,
-                    connection_args={"host": MILVUS_HOST, "port": "19530"},
-                )
+
+                vector_db1 = get_vector_db(selected_collection_name)
                 
                 retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
                 
@@ -5519,8 +5960,8 @@ def process_transcript():
 
                     qa_blob = "\n\n".join(qa_lines)
                     if qa_blob.strip():
-                        # Using final answer summary prompt v2 from utils.prompts
-                        summary_prompt = _final_answer_summary_prompt_v2
+                        # Use canonical selector (preserves current non-stream behavior)
+                        summary_prompt = get_final_summary_prompt(streaming=False)
                         summary_chain = summary_prompt | llm_summary | StrOutputParser()
                         final_summary_text = summary_chain.invoke({"qa_blob": qa_blob}).strip()
             except Exception as e:
@@ -5659,760 +6100,656 @@ def process_transcript():
 
 def _process_transcript_core(data, yield_sse_fn=None):
     """
-    Core transcript processing logic that can run in a generator (with SSE) or in a background thread.
-    
-    Args:
-        data: Request payload dict
-        yield_sse_fn: Optional function to yield SSE events. If None, events are logged but not sent.
-    
-    Returns:
-        dict with processing results or None on error
-    """
-    def _yield_sse(event, payload):
-        """Helper to yield SSE events or log them if no yield function provided."""
-        if yield_sse_fn:
-            try:
-                yield_sse_fn(_sse(event, payload))
-            except (GeneratorExit, StopIteration, BrokenPipeError, ConnectionError, OSError) as e:
-                print(f"Client disconnected during SSE yield (event: {event}): {type(e).__name__}")
-                # For background threads, we want to continue processing even if client disconnected
-                # So we don't re-raise here
-                return None
-        else:
-            # Background thread mode - just log
-            print(f"[Background] SSE event: {event} - {json.dumps(payload)[:200]}")
-        return None
-    
-    start_time = time()
-    user_email = None
-    qna_collection = None
-    conv_doc_id = None
-    conv_name = None
-    transcript_status = "active"
-    extraction_warning = None
-    
-    try:
-        # Extract data
-        transcript_file_name = data.get("transcriptFileName")
-        contract_type = data.get("contractType")
-        selected_plan = data.get("selectedPlan")
-        selected_state = data.get("selectedState")
-        gpt_model = data.get("gptModel", "Search")
-        extract_questions = data.get("extractQuestions", True)
-        provided_questions = data.get("questions", [])
-        force_reprocess = bool(data.get("forceReprocess", False))
-        new_conversation = bool(data.get("newConversation", False))
-        requested_conversation_name = data.get("conversationName")
-        contact_id = data.get("contactId")
-        agent_name = data.get("agentName")
-        session_id = (contact_id or data.get("sessionId") or "").strip()
-        
-        # Validate required fields
-        if not transcript_file_name:
-            _yield_sse("error", {"error": "transcriptFileName is required"})
-            return None
-        
-        if extract_questions and not all([contract_type, selected_plan, selected_state]):
-            _yield_sse("error", {
-                "error": "contractType, selectedPlan, selectedState are required when extractQuestions=true"
-            })
-            return None
-        
-        transcript_id = transcript_file_name.replace(".json", "").replace(".txt", "")
-        
-        _yield_sse(
-            "status",
-            {
-                "stage": "started",
-                "transcriptId": transcript_id,
-                "transcriptFileName": transcript_file_name,
-                "gptModel": gpt_model,
-            },
-        )
-        
-        # Resolve user email from mappings
-        user_email = None
-        sessions_collection = db.get_collection("sessions")
-        
-        if contact_id:
-            sess = sessions_collection.find_one(
-                {"contactId": contact_id},
-                {"_id": 0, "email": 1}
-            )
-            if sess and sess.get("email"):
-                user_email = sess["email"]
-        
-        if not user_email and agent_name:
-            agent_email_mapping = db.get_collection("agent_email_mapping")
-            m = agent_email_mapping.find_one(
-                {"agentName": agent_name},
-                {"_id": 0, "email": 1}
-            )
-            if m and m.get("email"):
-                user_email = m["email"]
-        
-        if not user_email:
-            _yield_sse("error", {
-                "error": "Unable to resolve user email",
-                "details": {
-                    "contactId": contact_id,
-                    "agentName": agent_name
-                }
-            })
-            return None
-        
-        # Normalize state/plan/contract
-        milvus_state = normalize_state_for_milvus(selected_state)
-        contract_type_norm = normalize_contract_type(contract_type)
-        selected_plan_norm = normalize_plan_for_milvus(contract_type_norm, selected_plan)
-        
-        # Use the existing per-user chat collection
-        qna_collection_user = f"chats_{user_email}"
-        qna_collection = db[qna_collection_user]
-        
-        # Check for existing conversation
-        existing_conv = None
-        conv_doc_id = None
-        conv_name = None
-        
-        if not new_conversation:
-            existing_conv = qna_collection.find_one(
-                {"doc_type": "transcript_conversation", "transcript_id": transcript_id},
-                sort=[("updated_at", -1), ("query_time", -1)],
-            )
-        
-        if existing_conv and not force_reprocess and not new_conversation:
-            # Cache validation
-            try:
-                existing_chats = existing_conv.get("chats") or []
-                has_placeholder_chunks = False
-                for c in existing_chats:
-                    if c.get("chat_id") == "final_answer":
-                        continue
-                    rc = c.get("relevant_chunks") or []
-                    if rc and all(
-                        (
-                            (
-                                isinstance(x, dict)
-                                and (str(x.get("content") or "").strip() in _PLACEHOLDER_CHUNK_VALUES)
-                            )
-                            or (
-                                isinstance(x, str)
-                                and (x.strip() in _PLACEHOLDER_CHUNK_VALUES)
-                            )
-                        )
-                        for x in rc
-                    ):
-                        has_placeholder_chunks = True
-                        break
-                if has_placeholder_chunks or not existing_conv.get("final_summary"):
-                    conv_doc_id = existing_conv.get("_id")
-                    conv_name = existing_conv.get("conversation_name")
-                    existing_conv = None
-            except Exception as e:
-                print(f"Warning: cache validation failed, will reprocess transcript: {e}")
-                existing_conv = None
-        
-        if existing_conv and not force_reprocess and not new_conversation:
-            # Return cached results
-            cached = existing_conv.get("response_payload") or {}
-            conv_doc_id = existing_conv.get("_id")
-            _yield_sse(
-                "status",
-                {
-                    "stage": "cached",
-                    "conversationId": str(conv_doc_id),
-                    "conversationName": existing_conv.get("conversation_name") or "",
-                    "status": (existing_conv.get("status") or "active"),
-                },
-            )
-            
-            for q in (cached.get("questions") or existing_conv.get("chats") or []):
-                if not isinstance(q, dict):
-                    continue
-                qid = q.get("questionId") or q.get("chat_id")
-                if qid == "final_answer":
-                    continue
-                _yield_sse(
-                    "answer",
-                    {
-                        "questionId": qid,
-                        "question": q.get("question") or q.get("entered_query") or "",
-                        "answer": q.get("answer") or q.get("response") or "",
-                        "relevantChunks": q.get("relevantChunks") or q.get("relevant_chunks") or [],
-                        "confidence": q.get("confidence", 0.0),
-                        "latency": q.get("latency", 0.0),
-                        "questionType": q.get("questionType"),
-                        "userIntent": q.get("userIntent"),
-                    },
-                )
-            
-            if isinstance(existing_conv.get("claim_decision"), dict):
-                _yield_sse("claimDecision", existing_conv.get("claim_decision"))
-            
-            final_summary = existing_conv.get("final_summary") or cached.get("finalSummary") or ""
-            _yield_sse("final", {"finalSummary": final_summary})
-            _yield_sse("done", {"elapsedSec": round(time() - start_time, 2)})
-            return {"status": "cached", "conversationId": str(conv_doc_id)}
-        
-        # If we are force reprocessing an existing conversation, update that document
-        if existing_conv and (force_reprocess and not new_conversation):
-            conv_doc_id = existing_conv.get("_id")
-            conv_name = existing_conv.get("conversation_name")
-            existing_conv = None
-        
-        # Create / update a "processing" transcript conversation document
-        now_ts = datetime.utcnow()
-        
-        status_doc = qna_collection.find_one(
-            {"doc_type": "transcript_status", "transcript_id": transcript_id},
-            {"_id": 0, "status": 1},
-        )
-        transcript_status = (status_doc or {}).get("status") or "active"
-        
-        if not conv_name:
-            base_name = (requested_conversation_name or transcript_file_name or "").strip() or transcript_id
-            if new_conversation:
-                existing_count = qna_collection.count_documents(
-                    {"doc_type": "transcript_conversation", "transcript_id": transcript_id}
-                )
-                conv_name = base_name if existing_count == 0 else f"{base_name} ({existing_count + 1})"
-            else:
-                conv_name = base_name
-        
-        if conv_doc_id is None:
-            stub = {
-                "doc_type": "transcript_conversation",
-                "conversation_mode": "Calls",
-                "underlying_model": gpt_model,
-                "conversation_name": conv_name,
-                "transcript_id": transcript_id,
-                "contract_type": contract_type,
-                "selected_plan": selected_plan,
-                "selected_state": selected_state,
-                "query_time": now_ts,
-                "updated_at": now_ts,
-                "status": transcript_status,
-                "processing": True,
-                "chats": [],
-                "internal_trigger": True,
-                "contact_id": contact_id,
-                "agent_name": agent_name,
-                "user_email": user_email,
-            }
-            inserted = qna_collection.insert_one(stub)
-            conv_doc_id = inserted.inserted_id
-        else:
-            qna_collection.update_one(
-                {"_id": conv_doc_id},
-                {"$set": {"processing": True, "updated_at": now_ts}},
-            )
-        
-        _yield_sse(
-            "status",
-            {
-                "stage": "conversation_created",
-                "conversationId": str(conv_doc_id),
-                "conversationName": conv_name,
-                "status": transcript_status,
-            },
-        )
-        
-        # Read transcript from GCS
-        if not gcs_fs:
-            _yield_sse("error", {"error": "GCP Storage not configured or unavailable"})
-            return None
-        
-        _yield_sse("status", {"stage": "transcript_loading"})
-        file_metadata = None
-        try:
-            transcript_content, file_metadata = read_transcript_file_gcp(transcript_file_name)
-            transcript_text = transcript_content
-            try:
-                transcript_data = json.loads(transcript_content)
-                if isinstance(transcript_data, dict):
-                    transcript_text = transcript_data.get(
-                        "text",
-                        transcript_data.get(
-                            "transcript",
-                            transcript_data.get("content", str(transcript_data)),
-                        ),
-                    )
-            except Exception:
-                transcript_text = transcript_content
-        except FileNotFoundError as e:
-            error_msg = f"Transcript file not found: {transcript_file_name}"
-            print(f"ERROR: {error_msg}")
-            _yield_sse("error", {"error": error_msg, "stage": "transcript_loading"})
-            return None
-        except Exception as e:
-            error_msg = f"Error reading transcript file: {str(e)}"
-            print(f"ERROR: {error_msg}")
-            import traceback
-            traceback.print_exc()
-            _yield_sse("error", {"error": error_msg, "stage": "transcript_loading", "details": str(e)})
-            return None
-        
-        if not file_metadata:
-            error_msg = f"Failed to retrieve file metadata for: {transcript_file_name}"
-            print(f"ERROR: {error_msg}")
-            _yield_sse("error", {"error": error_msg, "stage": "transcript_loading"})
-            return None
-        
-        _yield_sse(
-            "status",
-            {
-                "stage": "transcript_loaded",
-                "transcriptMetadata": {
-                    "fileName": file_metadata.get("fileName"),
-                    "uploadDate": file_metadata.get("uploadDate"),
-                    "fileSize": file_metadata.get("fileSize"),
-                },
-            },
-        )
-        
-        # Extract questions
-        if extract_questions:
-            _yield_sse("status", {"stage": "extracting_questions"})
-            llm_extract = ChatOpenAI(temperature=0.0, model="gpt-4o", timeout=60)
-            questions = extract_relevant_customer_questions(transcript_text, llm_extract)
-            if not questions:
-                questions = extract_questions_with_agent(transcript_text, llm_extract)
-            if not questions:
-                extraction_warning = "No questions could be extracted from transcript; inferring from context."
-                inferred_question = {
-                    "question": f"Is this issue covered: {transcript_text[:120]}",
-                    "context": transcript_text[:400],
-                    "questionType": "coverage",
-                    "userIntent": "Customer wants to know if the described issue is covered",
-                    "questionId": "q1",
-                }
-                questions = [inferred_question]
-        else:
-            questions = provided_questions
-            if not questions:
-                _yield_sse("error", {"error": "No questions provided"})
-                return None
-        
-        _yield_sse(
-            "status",
-            {
-                "stage": "questions_ready",
-                "totalQuestions": len(questions),
-                "warning": extraction_warning,
-            },
-        )
-        
-        # Initialize vector DB + LLMs
-        _yield_sse("status", {"stage": "initializing_retriever"})
-        selected_collection_name = get_milvus_collection_name(
-            contract_type=contract_type,
-            selected_plan=selected_plan,
-            selected_state=selected_state
-        )
-        vector_db1 = Milvus(
-            embed,
-            collection_name=selected_collection_name,
-            connection_args={"host": MILVUS_HOST, "port": "19530"},
-        )
-        retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
-        
-        if gpt_model == "Search":
-            llm2 = ChatOpenAI(temperature=0.0, model="ft:gpt-3.5-turbo-0613:mindstix::8YYD56aA", timeout=60)
-            llm = ChatOpenAI(temperature=0.0, model="gpt-4o", timeout=60)
-        elif gpt_model == "Infer":
-            llm3 = ChatOpenAI(temperature=0.0, model="ft:gpt-3.5-turbo-0613:mindstix::8YYD56aA", timeout=60)
-            llm = ChatOpenAI(temperature=0.0, model="gpt-4o", timeout=60)
-            llm2 = ChatOpenAI(temperature=0.0, model="gpt-4o", timeout=60)
-        else:
-            _yield_sse("error", {"error": f"Invalid gpt_model: {gpt_model}. Must be 'Search' or 'Infer'"})
-            return None
-        
-        _yield_sse("status", {"stage": "answering"})
-        
-        results = []
-        confidences = []
-        total_latency = 0.0
-        
-        # Process questions in parallel and stream results in order
-        _yield_sse(
-            "status",
-            {"stage": "answering", "totalQuestions": len(questions)},
-        )
-        
-        results_dict = {}
-        next_expected_idx = 0
-        
-        with ThreadPoolExecutor(max_workers=min(32, len(questions))) as executor:
-            # Submit all tasks
-            future_to_idx = {
-                executor.submit(
-                    _process_question_with_index,
-                    idx,
-                    question_obj,
-                    contract_type,
-                    selected_plan,
-                    selected_state,
-                    gpt_model,
-                    vector_db1,
-                    llm,
-                    llm2,
-                    retriever,
-                    handler,
-                ): idx
-                for idx, question_obj in enumerate(questions)
-            }
-            
-            # Collect results as they complete and stream in order
-            completed_futures = {}
-            for future in as_completed(future_to_idx):
-                try:
-                    idx, result = future.result()
-                    completed_futures[idx] = result
-                    
-                    # Stream results in order as they become available
-                    while next_expected_idx in completed_futures:
-                        result = completed_futures.pop(next_expected_idx)
-                        results_dict[next_expected_idx] = result
-                        
-                        if "error" not in result:
-                            confidences.append(result.get("confidence", 0.0))
-                            total_latency += float(result.get("latency", 0.0) or 0.0)
-                        
-                        # Persist incremental chat to Mongo
-                        try:
-                            question_id = result.get("questionId")
-                            question_text = result.get("question", "")
-                            chunks = result.get("relevantChunks") or []
-                            relevant_docs_text = "\n\n---\n\n".join([str(c) for c in chunks if str(c).strip()])
-                            qna_collection.update_one(
-                                {"_id": conv_doc_id},
-                                {
-                                    "$push": {
-                                        "chats": {
-                                            "chat_id": question_id,
-                                            "entered_query": question_text,
-                                            "response": result.get("answer", ""),
-                                            "relevant_chunks": chunks,
-                                            "relevant_docs": relevant_docs_text,
-                                            "gpt_model": "Calls",
-                                            "underlying_model": gpt_model,
-                                            "chat_timestamp": datetime.utcnow(),
-                                            "latency": result.get("latency", 0.0),
-                                            "confidence": result.get("confidence", 0.0),
-                                        }
-                                    },
-                                    "$set": {"updated_at": datetime.utcnow()},
-                                },
-                            )
-                        except Exception as e:
-                            print(f"Warning: failed to persist incremental transcript chat: {e}")
-                        
-                        # Stream this answer immediately
-                        _yield_sse(
-                            "answer",
-                            {
-                                "questionId": result.get("questionId"),
-                                "question": result.get("question"),
-                                "answer": result.get("answer", ""),
-                                "relevantChunks": result.get("relevantChunks", []),
-                                "confidence": result.get("confidence", 0.0),
-                                "latency": result.get("latency", 0.0),
-                                "questionType": result.get("questionType"),
-                                "userIntent": result.get("userIntent"),
-                            },
-                        )
-                        
-                        next_expected_idx += 1
-                        
-                except Exception as e:
-                    idx = future_to_idx[future]
-                    print(f"Error processing question at index {idx}: {e}")
-                    error_result = {
-                        "questionId": questions[idx].get("questionId", f"q{idx + 1}"),
-                        "question": questions[idx].get("question", ""),
-                        "answer": f"Error processing question: {str(e)}",
-                        "relevantChunks": ["(No supporting excerpts found)"],
-                        "confidence": 0.0,
-                        "latency": 0.0,
-                        "error": str(e),
-                    }
-                    completed_futures[idx] = error_result
-                    
-                    # Stream error result in order
-                    while next_expected_idx in completed_futures:
-                        result = completed_futures.pop(next_expected_idx)
-                        results_dict[next_expected_idx] = result
-                        
-                        _yield_sse(
-                            "answer",
-                            {
-                                "questionId": result.get("questionId"),
-                                "question": result.get("question"),
-                                "answer": result.get("answer", ""),
-                                "relevantChunks": result.get("relevantChunks", []),
-                                "confidence": result.get("confidence", 0.0),
-                                "latency": result.get("latency", 0.0),
-                                "questionType": result.get("questionType"),
-                                "userIntent": result.get("userIntent"),
-                            },
-                        )
-                        
-                        next_expected_idx += 1
-        
-        # Store results for final summary
-        results = [results_dict[i] for i in range(len(questions))]
-        
-        # Final summary
-        final_summary_text = ""
-        try:
-            print(f"[Background] Generating final summary for {transcript_file_name}")
-            llm_summary = ChatOpenAI(temperature=0.0, model="gpt-4o", timeout=120)
-            qa_lines = []
-            for r in results or []:
-                if not r:
-                    continue
-                q = (r.get("question") or "").strip()
-                if not q:
-                    continue
-                ctx = (r.get("context") or "").strip()
-                a = (r.get("answer") or "").strip() or "(No answer was generated for this question.)"
-                if ctx:
-                    qa_lines.append(f"Q: {q}\nSituation: {ctx}\nA: {a}")
-                else:
-                    qa_lines.append(f"Q: {q}\nA: {a}")
-            qa_blob = "\n\n".join(qa_lines)
-            if qa_blob.strip():
-                summary_prompt = _final_answer_summary_prompt_v1
-                summary_chain = summary_prompt | llm_summary | StrOutputParser()
-                final_summary_text = summary_chain.invoke({"qa_blob": qa_blob}).strip()
-                print(f"[Background] Final summary generated: {len(final_summary_text)} chars")
-        except Exception as e:
-            print(f"Warning: failed to generate final transcript summary: {e}")
-            import traceback
-            traceback.print_exc()
-        
-        if (not final_summary_text.strip()) and results:
-            final_summary_text = "\n".join(
-                [
-                    f"- {((r.get('answer') or '').strip() or '(No answer was generated for this question.)')}"
-                    for r in results
-                    if r and (r.get("question") or "").strip()
-                ]
-            ).strip()
-        
-        avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
-        
-        # Claim decision
-        claim_decision = None
-        try:
-            all_chunks = []
-            for r in results or []:
-                rc = r.get("relevantChunks") or []
-                if isinstance(rc, list):
-                    all_chunks.extend([str(x) for x in rc if str(x).strip()])
-            seen = set()
-            deduped = []
-            for c in all_chunks:
-                if c in seen:
-                    continue
-                seen.add(c)
-                deduped.append(c)
-            claims_context = []
-            for r in results or []:
-                if not isinstance(r, dict):
-                    continue
-                claims_context.append(
-                    {
-                        "claimId": (r.get("questionId") or ""),
-                        "customerClaim": (r.get("question") or ""),
-                        "situation": (r.get("context") or ""),
-                    }
-                )
-            claim_decision = generate_claim_decision_from_chunks(deduped, claims_context=claims_context)
-            _yield_sse("claimDecision", claim_decision)
-        except Exception as e:
-            print(f"Warning: failed to generate/stream claimDecision: {e}")
-        
-        # Store final answer and finalize conversation doc
-        try:
-            qna_collection.update_one(
-                {"_id": conv_doc_id},
-                {
-                    "$push": {
-                        "chats": {
-                            "chat_id": "final_answer",
-                            "entered_query": "Final Answer for transcript",
-                            "response": final_summary_text,
-                            "relevant_chunks": [],
-                            "relevant_docs": "",
-                            "gpt_model": "Calls",
-                            "underlying_model": gpt_model,
-                            "chat_timestamp": datetime.utcnow(),
-                            "latency": 0.0,
-                            "confidence": 0.0,
-                        }
-                    },
-                    "$set": {
-                        "processing": False,
-                        "updated_at": datetime.utcnow(),
-                        "final_summary": final_summary_text,
-                        "claim_decision": claim_decision,
-                        "summary": {
-                            "totalQuestions": len(questions),
-                            "processedQuestions": len([r for r in results if "error" not in r]),
-                            "averageConfidence": round(avg_confidence, 2),
-                            "totalLatency": round(total_latency, 2),
-                        },
-                        "transcript_metadata": {
-                            "fileName": file_metadata.get("fileName"),
-                            "uploadDate": file_metadata.get("uploadDate"),
-                            "fileSize": file_metadata.get("fileSize"),
-                        },
-                    },
-                },
-            )
-            print(f"[Background] Finalized conversation doc {conv_doc_id} for {transcript_file_name}")
-        except Exception as e:
-            print(f"Warning: failed to finalize transcript conversation doc: {e}")
-        
-        _yield_sse("final", {"finalSummary": final_summary_text})
-        _yield_sse(
-            "done",
-            {
-                "elapsedSec": round(time() - start_time, 2),
-                "conversationId": str(conv_doc_id) if conv_doc_id else "",
-                "conversationName": conv_name or "",
-                "status": transcript_status,
-            },
-        )
-        
-        return {
-            "status": "completed",
-            "conversationId": str(conv_doc_id),
-            "conversationName": conv_name,
-            "elapsedSec": round(time() - start_time, 2),
-        }
-    
-    except Exception as e:
-        import traceback
-        error_trace = traceback.format_exc()
-        print(f"Error in _process_transcript_core: {str(e)}")
-        print(f"Traceback: {error_trace}")
-        _yield_sse("error", {"error": "An error occurred while processing transcript", "details": str(e)})
-        return None
-
-
-@app.route("/internal/transcripts/process", methods=["POST"])
-def process_transcript_internal():
-    """
     Internal transcript processor (streaming)
     (Cloud Run / system-triggered)
     - No JWT required
     - Resolves user_email via DB mapping (contactId/session OR agentName mapping)
     - Stores results into chats_<user_email> same as normal flow
     - Streams responses via SSE like /transcripts/process/stream
-    - If called from GCS (agentName="gcs-trigger*"), processes in background and returns 202
     """
     print("process_transcript_internal: Starting streaming transcript processing")
     
-    # --- Internal auth (simple shared secret) ---
-    expected = os.getenv("INTERNAL_PROCESS_SECRET")
-    got = request.headers.get("X-Internal-Auth")
-    if not expected or got != expected:
-        return jsonify({"error": "unauthorized"}), 401
-    
-    # --- Read request body ---
-    try:
-        data = request.get_json() or {}
-    except Exception:
-        data = {}
-    
-    if not data:
-        return jsonify({"error": "Request body is missing or invalid"}), 400
-    
-    agent_name = data.get("agentName", "")
-    is_gcs_trigger = agent_name and agent_name.startswith("gcs-trigger")
-    
-    # If this is a GCS trigger call, process in background and return 202 immediately
-    if is_gcs_trigger:
-        print(f"GCS trigger detected (agentName={agent_name}), processing in background thread")
-        
-        def background_process():
-            try:
-                print(f"[Background] Starting processing for {data.get('transcriptFileName')}")
-                result = _process_transcript_core(data, yield_sse_fn=None)
-                if result:
-                    print(f"[Background] Processing completed: {result}")
-                else:
-                    print(f"[Background] Processing failed for {data.get('transcriptFileName')}")
-            except Exception as e:
-                import traceback
-                print(f"[Background] Error in background processing: {e}")
-                traceback.print_exc()
-        
-        thread = threading.Thread(target=background_process, daemon=True)
-        thread.start()
-        
-        return jsonify({
-            "status": "accepted",
-            "message": "Processing started in background",
-            "transcriptFileName": data.get("transcriptFileName")
-        }), 202
-    
-    # Normal streaming mode for non-GCS calls
     @stream_with_context
     def generate():
-        # Use a queue to collect SSE events from the processing thread
-        import queue
-        sse_event_queue = queue.Queue()
-        
-        def yield_sse_fn(sse_data):
-            # Put SSE data in queue to be yielded by the generator
-            sse_event_queue.put(("sse", sse_data))
-            return None
-        
-        def process_with_sse():
-            try:
-                result = _process_transcript_core(data, yield_sse_fn=yield_sse_fn)
-                sse_event_queue.put(("done", result))
-            except Exception as e:
-                import traceback
-                print(f"[Streaming] Error in processing: {e}")
-                traceback.print_exc()
-                sse_event_queue.put(("error", str(e)))
-        
-        # Start processing in a separate thread
-        thread = threading.Thread(target=process_with_sse, daemon=False)
-        thread.start()
+        start_time = time()
+        user_email = None
+        qna_collection = None
+        conv_doc_id = None
+        conv_name = None
+        transcript_status = "active"
+        extraction_warning = None
         
         try:
-            # Yield SSE events as they come in from the processing thread
-            while True:
+            # Note: `contactId` is used as the live session correlation key in this internal processor.
+            # We establish a single trace per sessionId by parenting this branch off csr_copilot.session.
+            parent0 = None
+            parent_ctx = None
+            # We'll read JSON in claims.data_fetching span below; placeholder here.
+
+            # Pre-read JSON once so we can correlate this request to the live session trace root.
+            # This does NOT change behavior; auth is still enforced before any processing.
+            try:
+                _pre_data = request.get_json() or {}
+            except Exception:
+                _pre_data = {}
+            _session_id = (_pre_data.get("contactId") or _pre_data.get("sessionId") or "").strip()
+            parent_ctx = _get_or_create_session_trace_context(_session_id) if _session_id else None
+
+            with tracer.start_as_current_span("claims.transcript_processing", context=parent_ctx) as parent0:
+                if _session_id:
+                    parent0.set_attribute("live.session_id", str(_session_id))
+                parent0.set_attribute("agent.name", "claims-transcript-processor")
+                parent0.set_attribute("agent.type", "system")
+                parent0.set_attribute("agent.orchestration", "sequential")
+
+                # --- Internal auth (simple shared secret) ---
+                with tracer.start_as_current_span("claims.internal_auth") as sp:
+                    if _session_id:
+                        sp.set_attribute("live.session_id", str(_session_id))
+                    sp.set_attribute("agent.name", "claims-transcript-processor")
+                    sp.set_attribute("agent.type", "system")
+                    sp.set_attribute("agent.orchestration", "sequential")
+                    sp.set_attribute("claims.stage", "security")
+                    sp.set_attribute("claims.operation", "internal_auth")
+                    expected = os.getenv("INTERNAL_PROCESS_SECRET")
+                    got = request.headers.get("X-Internal-Auth")
+                    if not expected or got != expected:
+                        yield _sse("error", {"error": "unauthorized"})
+                        return
+
+                # --- Request body ---
+                with tracer.start_as_current_span("claims.data_fetching") as sp:
+                    if _session_id:
+                        sp.set_attribute("live.session_id", str(_session_id))
+                    sp.set_attribute("agent.name", "claims-transcript-processor")
+                    sp.set_attribute("agent.type", "system")
+                    sp.set_attribute("agent.orchestration", "sequential")
+                    sp.set_attribute("claims.stage", "enrichment")
+                    sp.set_attribute("claims.operation", "data_fetch")
+                    data = _pre_data or request.get_json()
+                    if not data:
+                        yield _sse("error", {"error": "Request body is missing or invalid"})
+                        return
+
+                    transcript_file_name = data.get("transcriptFileName")
+                    contract_type = data.get("contractType")
+                    selected_plan = data.get("selectedPlan")
+                    selected_state = data.get("selectedState")
+
+                    gpt_model = data.get("gptModel", "Search")
+                    extract_questions = data.get("extractQuestions", True)
+                    provided_questions = data.get("questions", [])
+                    force_reprocess = bool(data.get("forceReprocess", False))
+                    new_conversation = bool(data.get("newConversation", False))
+                    requested_conversation_name = data.get("conversationName")
+
+                    contact_id = data.get("contactId")
+                    agent_name = data.get("agentName")
+                    # session correlation (prefer contactId)
+                    session_id = (contact_id or data.get("sessionId") or "").strip()
+
+                    # Validate required fields
+                    if not transcript_file_name:
+                        yield _sse("error", {"error": "transcriptFileName is required"})
+                        return
+
+                    if extract_questions and not all([contract_type, selected_plan, selected_state]):
+                        yield _sse("error", {
+                            "error": "contractType, selectedPlan, selectedState are required when extractQuestions=true"
+                        })
+                        return
+
+                transcript_id = transcript_file_name.replace(".json", "").replace(".txt", "")
+                
+                yield _sse(
+                    "status",
+                    {
+                        "stage": "started",
+                        "transcriptId": transcript_id,
+                        "transcriptFileName": transcript_file_name,
+                        "gptModel": gpt_model,
+                    },
+                )
+
+                # --- Resolve user email from mappings ---
+                with tracer.start_as_current_span('claims.resolve_email') as sp:
+                    if session_id:
+                        sp.set_attribute("live.session_id", str(session_id))
+                    sp.set_attribute("agent.name", "claims-transcript-processor")
+                    sp.set_attribute("agent.type", "system")
+                    sp.set_attribute("agent.orchestration", "sequential")
+                    sp.set_attribute("claims.stage", "enrichment")
+                    sp.set_attribute("claims.operation", "resolve_email")
+                    user_email = None
+
+                    # (A) Best: resolve from sessions mapping (contactId -> email)
+                    sessions_collection = db.get_collection("sessions")  # safer
+
+                    if contact_id:
+                        sess = sessions_collection.find_one(
+                            {"contactId": contact_id},
+                            {"_id": 0, "email": 1}
+                        )
+                        if sess and sess.get("email"):
+                            user_email = sess["email"]
+
+                    # (B) Fallback: resolve from agent_email_mapping (agentName -> email)
+                    if not user_email and agent_name:
+                        agent_email_mapping = db.get_collection("agent_email_mapping")
+                        m = agent_email_mapping.find_one(
+                            {"agentName": agent_name},
+                            {"_id": 0, "email": 1}
+                        )
+                        if m and m.get("email"):
+                            user_email = m["email"]
+
+                    if not user_email:
+                        yield _sse("error", {
+                            "error": "Unable to resolve user email",
+                            "details": {
+                                "contactId": contact_id,
+                                "agentName": agent_name
+                            }
+                        })
+                        return
+
+                # --- Now same as your existing logic, starting from here ---
+                milvus_state = normalize_state_for_milvus(selected_state)
+                contract_type_norm = normalize_contract_type(contract_type)
+                selected_plan_norm = normalize_plan_for_milvus(contract_type_norm, selected_plan)
+
+                # Use the existing per-user chat collection (same as Search/Infer) for transcript conversations.
+                qna_collection_user = f"chats_{user_email}"
+                qna_collection = db[qna_collection_user]
+
+                # If we have already processed this transcript for this user, stream the cached conversation.
+                existing_conv = None
+                conv_doc_id = None
+                conv_name = None
+
+                if not new_conversation:
+                    existing_conv = qna_collection.find_one(
+                        {"doc_type": "transcript_conversation", "transcript_id": transcript_id},
+                        sort=[("updated_at", -1), ("query_time", -1)],
+                    )
+
+                if existing_conv and not force_reprocess and not new_conversation:
+                    # cache validation same as your original
+                    try:
+                        existing_chats = existing_conv.get("chats") or []
+                        has_placeholder_chunks = False
+                        for c in existing_chats:
+                            if c.get("chat_id") == "final_answer":
+                                continue
+                            rc = c.get("relevant_chunks") or []
+                            if rc and all(
+                                (
+                                    (
+                                        isinstance(x, dict)
+                                        and (str(x.get("content") or "").strip() in _PLACEHOLDER_CHUNK_VALUES)
+                                    )
+                                    or (
+                                        isinstance(x, str)
+                                        and (x.strip() in _PLACEHOLDER_CHUNK_VALUES)
+                                    )
+                                )
+                                for x in rc
+                            ):
+                                has_placeholder_chunks = True
+                                break
+                        if has_placeholder_chunks or not existing_conv.get("final_summary"):
+                            conv_doc_id = existing_conv.get("_id")
+                            conv_name = existing_conv.get("conversation_name")
+                            existing_conv = None
+                    except Exception as e:
+                        print(f"Warning: cache validation failed, will reprocess transcript: {e}")
+                        existing_conv = None
+
+                if existing_conv and not force_reprocess and not new_conversation:
+                    cached = existing_conv.get("response_payload") or {}
+                    conv_doc_id = existing_conv.get("_id")
+                    yield _sse(
+                        "status",
+                        {
+                            "stage": "cached",
+                            "conversationId": str(conv_doc_id),
+                            "conversationName": existing_conv.get("conversation_name") or "",
+                            "status": (existing_conv.get("status") or "active"),
+                        },
+                    )
+
+                    for q in (cached.get("questions") or existing_conv.get("chats") or []):
+                        if not isinstance(q, dict):
+                            continue
+                        qid = q.get("questionId") or q.get("chat_id")
+                        if qid == "final_answer":
+                            continue
+                        yield _sse(
+                            "answer",
+                            {
+                                "questionId": qid,
+                                "question": q.get("question") or q.get("entered_query") or "",
+                                "answer": q.get("answer") or q.get("response") or "",
+                                "relevantChunks": q.get("relevantChunks") or q.get("relevant_chunks") or [],
+                                "confidence": q.get("confidence", 0.0),
+                                "latency": q.get("latency", 0.0),
+                                "questionType": q.get("questionType"),
+                                "userIntent": q.get("userIntent"),
+                            },
+                        )
+
+                    if isinstance(existing_conv.get("claim_decision"), dict):
+                        yield _sse("claimDecision", existing_conv.get("claim_decision"))
+
+                    final_summary = existing_conv.get("final_summary") or cached.get("finalSummary") or ""
+                    yield _sse("final", {"finalSummary": final_summary})
+                    yield _sse("done", {"elapsedSec": round(time() - start_time, 2)})
+                    return
+
+                # If we are force reprocessing an existing conversation, update that document rather than creating a new one.
+                if existing_conv and (force_reprocess and not new_conversation):
+                    conv_doc_id = existing_conv.get("_id")
+                    conv_name = existing_conv.get("conversation_name")
+                    existing_conv = None
+
+                # Create / update a "processing" transcript conversation document early
+                now_ts = datetime.utcnow()
+
+                status_doc = qna_collection.find_one(
+                    {"doc_type": "transcript_status", "transcript_id": transcript_id},
+                    {"_id": 0, "status": 1},
+                )
+                transcript_status = (status_doc or {}).get("status") or "active"
+
+                if not conv_name:
+                    base_name = (requested_conversation_name or transcript_file_name or "").strip() or transcript_id
+                    if new_conversation:
+                        existing_count = qna_collection.count_documents(
+                            {"doc_type": "transcript_conversation", "transcript_id": transcript_id}
+                        )
+                        conv_name = base_name if existing_count == 0 else f"{base_name} ({existing_count + 1})"
+                    else:
+                        conv_name = base_name
+
+                if conv_doc_id is None:
+                    stub = {
+                        "doc_type": "transcript_conversation",
+                        "conversation_mode": "Calls",
+                        "underlying_model": gpt_model,
+                        "conversation_name": conv_name,
+                        "transcript_id": transcript_id,
+                        "contract_type": contract_type,
+                        "selected_plan": selected_plan,
+                        "selected_state": selected_state,
+                        "query_time": now_ts,
+                        "updated_at": now_ts,
+                        "status": transcript_status,
+                        "processing": True,
+                        "chats": [],
+                        # Helpful for debugging / audit
+                        "internal_trigger": True,
+                        "contact_id": contact_id,
+                        "agent_name": agent_name,
+                        "user_email": user_email,
+                    }
+                    inserted = qna_collection.insert_one(stub)
+                    conv_doc_id = inserted.inserted_id
+                else:
+                    qna_collection.update_one(
+                        {"_id": conv_doc_id},
+                        {"$set": {"processing": True, "updated_at": now_ts}},
+                    )
+
+                yield _sse(
+                    "status",
+                    {
+                        "stage": "conversation_created",
+                        "conversationId": str(conv_doc_id),
+                        "conversationName": conv_name,
+                        "status": transcript_status,
+                    },
+                )
+
+                # Read transcript from GCS
+                if not gcs_fs:
+                    yield _sse("error", {"error": "GCP Storage not configured or unavailable"})
+                    return
+
+                yield _sse("status", {"stage": "transcript_loading"})
+                file_metadata = None
                 try:
-                    event_type, event_data = sse_event_queue.get(timeout=600)  # 10 min timeout
-                    if event_type == "sse":
-                        yield event_data
-                    elif event_type == "done":
-                        # Processing complete
-                        break
-                    elif event_type == "error":
-                        yield _sse("error", {"error": "An error occurred during processing", "details": event_data})
-                        break
-                except queue.Empty:
-                    # Timeout - check if thread is still alive
-                    if not thread.is_alive():
-                        break
-                    # Continue waiting
-                    continue
-            
-            # Wait for thread to finish
-            thread.join(timeout=5)
-            
-        except GeneratorExit:
-            # Client disconnected - this is expected for fire-and-forget calls
-            print("Client disconnected (GeneratorExit) - generator stopped")
-            raise  # Re-raise to allow Flask to clean up
+                    transcript_content, file_metadata = read_transcript_file_gcp(transcript_file_name)
+                    transcript_text = transcript_content
+                    try:
+                        transcript_data = json.loads(transcript_content)
+                        if isinstance(transcript_data, dict):
+                            transcript_text = transcript_data.get(
+                                "text",
+                                transcript_data.get(
+                                    "transcript",
+                                    transcript_data.get("content", str(transcript_data)),
+                                ),
+                            )
+                    except Exception:
+                        transcript_text = transcript_content
+                except FileNotFoundError as e:
+                    error_msg = f"Transcript file not found: {transcript_file_name}"
+                    print(f"ERROR: {error_msg}")
+                    yield _sse("error", {"error": error_msg, "stage": "transcript_loading"})
+                    return
+                except Exception as e:
+                    error_msg = f"Error reading transcript file: {str(e)}"
+                    print(f"ERROR: {error_msg}")
+                    import traceback
+                    traceback.print_exc()
+                    yield _sse("error", {"error": error_msg, "stage": "transcript_loading", "details": str(e)})
+                    return
+                
+                if not file_metadata:
+                    error_msg = f"Failed to retrieve file metadata for: {transcript_file_name}"
+                    print(f"ERROR: {error_msg}")
+                    yield _sse("error", {"error": error_msg, "stage": "transcript_loading"})
+                    return
+
+                yield _sse(
+                    "status",
+                    {
+                        "stage": "transcript_loaded",
+                        "transcriptMetadata": {
+                            "fileName": file_metadata.get("fileName"),
+                            "uploadDate": file_metadata.get("uploadDate"),
+                            "fileSize": file_metadata.get("fileSize"),
+                        },
+                    },
+                )
+
+                # Extract questions
+                if extract_questions:
+                    yield _sse("status", {"stage": "extracting_questions"})
+                    llm_extract = ChatOpenAI(temperature=0.0, model="gpt-4o")
+                    questions = extract_relevant_customer_questions(transcript_text, llm_extract)
+                    if not questions:
+                        questions = extract_questions_with_agent(transcript_text, llm_extract)
+                    if not questions:
+                        extraction_warning = "LLM extraction failed; using deterministic item-based fallback questions."
+                        questions = heuristic_extract_claim_questions(transcript_text)
+                    if not questions:
+                        extraction_warning = "No questions could be extracted from transcript; inferring from context."
+                        questions = [{
+                            "question": f"Is this issue covered: {transcript_text[:120]}",
+                            "context": transcript_text[:400],
+                            "questionType": "coverage",
+                            "userIntent": "Customer wants to know if the described issue is covered",
+                            "questionId": "q1",
+                        }]
+                else:
+                    questions = provided_questions
+                    if not questions:
+                        yield _sse("error", {"error": "No questions provided"})
+                        return
+
+                # Ensure stable, unique question IDs (prevents UI key collisions)
+                for i, q in enumerate(questions):
+                    if isinstance(q, dict):
+                        q["questionId"] = f"q{i + 1}"
+
+                yield _sse(
+                    "status",
+                    {
+                        "stage": "questions_ready",
+                        "totalQuestions": len(questions),
+                        "warning": extraction_warning,
+                    },
+                )
+
+                # Initialize vector DB + LLMs
+                yield _sse("status", {"stage": "initializing_retriever"})
+                collection_mapping = {
+                    "RE": {
+                        "ShieldEssential": f"{milvus_state}_RE_ShieldEssential",
+                        "ShieldPlus": f"{milvus_state}_RE_ShieldPlus",
+                        "default": f"{milvus_state}_RE_ShieldComplete",
+                    },
+                    "DTC": {
+                        "ShieldSilver": f"{milvus_state}_DTC_ShieldSilver",
+                        "ShieldGold": f"{milvus_state}_DTC_ShieldGold",
+                        "default": f"{milvus_state}_DTC_ShieldPlatinum",
+                    },
+                }
+                selected_collection_name = collection_mapping.get(contract_type_norm, {}).get(
+                    selected_plan_norm, collection_mapping.get(contract_type_norm, {}).get("default")
+                )
+                vector_db1 = get_vector_db(selected_collection_name)
+                retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
+
+                if gpt_model == "Search":
+                    llm2 = ChatOpenAI(temperature=0.0, model="ft:gpt-3.5-turbo-0613:mindstix::8YYD56aA")
+                    llm = ChatOpenAI(temperature=0.0, model="gpt-4o")
+                elif gpt_model == "Infer":
+                    llm3 = ChatOpenAI(temperature=0.0, model="ft:gpt-3.5-turbo-0613:mindstix::8YYD56aA")
+                    llm = ChatOpenAI(temperature=0.0, model="gpt-4o")
+                    llm2 = ChatOpenAI(temperature=0.0, model="gpt-4o")
+                else:
+                    yield _sse("error", {"error": f"Invalid gpt_model: {gpt_model}. Must be 'Search' or 'Infer'"})
+                    return
+
+                yield _sse("status", {"stage": "answering"})
+
+                results = []
+                confidences = []
+                total_latency = 0.0
+
+                # Process each question and stream immediately
+                for idx, question_obj in enumerate(questions):
+                    question_text = question_obj.get("question", "")
+                    question_id = question_obj.get("questionId", f"q{idx + 1}")
+
+                    yield _sse(
+                        "status",
+                        {"stage": "answering_question", "index": idx + 1, "questionId": question_id},
+                    )
+
+                    result = process_single_transcript_question(
+                        question_text,
+                        contract_type,
+                        selected_plan,
+                        selected_state,
+                        gpt_model,
+                        vector_db1,
+                        llm,
+                        llm2,
+                        retriever,
+                        handler,
+                        transcript_context=question_obj.get("context", ""),
+                    )
+
+                    result["questionId"] = question_id
+                    result["question"] = question_text
+                    result["context"] = question_obj.get("context", "")
+                    result["questionType"] = question_obj.get("questionType", "general")
+                    result["userIntent"] = question_obj.get("userIntent", "")
+
+                    # Enforce API contract: relevantChunks must be a non-empty list[str]
+                    rc = result.get("relevantChunks") or []
+                    if isinstance(rc, list):
+                        rc = [str(x) for x in rc if str(x).strip()]
+                    else:
+                        rc = []
+                    if not rc:
+                        rc = ["(No supporting excerpts found)"]
+                    if MILVUS_MAX_RETURN_CHUNKS is not None:
+                        rc = rc[:MILVUS_MAX_RETURN_CHUNKS]
+                    result["relevantChunks"] = rc
+
+                    if "error" not in result:
+                        confidences.append(result.get("confidence", 0.0))
+                        total_latency += float(result.get("latency", 0.0) or 0.0)
+
+                    results.append(result)
+
+                    # Persist incremental chat to Mongo
+                    try:
+                        chunks = result.get("relevantChunks") or []
+                        relevant_docs_text = "\n\n---\n\n".join([str(c) for c in chunks if str(c).strip()])
+                        qna_collection.update_one(
+                            {"_id": conv_doc_id},
+                            {
+                                "$push": {
+                                    "chats": {
+                                        "chat_id": question_id,
+                                        "entered_query": question_text,
+                                        "response": result.get("answer", ""),
+                                        "relevant_chunks": chunks,
+                                        "relevant_docs": relevant_docs_text,
+                                        "gpt_model": "Calls",
+                                        "underlying_model": gpt_model,
+                                        "chat_timestamp": datetime.utcnow(),
+                                        "latency": result.get("latency", 0.0),
+                                        "confidence": result.get("confidence", 0.0),
+                                    }
+                                },
+                                "$set": {"updated_at": datetime.utcnow()},
+                            },
+                        )
+                    except Exception as e:
+                        print(f"Warning: failed to persist incremental transcript chat: {e}")
+
+                    # Stream this answer immediately
+                    yield _sse(
+                        "answer",
+                        {
+                            "questionId": question_id,
+                            "question": question_text,
+                            "answer": result.get("answer", ""),
+                            "relevantChunks": result.get("relevantChunks", []),
+                            "confidence": result.get("confidence", 0.0),
+                            "latency": result.get("latency", 0.0),
+                            "questionType": result.get("questionType"),
+                            "userIntent": result.get("userIntent"),
+                        },
+                    )
+
+                # Final summary (same logic as /transcripts/process/stream)
+                final_summary_text = ""
+                try:
+                    llm_summary = ChatOpenAI(temperature=0.0, model="gpt-4o")
+                    qa_lines = []
+                    for r in results or []:
+                        if not r:
+                            continue
+                        q = (r.get("question") or "").strip()
+                        if not q:
+                            continue
+                        ctx = (r.get("context") or "").strip()
+                        a = (r.get("answer") or "").strip() or "(No answer was generated for this question.)"
+                        if ctx:
+                            qa_lines.append(f"Q: {q}\nSituation: {ctx}\nA: {a}")
+                        else:
+                            qa_lines.append(f"Q: {q}\nA: {a}")
+                    qa_blob = "\n\n".join(qa_lines)
+                    if qa_blob.strip():
+                        # Using final answer summary prompt v1 from utils.prompts
+                        summary_prompt = get_final_summary_prompt(streaming=True)
+                        summary_chain = summary_prompt | llm_summary | StrOutputParser()
+                        final_summary_text = summary_chain.invoke({"qa_blob": qa_blob}).strip()
+                except Exception as e:
+                    print(f"Warning: failed to generate final transcript summary (stream): {e}")
+
+                if (not final_summary_text.strip()) and results:
+                    final_summary_text = "\n".join(
+                        [
+                            f"- {((r.get('answer') or '').strip() or '(No answer was generated for this question.)')}"
+                            for r in results
+                            if r and (r.get("question") or "").strip()
+                        ]
+                    ).strip()
+
+                avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
+
+                # Claim decision grounded only in retrieved chunks (stream it before final summary UI finishes)
+                claim_decision = None
+                try:
+                    all_chunks = []
+                    for r in results or []:
+                        rc = r.get("relevantChunks") or []
+                        if isinstance(rc, list):
+                            all_chunks.extend([str(x) for x in rc if str(x).strip()])
+                    seen = set()
+                    deduped = []
+                    for c in all_chunks:
+                        if c in seen:
+                            continue
+                        seen.add(c)
+                        deduped.append(c)
+                    claims_context = []
+                    for r in results or []:
+                        if not isinstance(r, dict):
+                            continue
+                        claims_context.append(
+                            {
+                                "claimId": (r.get("questionId") or ""),
+                                "customerClaim": (r.get("question") or ""),
+                                "situation": (r.get("context") or ""),
+                            }
+                        )
+                    claim_decision = generate_claim_decision_from_chunks(deduped, claims_context=claims_context)
+                    yield _sse("claimDecision", claim_decision)
+                except Exception as e:
+                    print(f"Warning: failed to generate/stream claimDecision: {e}")
+
+                # Store final answer as last chat entry and finalize conversation doc
+                try:
+                    qna_collection.update_one(
+                        {"_id": conv_doc_id},
+                        {
+                            "$push": {
+                                "chats": {
+                                    "chat_id": "final_answer",
+                                    "entered_query": "Final Answer for transcript",
+                                    "response": final_summary_text,
+                                    "relevant_chunks": [],
+                                    "relevant_docs": "",
+                                    "gpt_model": "Calls",
+                                    "underlying_model": gpt_model,
+                                    "chat_timestamp": datetime.utcnow(),
+                                    "latency": 0.0,
+                                    "confidence": 0.0,
+                                }
+                            },
+                            "$set": {
+                                "processing": False,
+                                "updated_at": datetime.utcnow(),
+                                "final_summary": final_summary_text,
+                                "claim_decision": claim_decision,
+                                "summary": {
+                                    "totalQuestions": len(questions),
+                                    "processedQuestions": len([r for r in results if "error" not in r]),
+                                    "averageConfidence": round(avg_confidence, 2),
+                                    "totalLatency": round(total_latency, 2),
+                                },
+                                "transcript_metadata": {
+                                    "fileName": file_metadata.get("fileName"),
+                                    "uploadDate": file_metadata.get("uploadDate"),
+                                    "fileSize": file_metadata.get("fileSize"),
+                                },
+                            },
+                        },
+                    )
+                except Exception as e:
+                    print(f"Warning: failed to finalize transcript conversation doc (stream): {e}")
+
+                yield _sse("final", {"finalSummary": final_summary_text})
+                yield _sse(
+                    "done",
+                    {
+                        "elapsedSec": round(time() - start_time, 2),
+                        "conversationId": str(conv_doc_id) if conv_doc_id else "",
+                        "conversationName": conv_name or "",
+                        "status": transcript_status,
+                    },
+                )
+                return
+
         except Exception as e:
             import traceback
             error_trace = traceback.format_exc()
@@ -6528,8 +6865,14 @@ def transcript_event():
                     socketio.emit("suggestion_update", copilot_result, room=session_id)
             except Exception as e:
                 print(f"⚠️ Copilot processing error (non-blocking): {e}")
-                import traceback
-                traceback.print_exc()
+                # Avoid spamming full tracebacks in normal demos; enable when debugging.
+                try:
+                    show_tb = str(os.getenv("COPILOT_TRACEBACK", "0") or "").lower() in ("1", "true", "yes")
+                except Exception:
+                    show_tb = False
+                if show_tb:
+                    import traceback
+                    traceback.print_exc()
         # threading.Thread(target=process_copilot_async, daemon=True).start()
         socketio.start_background_task(process_copilot_async)
     # =============================================================
@@ -6588,6 +6931,28 @@ def on_join_session(data):
     )
 
     print(f"✅ Session mapped: {session_id} → {user_email}")
+
+
+@socketio.on("join_conversation")
+def on_join_conversation(data):
+    """Join a transcript conversation room (Claims/Calls processing).
+
+    Room key = conversationId (Mongo ObjectId string).
+    This is separate from live-call session rooms (sessionId) to avoid cross-talk.
+    """
+    conversation_id = (data or {}).get("conversationId") or (data or {}).get("conversation-id")
+    if not conversation_id:
+        return
+
+    # Require authenticated socket session (set during connect)
+    user_email = session.get("user_email")
+    if not user_email:
+        return
+
+    try:
+        join_room(str(conversation_id))
+    except Exception:
+        pass
 
 @socketio.on("copilot_enable")
 def on_copilot_enable(data):
