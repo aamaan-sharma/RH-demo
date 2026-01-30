@@ -50,12 +50,13 @@ def is_trivial_utterance(text: str) -> bool:
 
 
 def should_start_copilot(payload: Dict[str, Any]) -> bool:
-    # Must be final transcript
-    if bool(payload.get("isPartial", True)):
+    # Must be final transcript (default False so missing field doesn't block)
+    if bool(payload.get("isPartial", False)):
         return False
 
+    # Accept common transcript labels for the customer side
     speaker = s(payload.get("speaker")).lower()
-    if speaker != "customer":
+    if speaker not in ("customer", "user", "caller", "participant"):
         return False
 
     text = s(payload.get("text"))
