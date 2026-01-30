@@ -855,6 +855,30 @@ def _normalize_customer_doc(doc: Dict[str, Any], phone: str) -> Dict[str, Any]:
     }
 
 
+def _build_mongo_user_details(doc: Dict[str, Any], phone: str) -> Dict[str, Any]:
+    """
+    Build UI-ready user details dict from MongoDB doc for the Customer Details card.
+    Frontend expects: name, phone, email, plan, state, contractType, address.
+    """
+    name = doc.get("name") or doc.get("fullName") or doc.get("firstName") or ""
+    if doc.get("lastName") and name and doc.get("lastName") not in str(name):
+        name = f"{name} {doc.get('lastName')}"
+    plan = doc.get("plan") or doc.get("selectedPlan") or doc.get("planName") or ""
+    contract_type = doc.get("contractType") or doc.get("contract_type") or ""
+    state = doc.get("state") or doc.get("selectedState") or doc.get("stateName") or ""
+    email = doc.get("email") or doc.get("emailAddress") or ""
+    address = doc.get("address") or doc.get("addressLine1") or ""
+    return {
+        "name": _s(name) or "Customer",
+        "phone": _s(phone),
+        "email": _s(email),
+        "plan": _s(plan),
+        "state": _s(state),
+        "contractType": _s(contract_type),
+        "address": _s(address),
+    }
+
+
 # -----------------------
 # Milvus selection (same naming logic as app.py)
 # -----------------------
@@ -1225,7 +1249,8 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
     session_id = _s(payload.get("sessionId"))
     speaker = _s(payload.get("speaker")).lower()
     text = _s(payload.get("text"))
-    is_partial = bool(payload.get("isPartial", True))
+    # Default False so missing isPartial doesn't block (treat as final)
+    is_partial = bool(payload.get("isPartial", False))
 
     if not session_id or not text:
         return None
@@ -1355,6 +1380,8 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                     print(f"[LIVE_COPILOT] ✅ Set selected_state from MongoDB: {mongo_state}", flush=True)
             except Exception as e:
                 print(f"[LIVE_COPILOT] Error updating session state: {e}", flush=True)
+            # Set UI-ready user details so frontend Customer Details card receives userDetails
+            st.mongo_user_details = _build_mongo_user_details(doc, phone_candidates[0])
         else:
             print(f"[LIVE_COPILOT] ❌ No user found in MongoDB for phone candidates: {phone_candidates}", flush=True)
             print(f"[LIVE_COPILOT] ⚠️  contractType, plan, and state will NOT be set (MongoDB lookup failed)", flush=True)
@@ -1477,6 +1504,8 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                                     st.selected_state = mongo_st
                             except Exception:
                                 pass
+                            # Set UI-ready user details so frontend Customer Details card receives userDetails
+                            st.mongo_user_details = _build_mongo_user_details(doc, candidates[0])
                             important_change = True
 
                     customer_ctx = _effective_customer_context(st)
@@ -1588,6 +1617,9 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                         from_agent="atomic-agent.rag_answer" if can_rag else "atomic-agent.context_retrieval",
                     )
 
+                    # Always generate cards for first suggestion in call (never emitted yet)
+                    if not st.last_suggested_at:
+                        important_change = True
                     if not _cooldown_ok(st) and not important_change:
                         cards = None
                     else:
