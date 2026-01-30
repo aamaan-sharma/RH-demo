@@ -2,6 +2,7 @@ import os
 import re
 import json
 import hashlib
+import sys
 import threading
 import httpx
 from contextlib import contextmanager
@@ -351,31 +352,22 @@ def _update_session_context_from_payload(st: _SessionState, payload: Dict[str, A
     """
     Update session context from transcript payload.
     
-    Payload contains these fields directly from Amazon Connect:
-    - contractType: Contract type (RE, DTC)
-    - plan / selectedPlan: Plan name (ShieldPlus, ShieldGold, etc.)
-    - state / selectedState: State name (Texas, California, etc.)
-    - phoneNumber / phone: Customer phone number
+    Payload may contain these fields, but we now fetch contractType, plan, and state
+    from MongoDB instead of using payload values:
+    - phoneNumber / phone: Customer phone number (used for MongoDB lookup)
+    - contractType, plan, state: Ignored - will be fetched from MongoDB
     
-    Since Amazon Connect provides all necessary info, we auto-verify the user.
+    All customer details (contractType, plan, state) are now fetched from MongoDB
+    when phoneNumber is present in the payload.
     """
-    # Extract contract type
-    ct = _s(payload.get("contractType"))
-    if ct:
-        st.contract_type = ct
-    
-    # Extract plan (check both 'plan' and 'selectedPlan' keys)
-    pl = _s(payload.get("plan")) or _s(payload.get("selectedPlan"))
-    if pl:
-        st.selected_plan = pl
-    
-    # Extract state (check both 'state' and 'selectedState' keys)
-    stt = _s(payload.get("state")) or _s(payload.get("selectedState"))
-    if stt:
-        st.selected_state = stt
-    
     # Extract phone (check both 'phoneNumber' and 'phone' keys)
+    # We only use phone for MongoDB lookup, not for setting customer context
     phone = _s(payload.get("phoneNumber")) or _s(payload.get("phone"))
+    
+    # Extract payload values for logging/debugging only (not used for setting session state)
+    ct = _s(payload.get("contractType"))
+    pl = _s(payload.get("plan")) or _s(payload.get("selectedPlan"))
+    stt = _s(payload.get("state")) or _s(payload.get("selectedState"))
     
     # Logging discipline: never print raw phone/state/plan/contract type unless payload tracing is enabled.
     if _trace_include_payloads():
@@ -388,32 +380,8 @@ def _update_session_context_from_payload(st: _SessionState, payload: Dict[str, A
         except Exception:
             pass
     
-    # AUTO-VERIFY: Since Amazon Connect provides phoneNumber + plan context,
-    # we consider the user verified without DB lookup
-    if phone and ct and pl and stt:
-        # Create verified customer context directly from payload
-        if not st.customer or not st.customer.get("verified"):
-            st.customer = {
-                "phone": phone,
-                "contractType": ct,
-                "plan": pl,
-                "state": stt,
-                "verified": True,  # Auto-verified from Amazon Connect data
-                "name": "Customer",
-            }
-            # No raw logging here.
-    elif phone and not st.customer:
-        # Fallback: Try DB lookup if we have phone but missing other context
-        doc = _lookup_user_by_phone([phone])
-        if doc:
-            st.customer = _normalize_customer_doc(doc, phone)
-            if not st.contract_type:
-                st.contract_type = _s(st.customer.get("contractType"))
-            if not st.selected_plan:
-                st.selected_plan = _s(st.customer.get("plan"))
-            if not st.selected_state:
-                st.selected_state = _s(st.customer.get("state"))
-            # No raw logging here.
+    # NOTE: We no longer set contractType, plan, or state from payload.
+    # These will be fetched from MongoDB in handle_transcript_event when phoneNumber is present.
 
 
 def _effective_customer_context(st: _SessionState) -> Dict[str, Any]:
@@ -779,25 +747,78 @@ def _get_mongo_client() -> MongoClient:
 
 def _lookup_user_by_phone(phone_candidates: List[str]) -> Optional[Dict[str, Any]]:
     if not MONGO_URI:
+        print("[LIVE_COPILOT] ERROR: MONGO_URI not configured, cannot lookup user", flush=True)
         return None
     if not phone_candidates:
+        print("[LIVE_COPILOT] ERROR: No phone candidates provided", flush=True)
         return None
+    
+    print(f"[LIVE_COPILOT] Attempting MongoDB lookup with {len(phone_candidates)} phone candidates", flush=True)
     users = _get_mongo_client()["AHS"]["Users"]
+    
+    # Try individual lookups first
     for p in phone_candidates:
+        try:
+            with tracer.start_as_current_span("db.mongo.find_one") as sp:
+                _set_session_attr(sp)
+                sp.set_attribute("db.system", "mongodb")
+                sp.set_attribute("db.operation", "find_one")
+                sp.set_attribute("db.collection", "Users")
+                sp.set_attribute("db.query.mobile", str(p))
+                doc = users.find_one({"mobile": p})
+            if doc:
+                try:
+                    name = doc.get('name') or doc.get('fullName') or doc.get('firstName') or ''
+                    plan = doc.get('plan') or doc.get('selectedPlan') or doc.get('planName') or ''
+                    state = doc.get('state') or doc.get('selectedState') or doc.get('stateName') or ''
+                    phone_masked = f"***{str(p)[-4:]}" if len(str(p)) >= 4 else "***"
+                    print(
+                        f"[LIVE_COPILOT] ✅ Mongo user match found!",
+                        f"phone={phone_masked}",
+                        f"name={name}",
+                        f"plan={plan}",
+                        f"state={state}",
+                        flush=True
+                    )
+                except Exception as e:
+                    print(f"[LIVE_COPILOT] User found but error logging details: {e}", flush=True)
+                return doc
+        except Exception as e:
+            print(f"[LIVE_COPILOT] Error querying MongoDB with phone {p}: {e}", flush=True)
+            continue
+    
+    # Fallback: try $in query
+    try:
         with tracer.start_as_current_span("db.mongo.find_one") as sp:
             _set_session_attr(sp)
             sp.set_attribute("db.system", "mongodb")
             sp.set_attribute("db.operation", "find_one")
             sp.set_attribute("db.collection", "Users")
-            doc = users.find_one({"mobile": p})
+            sp.set_attribute("db.query.mobile.$in", str(phone_candidates))
+            doc = users.find_one({"mobile": {"$in": phone_candidates}})
         if doc:
+            try:
+                phone_val = doc.get("mobile") or ""
+                name = doc.get('name') or doc.get('fullName') or doc.get('firstName') or ''
+                plan = doc.get('plan') or doc.get('selectedPlan') or doc.get('planName') or ''
+                state = doc.get('state') or doc.get('selectedState') or doc.get('stateName') or ''
+                phone_masked = f"***{str(phone_val)[-4:]}" if len(str(phone_val)) >= 4 else "***"
+                print(
+                    f"[LIVE_COPILOT] ✅ Mongo user match found (via $in query)!",
+                    f"phone={phone_masked}",
+                    f"name={name}",
+                    f"plan={plan}",
+                    f"state={state}",
+                    flush=True
+                )
+            except Exception as e:
+                print(f"[LIVE_COPILOT] User found but error logging details: {e}", flush=True)
             return doc
-    with tracer.start_as_current_span("db.mongo.find_one") as sp:
-        _set_session_attr(sp)
-        sp.set_attribute("db.system", "mongodb")
-        sp.set_attribute("db.operation", "find_one")
-        sp.set_attribute("db.collection", "Users")
-        return users.find_one({"mobile": {"$in": phone_candidates}})
+    except Exception as e:
+        print(f"[LIVE_COPILOT] Error with $in query: {e}", flush=True)
+    
+    print(f"[LIVE_COPILOT] ❌ No user found in MongoDB for any phone candidate", flush=True)
+    return None
 
 
 def _normalize_customer_doc(doc: Dict[str, Any], phone: str) -> Dict[str, Any]:
@@ -814,6 +835,30 @@ def _normalize_customer_doc(doc: Dict[str, Any], phone: str) -> Dict[str, Any]:
         "plan": _s(plan),
         "contractType": _s(contract_type),
         "state": _s(state),
+    }
+
+
+def _build_mongo_user_details(doc: Dict[str, Any], phone: str) -> Dict[str, Any]:
+    """
+    Build UI-ready user details dict from MongoDB doc for the Customer Details card.
+    Frontend expects: name, phone, email, plan, state, contractType, address.
+    """
+    name = doc.get("name") or doc.get("fullName") or doc.get("firstName") or ""
+    if doc.get("lastName") and name and doc.get("lastName") not in str(name):
+        name = f"{name} {doc.get('lastName')}"
+    plan = doc.get("plan") or doc.get("selectedPlan") or doc.get("planName") or ""
+    contract_type = doc.get("contractType") or doc.get("contract_type") or ""
+    state = doc.get("state") or doc.get("selectedState") or doc.get("stateName") or ""
+    email = doc.get("email") or doc.get("emailAddress") or ""
+    address = doc.get("address") or doc.get("addressLine1") or ""
+    return {
+        "name": _s(name) or "Customer",
+        "phone": _s(phone),
+        "email": _s(email),
+        "plan": _s(plan),
+        "state": _s(state),
+        "contractType": _s(contract_type),
+        "address": _s(address),
     }
 
 
@@ -1187,7 +1232,8 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
     session_id = _s(payload.get("sessionId"))
     speaker = _s(payload.get("speaker")).lower()
     text = _s(payload.get("text"))
-    is_partial = bool(payload.get("isPartial", True))
+    # Default False so missing isPartial doesn't block (treat as final)
+    is_partial = bool(payload.get("isPartial", False))
 
     if not session_id or not text:
         return None
@@ -1199,12 +1245,26 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
     _update_session_context_from_payload(st, payload)
     _append_buffer(st, speaker=speaker, text=text)
 
-    # Fetch user details from MongoDB when phoneNumber is present in payload
-    # This is for display in the UI header, separate from the payload-based state/plan/contractType
+    # Check for phoneNumber in payload and lookup user in MongoDB
+    # Always perform MongoDB lookup when phoneNumber is present for cross-verification
     payload_phone = _s(payload.get("phoneNumber"))
-    if payload_phone and not st.mongo_user_details:
+    if payload_phone:
+        # Extract payload data for comparison
+        payload_contract_type = _s(payload.get("contractType"))
+        payload_plan = _s(payload.get("plan"))
+        payload_state = _s(payload.get("state"))
+        
+        print(f"[LIVE_COPILOT] Received phoneNumber from payload: {payload_phone}", flush=True)
+        if payload_contract_type or payload_plan or payload_state:
+            print(
+                f"[LIVE_COPILOT] Payload data: contractType={payload_contract_type}, "
+                f"plan={payload_plan}, state={payload_state}",
+                flush=True
+            )
+        
         # Normalize phone number - remove non-digits and handle +1 prefix
         phone_clean = re.sub(r"\D+", "", payload_phone)
+        print(f"[LIVE_COPILOT] Normalized phone number: {phone_clean}", flush=True)
         if len(phone_clean) == 10:
             phone_candidates = [phone_clean, "+1" + phone_clean]
         elif len(phone_clean) == 11 and phone_clean.startswith("1"):
@@ -1212,26 +1272,102 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
         else:
             phone_candidates = [phone_clean]
         
-        # Lookup user in MongoDB
+        print(f"[LIVE_COPILOT] Searching MongoDB with phone candidates: {phone_candidates}", flush=True)
         doc = _lookup_user_by_phone(phone_candidates)
         if doc:
-            # Extract user details for display
-            name = doc.get("name") or doc.get("fullName") or doc.get("firstName") or ""
-            if doc.get("lastName") and name and doc.get("lastName") not in str(name):
-                name = f"{name} {doc.get('lastName')}"
+            # Normalize MongoDB document
+            st.customer = _normalize_customer_doc(doc, phone_candidates[0])
             
-            st.mongo_user_details = {
-                "phone": f"***{phone_clean[-4:]}" if len(phone_clean) >= 4 else "***",
-                "name": name,
-                "email": _s(doc.get("email")),
-                "address": _s(doc.get("address")),
-                "plan": _s(doc.get("plan")) or _s(doc.get("selectedPlan")) or _s(doc.get("planName")),
-                "state": _s(doc.get("state")) or _s(doc.get("selectedState")) or _s(doc.get("stateName")),
-                "contractType": _s(doc.get("contractType")),
-            }
-            # Remove None values
-            st.mongo_user_details = {k: v for k, v in st.mongo_user_details.items() if v}
-            print(f"[LIVE_COPILOT] ✅ MongoDB user details fetched for display: {st.mongo_user_details.get('name')} ({st.mongo_user_details.get('phone')})", flush=True)
+            # Extract MongoDB user details
+            mongo_name = st.customer.get("name") or st.customer.get("fullName") or st.customer.get("firstName") or ""
+            mongo_contract_type = _s(st.customer.get("contractType"))
+            mongo_plan = _s(st.customer.get("plan")) or _s(st.customer.get("selectedPlan")) or _s(st.customer.get("planName"))
+            mongo_state = _s(st.customer.get("state")) or _s(st.customer.get("selectedState")) or _s(st.customer.get("stateName"))
+            mongo_email = _s(st.customer.get("email"))
+            mongo_address = _s(st.customer.get("address"))
+            
+            # Log MongoDB user details
+            print("=" * 80, flush=True)
+            print(f"[LIVE_COPILOT] ✅ MONGODB USER DETAILS:", flush=True)
+            print(f"  Phone: ***{phone_clean[-4:]}", flush=True)
+            print(f"  Name: {mongo_name}", flush=True)
+            print(f"  Contract Type: {mongo_contract_type}", flush=True)
+            print(f"  Plan: {mongo_plan}", flush=True)
+            print(f"  State: {mongo_state}", flush=True)
+            if mongo_email:
+                print(f"  Email: {mongo_email}", flush=True)
+            if mongo_address:
+                print(f"  Address: {mongo_address}", flush=True)
+            
+            # Cross-verification: Compare payload data with MongoDB data (for debugging only)
+            # NOTE: MongoDB values are the source of truth and will be used for inference
+            if payload_contract_type or payload_plan or payload_state:
+                print("-" * 80, flush=True)
+                print(f"[LIVE_COPILOT] 🔍 CROSS-VERIFICATION (Payload vs MongoDB - MongoDB is source of truth):", flush=True)
+                
+                # Compare contractType
+                if payload_contract_type and mongo_contract_type:
+                    if payload_contract_type.lower() == mongo_contract_type.lower():
+                        print(f"  ✅ Contract Type MATCH: {payload_contract_type}", flush=True)
+                    else:
+                        print(
+                            f"  ⚠️  Contract Type MISMATCH: Payload={payload_contract_type}, "
+                            f"MongoDB={mongo_contract_type}",
+                            flush=True
+                        )
+                elif payload_contract_type:
+                    print(f"  ⚠️  Contract Type: Payload={payload_contract_type}, MongoDB=Not found", flush=True)
+                elif mongo_contract_type:
+                    print(f"  ℹ️  Contract Type: Payload=Not provided, MongoDB={mongo_contract_type}", flush=True)
+                
+                # Compare plan
+                if payload_plan and mongo_plan:
+                    if payload_plan.lower() == mongo_plan.lower():
+                        print(f"  ✅ Plan MATCH: {payload_plan}", flush=True)
+                    else:
+                        print(
+                            f"  ⚠️  Plan MISMATCH: Payload={payload_plan}, MongoDB={mongo_plan}",
+                            flush=True
+                        )
+                elif payload_plan:
+                    print(f"  ⚠️  Plan: Payload={payload_plan}, MongoDB=Not found", flush=True)
+                elif mongo_plan:
+                    print(f"  ℹ️  Plan: Payload=Not provided, MongoDB={mongo_plan}", flush=True)
+                
+                # Compare state
+                if payload_state and mongo_state:
+                    if payload_state.lower() == mongo_state.lower():
+                        print(f"  ✅ State MATCH: {payload_state}", flush=True)
+                    else:
+                        print(
+                            f"  ⚠️  State MISMATCH: Payload={payload_state}, MongoDB={mongo_state}",
+                            flush=True
+                        )
+                elif payload_state:
+                    print(f"  ⚠️  State: Payload={payload_state}, MongoDB=Not found", flush=True)
+                elif mongo_state:
+                    print(f"  ℹ️  State: Payload=Not provided, MongoDB={mongo_state}", flush=True)
+            
+            print("=" * 80, flush=True)
+            
+            # Update session state - ONLY use MongoDB data (no payload fallback)
+            try:
+                if mongo_contract_type:
+                    st.contract_type = mongo_contract_type
+                    print(f"[LIVE_COPILOT] ✅ Set contract_type from MongoDB: {mongo_contract_type}", flush=True)
+                if mongo_plan:
+                    st.selected_plan = mongo_plan
+                    print(f"[LIVE_COPILOT] ✅ Set selected_plan from MongoDB: {mongo_plan}", flush=True)
+                if mongo_state:
+                    st.selected_state = mongo_state
+                    print(f"[LIVE_COPILOT] ✅ Set selected_state from MongoDB: {mongo_state}", flush=True)
+            except Exception as e:
+                print(f"[LIVE_COPILOT] Error updating session state: {e}", flush=True)
+            # Set UI-ready user details so frontend Customer Details card receives userDetails
+            st.mongo_user_details = _build_mongo_user_details(doc, phone_candidates[0])
+        else:
+            print(f"[LIVE_COPILOT] ❌ No user found in MongoDB for phone candidates: {phone_candidates}", flush=True)
+            print(f"[LIVE_COPILOT] ⚠️  contractType, plan, and state will NOT be set (MongoDB lookup failed)", flush=True)
 
     # Skip AI processing for CSR text - only process customer prompts for suggestions
     if speaker == "agent":
@@ -1266,9 +1402,25 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
             with tracer.start_as_current_span("live_copilot.intent_detection") as sp_intent:
                 _set_session_attr(sp_intent)
                 
-                phone_candidates = _extract_phone_candidates(text)
+                # Prioritize phoneNumber from payload, fallback to regex extraction from text
+                phone_candidates = []
+                if payload_phone:
+                    phone_clean = re.sub(r"\D+", "", payload_phone)
+                    if len(phone_clean) == 10:
+                        phone_candidates = [phone_clean, "+1" + phone_clean]
+                    elif len(phone_clean) == 11 and phone_clean.startswith("1"):
+                        phone_candidates = [phone_clean[1:], "+1" + phone_clean[1:], phone_clean]
+                    else:
+                        phone_candidates = [phone_clean]
+                
+                if not phone_candidates:
+                    phone_candidates = _extract_phone_candidates(text)
+                
+                # Only force CUSTOMER_IDENTIFICATION when we don't have customer yet (first-time lookup).
+                # Once customer is known, use LLM for intent so coverage/inquiry questions get INQUIRY
+                # and we extract questions + run RAG/Infer (VectorDB).
                 intent_obj: Dict[str, Any]
-                if phone_candidates:
+                if phone_candidates and not st.customer:
                     intent_obj = {
                         "intent": "CUSTOMER_IDENTIFICATION",
                         "confidence": 0.95,
@@ -1286,6 +1438,11 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                     }
                 else:
                     intent_obj = _call_intent_llm(transcript=transcript, handler=handler, span=sp_intent)
+                    # If LLM didn't return phone but we have payload phone, attach for context_retrieval
+                    if phone_candidates and (not intent_obj.get("entities") or not intent_obj.get("entities", {}).get("phone")):
+                        intent_obj = dict(intent_obj)
+                        intent_obj.setdefault("entities", {})
+                        intent_obj["entities"]["phone"] = intent_obj["entities"].get("phone") or phone_candidates[0]
 
                 intent = _s(intent_obj.get("intent")) or "OTHER"
                 confidence = float(intent_obj.get("confidence") or 0.0)
@@ -1307,9 +1464,19 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                         st.customer = _normalize_customer_doc(doc, candidates[0])
                         customer = st.customer
                         try:
+
                             st.contract_type = st.contract_type or _s(customer.get("contractType"))
                             st.selected_plan = st.selected_plan or _s(customer.get("plan"))
                             st.selected_state = st.selected_state or _s(customer.get("state"))
+                            mongo_ct = _s(customer.get("contractType"))
+                            mongo_pl = _s(customer.get("plan")) or _s(customer.get("selectedPlan")) or _s(customer.get("planName"))
+                            mongo_st = _s(customer.get("state")) or _s(customer.get("selectedState")) or _s(customer.get("stateName"))
+                            if mongo_ct:
+                                st.contract_type = mongo_ct
+                            if mongo_pl:
+                                st.selected_plan = mongo_pl
+                            if mongo_st:
+                                st.selected_state = mongo_st
                         except Exception:
                             pass
                         important_change = True
@@ -1409,6 +1576,9 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
             with tracer.start_as_current_span("live_copilot.suggestion_generation") as sp_llm:
                 _set_session_attr(sp_llm)
                 
+                # Always generate cards for first suggestion in call (never emitted yet)
+                if not st.last_suggested_at:
+                    important_change = True
                 if not _cooldown_ok(st) and not important_change:
                     cards = None
                 else:

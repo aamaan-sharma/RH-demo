@@ -6777,7 +6777,8 @@ def transcript_event():
     if not data:
         return jsonify({"error": "invalid payload"}), 400
     
-    session_id = data.get("sessionId")
+    # Accept either sessionId or contactId so room matches frontend (join_session uses contactId)
+    session_id = data.get("sessionId") or data.get("contactId")
     if not session_id:
         return jsonify({"error": "sessionId is required"}), 400
 
@@ -6816,21 +6817,26 @@ def transcript_event():
         # Process through Live Copilot if:
         # 1. Module is available
         # 2. Feature flag is enabled
-        # 3. Session has copilot enabled (via copilot_enable from UI)
+        # 3. Session has copilot enabled (via copilot_enable from UI), unless ENABLE_LIVE_COPILOT_REQUIRE_SESSION=0
         # 4. Transcript is complete (not partial)
-        if (
+        require_session = _flag_enabled("ENABLE_LIVE_COPILOT_REQUIRE_SESSION", "1")
+        copilot_ok = (
             LIVE_COPILOT_AVAILABLE
             and _flag_enabled("ENABLE_LIVE_COPILOT", "0")
             and should_start_copilot(data)
-        ):
+        )
+        if copilot_ok and (not require_session or _copilot_session_is_enabled(session_id)):
             def process_copilot_async():
                 try:
                     # Build copilot payload with session context
                     # Include phone, state, plan, contractType from transcript payload
+                    # Normalize speaker so live_copilot sees "customer" for customer-side utterances
+                    raw_speaker = (data.get("speaker") or "").strip().lower()
+                    speaker = "customer" if raw_speaker in ("user", "caller", "participant", "customer") else raw_speaker or "customer"
                     copilot_payload = {
                         "sessionId": session_id,
                         "contactId": data.get("contactId"),
-                        "speaker": data.get("speaker"),
+                        "speaker": speaker,
                         "text": data.get("text"),
                         "isPartial": data.get("isPartial", False),
                         "beginOffsetMillis": data.get("beginOffsetMillis"),
