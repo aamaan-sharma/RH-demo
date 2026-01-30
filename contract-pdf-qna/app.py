@@ -11,7 +11,7 @@ _async_mode = "threading"
 import os
 import asyncio
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)
 from flask import Flask, request, jsonify, make_response, Response, stream_with_context, session
 from flask_socketio import SocketIO, emit, join_room, disconnect
 from pymongo import MongoClient, ReturnDocument
@@ -38,9 +38,6 @@ import json
 import re
 from typing import List, Dict, Any, Optional
 from pathlib import Path
-from dotenv import load_dotenv
-
-load_dotenv()
 # Live Copilot for real-time AI suggestions during calls
 try:
     from live_copilot import handle_transcript_event
@@ -152,6 +149,8 @@ from config import (
     MOTORHEAD_API_KEY,
     MOTORHEAD_CLIENT_ID
 )
+
+from utils.kb import get_vector_db, _retrieve_policy_chunks_for_claims
 # -----------------------------------------------------------------------------
 # Session-level trace context (1 trace per live sessionId)
 # -----------------------------------------------------------------------------
@@ -284,8 +283,6 @@ def health():
 mongo_client = MongoClient(MONGO_URI, unicode_decode_error_handler='ignore')
 db = mongo_client["FrontDoorDB"]
 
-model_name = "text-embedding-ada-002"
-embed = OpenAIEmbeddings(model=model_name, openai_api_key=OPENAI_API_KEY)
 
 # GCP_SERVICE_ACCOUNT_PATH and TRANSCRIPT_METADATA_CACHE_VERSION are now imported from utils.constants
 gcs_fs = None  # fsspec filesystem instance for GCS
@@ -2256,11 +2253,7 @@ def process_live_copilot_question(
         print(f"[LIVE_COPILOT_INFER] Using Milvus collection: {selected_collection_name}")
         
         # Initialize Milvus vector DB
-        vector_db1 = Milvus(
-            embed,
-            collection_name=selected_collection_name,
-            connection_args={"host": MILVUS_HOST, "port": "19530"},
-        )
+        vector_db1 = get_vector_db(selected_collection_name)
         
         # Initialize retriever
         retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
@@ -2515,11 +2508,7 @@ def start():
                 )
             with tracer.start_as_current_span('vector_db-initialization'):
                 # Selecting collection dynamically
-                vector_db1: Milvus = Milvus(
-                    embed,
-                    collection_name=selected_collection_name,
-                    connection_args={"host": MILVUS_HOST, "port": "19530"},
-                )
+                vector_db1 = get_vector_db(selected_collection_name)
             
             # Initialize variables to prevent undefined errors
             agent_resp = None
@@ -3362,89 +3351,6 @@ def _build_claims_case_context_for_llm(docs: dict) -> str:
     return "\n".join(parts).strip()
 
 
-def _retrieve_policy_chunks_for_claims(docs: dict, query: str, k: int = 6):
-    """Best-effort policy retrieval from Milvus for a transcript conversation.
-
-    Returns: (chunks_for_ui, referred_docs_text)
-      - chunks_for_ui: list[dict] where each dict has {content, metadata}
-      - referred_docs_text: a readable text blob for /referred-clauses legacy page
-    """
-    try:
-        if not isinstance(docs, dict):
-            return [], ""
-        query = (query or "").strip()
-        if not query:
-            return [], ""
-
-        contract_type = docs.get("contract_type")
-        selected_plan = docs.get("selected_plan")
-        selected_state = docs.get("selected_state")
-        if not all([contract_type, selected_plan, selected_state]):
-            return [], ""
-
-        # Get collection name using utility function
-        selected_collection_name = get_milvus_collection_name(
-            contract_type=contract_type,
-            selected_plan=selected_plan,
-            selected_state=selected_state
-        )
-        if not selected_collection_name:
-            return [], ""
-
-        # Get normalized values for logging
-        milvus_state = normalize_state_for_milvus(selected_state)
-        contract_type_norm = normalize_contract_type(contract_type)
-        selected_plan_norm = normalize_plan_for_milvus(contract_type_norm, selected_plan)
-
-        # Lightweight logging to debug "no clauses found" issues in claims follow-up.
-        try:
-            print(
-                "[CLAIMS_FOLLOWUP] Milvus retrieval "
-                f"state={selected_state!r}->{milvus_state!r}, "
-                f"contract_type={contract_type!r}->{contract_type_norm!r}, "
-                f"selected_plan={selected_plan!r}->{selected_plan_norm!r}, "
-                f"collection={selected_collection_name!r}, "
-                f"k={k}"
-            )
-        except Exception:
-            pass
-
-        vector_db1: Milvus = Milvus(
-            embed,
-            collection_name=selected_collection_name,
-            connection_args={"host": MILVUS_HOST, "port": "19530"},
-        )
-        retriever = vector_db1.as_retriever(search_kwargs={"k": max(1, min(int(k), 12))})
-
-        raw_docs = retriever.get_relevant_documents(query)
-        try:
-            print(f"[CLAIMS_FOLLOWUP] Milvus returned {len(raw_docs or [])} docs")
-        except Exception:
-            pass
-        chunks_for_ui = []
-        text_lines = []
-        for i, d in enumerate(raw_docs or [], start=1):
-            content = (getattr(d, "page_content", "") or "").strip()
-            metadata = getattr(d, "metadata", {}) or {}
-            if not content:
-                continue
-            chunks_for_ui.append({"content": content, "metadata": metadata})
-            # Build a readable blob for legacy referred clauses page
-            src = ""
-            if isinstance(metadata, dict):
-                src = metadata.get("source") or metadata.get("file") or metadata.get("document") or ""
-            header = f"Clause {i}"
-            if src:
-                header += f" ({src})"
-            text_lines.append(header)
-            text_lines.append(content)
-            text_lines.append("")
-
-        referred_docs_text = "\n".join(text_lines).strip()
-        return chunks_for_ui, referred_docs_text
-    except Exception as e:
-        print(f"Warning: policy retrieval failed for claims followup: {e}")
-        return [], ""
 
 
 def _looks_like_plan_overview_question(q: str) -> bool:
@@ -4781,11 +4687,7 @@ def _claims_background_process_transcript(
             selected_plan=selected_plan,
             selected_state=selected_state,
         )
-        vector_db1 = Milvus(
-            embed,
-            collection_name=selected_collection_name,
-            connection_args={"host": MILVUS_HOST, "port": "19530"},
-        )
+        vector_db1 = get_vector_db(selected_collection_name)
         retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
 
         if gpt_model == "Search":
@@ -5926,11 +5828,8 @@ def process_transcript():
                     f"collection={selected_collection_name!r}"
                 )
                 
-                vector_db1 = Milvus(
-                    embed,
-                    collection_name=selected_collection_name,
-                    connection_args={"host": MILVUS_HOST, "port": "19530"},
-                )
+
+                vector_db1 = get_vector_db(selected_collection_name)
                 
                 retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
                 
@@ -6607,11 +6506,7 @@ def _process_transcript_core(data, yield_sse_fn=None):
                 selected_collection_name = collection_mapping.get(contract_type_norm, {}).get(
                     selected_plan_norm, collection_mapping.get(contract_type_norm, {}).get("default")
                 )
-                vector_db1 = Milvus(
-                    embed,
-                    collection_name=selected_collection_name,
-                    connection_args={"host": MILVUS_HOST, "port": "19530"},
-                )
+                vector_db1 = get_vector_db(selected_collection_name)
                 retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
 
                 if gpt_model == "Search":
