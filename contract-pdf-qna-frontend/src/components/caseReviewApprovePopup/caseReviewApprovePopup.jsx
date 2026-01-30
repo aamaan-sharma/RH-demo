@@ -47,7 +47,24 @@ const getItemNameFromChanges = (changes) => {
   return title || "Item(s) updated";
 };
 
-/** Group changes by item for separate tables. Returns [{ heading, changes, stripPrefix }]. */
+/** Strip "**Overall Next Steps:**" and leading "- " from Overall Next Step value so it renders as plain text. */
+const cleanOverallNextStepDisplay = (value) => {
+  if (value == null || value === "") return value;
+  const s = String(value).trim();
+  const lines = s.split("\n");
+  const result = [];
+  const labelRe = /^\s*(\*\*Overall Next Steps?\*\*:?\s*|Overall Next Step\s*:?\s*)$/i;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (labelRe.test(trimmed)) continue;
+    const withoutBullet = trimmed.replace(/^\s*[-•*]\s+/, "");
+    result.push(withoutBullet);
+  }
+  const out = result.join("\n").trim();
+  return out || s;
+};
+
+/** Group changes by item for separate tables. Returns [{ heading, displayName, changes, stripPrefix }]. */
 const getChangesByItem = (changes) => {
   if (!Array.isArray(changes) || changes.length === 0) return [];
   const byKey = {};
@@ -83,8 +100,28 @@ const getChangesByItem = (changes) => {
   });
   const groups = itemOrder.map((key) => byKey[key]);
   if (otherChanges.length > 0) {
-    groups.push({ heading: "Summary", changes: otherChanges, stripPrefix: "" });
+    groups.push({ heading: "Summary", displayName: "", changes: otherChanges, stripPrefix: "" });
   }
+  groups.forEach((g) => {
+    if (g.displayName !== undefined) return;
+    if (g.heading === "Overall Next Step") {
+      const c = g.changes[0];
+      const prev = (c?.previousValue ?? "").trim().toLowerCase();
+      const curr = (c?.updatedValue ?? "").trim().toLowerCase();
+      const isNotSpecified =
+        (prev === "not specified" || prev === "" || prev === "—") &&
+        (curr === "not specified" || curr === "" || curr === "—");
+      g.displayName = isNotSpecified ? "" : "Overall Next Step";
+    } else if (/^Item\s+\d+$/i.test(g.heading)) {
+      const itemChange = g.changes.find((c) =>
+        (c?.fieldName || "").trim().endsWith(" - Item"),
+      );
+      const name = (itemChange?.updatedValue || itemChange?.previousValue || "").trim();
+      g.displayName = name || g.heading;
+    } else {
+      g.displayName = "";
+    }
+  });
   return groups;
 };
 
@@ -343,7 +380,9 @@ const CaseReviewApprovePopup = ({
                         </div>
                         {getChangesByItem(changes).map((group, gIdx) => (
                           <div className="change_log_table_group" key={gIdx}>
-                            <div className="change_log_table_heading">{group.heading}</div>
+                            {group.displayName ? (
+                              <div className="change_log_table_heading">{group.displayName}</div>
+                            ) : null}
                             <table className="change_log_table">
                               <thead>
                                 <tr>
@@ -357,16 +396,24 @@ const CaseReviewApprovePopup = ({
                                   const displayField = group.stripPrefix
                                     ? (c.fieldName || "").replace(group.stripPrefix, "")
                                     : (c.fieldName || "—");
+                                  const isOverallNextStep =
+                                    (c.fieldName || "").trim() === "Overall Next Step";
+                                  const prevDisplay = isOverallNextStep
+                                    ? cleanOverallNextStepDisplay(c.previousValue)
+                                    : c.previousValue;
+                                  const currDisplay = isOverallNextStep
+                                    ? cleanOverallNextStepDisplay(c.updatedValue)
+                                    : c.updatedValue;
                                   return (
                                     <tr key={i}>
                                       <td className="change_log_td change_log_td_field">
                                         {displayField || "—"}
                                       </td>
                                       <td className="change_log_td change_log_td_prev">
-                                        {c.previousValue ?? "—"}
+                                        {prevDisplay ?? "—"}
                                       </td>
                                       <td className="change_log_td change_log_td_curr">
-                                        {c.updatedValue ?? "—"}
+                                        {currDisplay ?? "—"}
                                       </td>
                                     </tr>
                                   );

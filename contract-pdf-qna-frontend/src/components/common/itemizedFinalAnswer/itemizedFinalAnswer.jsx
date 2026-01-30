@@ -738,7 +738,8 @@ export const ItemizedFinalAnswer = ({ text = "", title = "Final Answer", asCard 
 };
 
 const arrToText = (arr) => (Array.isArray(arr) ? arr.join("\n") : "");
-const textToArr = (text) => (String(text || "").split("\n").map((s) => s.trim()).filter(Boolean));
+// Preserve spaces while typing in edit mode (no trim/filter); trimming happens on save/serialize
+const textToArr = (text) => (String(text || "").split("\n"));
 
 /**
  * Editable form that mirrors ItemizedFinalAnswer layout. Same sections, but each value is an input/textarea.
@@ -759,9 +760,9 @@ export const ItemizedFinalAnswerEditable = ({ parsed = {}, onChange, asCard = tr
       <div className="ifa_cards">
         {items.map((it, idx) => {
           const itemNo = it.itemNo || String(idx + 1);
-          const itemName = (it.title || "").trim() || (it.name || "").trim() || "";
-          // Amount (key fact) is independent of Amounts (Customer/Company)
-          const amountKeyFact = (it.amount && String(it.amount).trim()) || "";
+          // Use raw values so spaces are preserved while typing (no trim on display)
+          const itemName = String(it.title ?? it.name ?? "");
+          const amountKeyFact = String(it.amount ?? "");
 
           return (
             <div className="ifa_card" key={`edit-${itemNo}-${idx}`}>
@@ -804,7 +805,7 @@ export const ItemizedFinalAnswerEditable = ({ parsed = {}, onChange, asCard = tr
                       type="text"
                       className="ifa_input"
                       value={amountKeyFact}
-                      onChange={(e) => updateItem(idx, { ...it, amount: e.target.value.trim() })}
+                      onChange={(e) => updateItem(idx, { ...it, amount: e.target.value })}
                       placeholder="Not specified"
                     />
                   </div>
