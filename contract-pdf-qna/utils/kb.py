@@ -24,6 +24,7 @@ from utils.milvus_utils import (
 
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from config import MILVUS_HOST
+from tqdm import tqdm
 
 collections_name = ["Arizona_RE_ShieldEssential", "Arizona_RE_ShieldPlus", "Arizona_DTC_ShieldPlatinum", "Arizona_DTC_ShieldSilver", "Arizona_DTC_ShieldGold", "California_RE_ShieldEssential", "California_RE_ShieldPlus", "California_DTC_ShieldPlatinum", "California_DTC_ShieldSilver", "California_DTC_ShieldGold", "Georgia_RE_ShieldEssential", "Georgia_RE_ShieldPlus", "Georgia_DTC_ShieldPlatinum", "Georgia_DTC_ShieldSilver", "Georgia_DTC_ShieldGold", "Maryland_RE_ShieldEssential", "Maryland_RE_ShieldPlus", "Maryland_DTC_ShieldPlatinum", "Maryland_DTC_ShieldSilver", "Maryland_DTC_ShieldGold", "Minnesota_RE_ShieldEssential", "Minnesota_RE_ShieldPlus", "Minnesota_DTC_ShieldPlatinum", "Minnesota_DTC_ShieldSilver", "Minnesota_DTC_ShieldGold", "Nevada_RE_ShieldEssential", "Nevada_RE_ShieldPlus", "Nevada_DTC_ShieldPlatinum", "Nevada_DTC_ShieldSilver", "Nevada_DTC_ShieldGold", "Texas_RE_ShieldEssential", "Texas_RE_ShieldPlus", "Texas_DTC_ShieldPlatinum", "Texas_DTC_ShieldSilver", "Texas_DTC_ShieldGold", "Utah_RE_ShieldEssential", "Utah_RE_ShieldPlus", "Utah_DTC_ShieldPlatinum", "Utah_DTC_ShieldSilver", "Utah_DTC_ShieldGold", "Wisconsin_RE_ShieldEssential", "Wisconsin_RE_ShieldPlus", "Wisconsin_DTC_ShieldPlatinum", "Wisconsin_DTC_ShieldSilver", "Wisconsin_DTC_ShieldGold", "Arizona_RE_ShieldComplete"] 
 connections.connect(host=MILVUS_HOST, port="19530")
@@ -34,7 +35,8 @@ model_name = "text-embedding-ada-002"
 embed = OpenAIEmbeddings(model=model_name)
 
 def preloadCollections():
-    for collection_name in collections_name:
+    print('Intializing Vector DB...')
+    for collection_name in tqdm(collections_name):
         vector_db1: Milvus = Milvus(
             embed,
             collection_name=collection_name,
