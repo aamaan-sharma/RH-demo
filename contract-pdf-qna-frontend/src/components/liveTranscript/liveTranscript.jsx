@@ -35,6 +35,7 @@ const LiveTranscript = () => {
   const [transcripts, setTranscripts] = useState([]);
   // Reflect Amazon Connect login/CCP readiness (NOT backend socket connection).
   const [isConnected, setIsConnected] = useState(false);
+  const [isTranscriptOpen, setIsTranscriptOpen] = useState(false);
 
   // Live Copilot UI state (populated by backend `suggestion_update`)
   const [, setCopilotUser] = useState(null);
@@ -398,8 +399,166 @@ const LiveTranscript = () => {
     shouldAutoScrollRef.current = isNearBottom;
   };
 
+  const transcriptPanel = (
+    <main className="lt_center">
+      <div className="live_transcript_center_body">
+        <div className="live_transcript_card lt_transcript_card">
+          {/* Streaming indicator - shows when call is active */}
+          {isCallConnected && (
+            <div className="lt_transcript_status_bar">
+              <div className="lt_streaming_badge">Live</div>
+            </div>
+          )}
+          <div
+            className="lt_transcript_scroller"
+            ref={transcriptScrollerRef}
+            onScroll={handleTranscriptScroll}
+          >
+            {transcripts.length === 0 ? (
+              !isConnected ? (
+                // Not logged in - Show login steps
+                <div className="lt_transcript_empty_state">
+                  <div className="lt_transcript_empty_icon">
+                    <svg
+                      width="48"
+                      height="48"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      xmlns="http://www.w3.org/2000/svg"
+                    >
+                      <path
+                        d="M22 16.92V19.92C22.0011 20.1985 21.9441 20.4742 21.8325 20.7293C21.7209 20.9845 21.5573 21.2136 21.3521 21.4019C21.1468 21.5901 20.9046 21.7335 20.6407 21.8227C20.3769 21.9119 20.0974 21.9451 19.82 21.92C16.7428 21.5856 13.787 20.5341 11.19 18.85C8.77382 17.3147 6.72533 15.2662 5.18999 12.85C3.49997 10.2412 2.44824 7.27099 2.11999 4.18C2.095 3.90347 2.12787 3.62476 2.21649 3.36162C2.30512 3.09849 2.44756 2.85669 2.63476 2.65162C2.82196 2.44655 3.0498 2.28271 3.30379 2.17052C3.55777 2.05833 3.83233 2.00026 4.10999 2H7.10999C7.5953 1.99522 8.06579 2.16708 8.43376 2.48353C8.80173 2.79999 9.04207 3.23945 9.10999 3.72C9.23662 4.68007 9.47144 5.62273 9.80999 6.53C9.94454 6.88792 9.97366 7.27691 9.8939 7.65088C9.81415 8.02485 9.62886 8.36811 9.35999 8.64L8.08999 9.91C9.51355 12.4135 11.5765 14.4765 14.08 15.9L15.35 14.63C15.6219 14.3611 15.9651 14.1758 16.3391 14.0961C16.7131 14.0163 17.1021 14.0454 17.46 14.18C18.3673 14.5185 19.3099 14.7534 20.27 14.88C20.7558 14.9485 21.1996 15.1907 21.5177 15.5627C21.8359 15.9347 22.0057 16.4108 22 16.92Z"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </div>
+                  <div className="lt_transcript_empty_title">
+                    Waiting for Connection
+                  </div>
+                  <div className="lt_transcript_empty_subtitle">
+                    Please login to Amazon Connect to start receiving calls
+                  </div>
+                  <div className="lt_transcript_empty_steps">
+                    <div className="lt_step_item">
+                      <span className="lt_step_number">1</span>
+                      <span className="lt_step_text">
+                        Login to Amazon Connect CCP
+                      </span>
+                    </div>
+                    <div className="lt_step_item">
+                      <span className="lt_step_number">2</span>
+                      <span className="lt_step_text">
+                        Set your status to Available
+                      </span>
+                    </div>
+                    <div className="lt_step_item">
+                      <span className="lt_step_number">3</span>
+                      <span className="lt_step_text">
+                        Accept incoming call
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                // Logged in but no active call - Ready to listen
+                <div className="lt_transcript_ready_state">
+                  <div className="lt_ready_icon_container">
+                    <div className="lt_ready_icon">
+                      <svg
+                        width="40"
+                        height="40"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                      >
+                        <path
+                          d="M12 1C12 1 12 1 12 1C5.92487 1 1 5.92487 1 12C1 18.0751 5.92487 23 12 23C18.0751 23 23 18.0751 23 12C23 5.92487 18.0751 1 12 1Z"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                        />
+                        <path
+                          d="M8 14C8 14 9.5 16 12 16C14.5 16 16 14 16 14"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                        />
+                        <circle cx="9" cy="10" r="1" fill="currentColor" />
+                        <circle cx="15" cy="10" r="1" fill="currentColor" />
+                      </svg>
+                    </div>
+                    <div className="lt_ready_pulse"></div>
+                  </div>
+                  <div className="lt_ready_title">Ready to Listen</div>
+                  <div className="lt_ready_subtitle">
+                    Waiting for incoming calls. The live transcript will appear
+                    here automatically once a call is connected.
+                  </div>
+                  <div className="lt_ready_status">
+                    <span className="lt_ready_dot"></span>
+                    <span>Agent Online</span>
+                  </div>
+                </div>
+              )
+            ) : (
+              <div className="lt_chat">
+                {transcripts.map((t, idx) => {
+                  const role = getTurnRole(t.speaker);
+                  const rowClass =
+                    role === "agent"
+                      ? "lt_row lt_row--right"
+                      : "lt_row lt_row--left";
+                  const bubbleClass =
+                    role === "agent"
+                      ? "lt_bubble lt_bubble--agent"
+                      : role === "customer"
+                      ? "lt_bubble lt_bubble--customer"
+                      : "lt_bubble lt_bubble--unknown";
+
+                  return (
+                    <div key={idx} className={rowClass}>
+                      <div className={bubbleClass}>
+                        <div className="lt_meta">
+                          <span className="lt_speaker">
+                            {String(t?.speaker || "UNKNOWN").toUpperCase()}
+                          </span>
+                          <span className="lt_time">
+                            {formatOffsetToTime(t?.begin)}
+                          </span>
+                        </div>
+                        <div className="lt_text">{t?.text || ""}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {isCallConnected ? (
+              <div className="lt_row lt_row--left" aria-label="Typing">
+                <div className="lt_bubble lt_bubble--unknown lt_typing_bubble">
+                  <div className="lt_typing_dots" aria-hidden="true">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </main>
+  );
+
   return (
-    <div className="live_transcript_layout">
+    <div
+      className={`live_transcript_layout${
+        isTranscriptOpen ? " lt_layout_three_col" : " lt_layout_two_col"
+      }`}
+    >
       {/* LEFT: Amazon Connect CCP */}
       <aside className="lt_left_ccp">
         <div className="live_transcript_header lt_left_ccp_header">
@@ -467,160 +626,7 @@ const LiveTranscript = () => {
         </div>
       </aside>
 
-      {/* CENTER: Transcript */}
-      <main className="lt_center">
-        <div className="live_transcript_center_body">
-          <div className="live_transcript_card lt_transcript_card">
-            {/* Streaming indicator - shows when call is active */}
-            {isCallConnected && (
-              <div className="lt_transcript_status_bar">
-                <div className="lt_streaming_badge">Live</div>
-              </div>
-            )}
-            <div
-              className="lt_transcript_scroller"
-              ref={transcriptScrollerRef}
-              onScroll={handleTranscriptScroll}
-            >
-              {transcripts.length === 0 ? (
-                !isConnected ? (
-                  // Not logged in - Show login steps
-                  <div className="lt_transcript_empty_state">
-                    <div className="lt_transcript_empty_icon">
-                      <svg
-                        width="48"
-                        height="48"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        xmlns="http://www.w3.org/2000/svg"
-                      >
-                        <path
-                          d="M22 16.92V19.92C22.0011 20.1985 21.9441 20.4742 21.8325 20.7293C21.7209 20.9845 21.5573 21.2136 21.3521 21.4019C21.1468 21.5901 20.9046 21.7335 20.6407 21.8227C20.3769 21.9119 20.0974 21.9451 19.82 21.92C16.7428 21.5856 13.787 20.5341 11.19 18.85C8.77382 17.3147 6.72533 15.2662 5.18999 12.85C3.49997 10.2412 2.44824 7.27099 2.11999 4.18C2.095 3.90347 2.12787 3.62476 2.21649 3.36162C2.30512 3.09849 2.44756 2.85669 2.63476 2.65162C2.82196 2.44655 3.0498 2.28271 3.30379 2.17052C3.55777 2.05833 3.83233 2.00026 4.10999 2H7.10999C7.5953 1.99522 8.06579 2.16708 8.43376 2.48353C8.80173 2.79999 9.04207 3.23945 9.10999 3.72C9.23662 4.68007 9.47144 5.62273 9.80999 6.53C9.94454 6.88792 9.97366 7.27691 9.8939 7.65088C9.81415 8.02485 9.62886 8.36811 9.35999 8.64L8.08999 9.91C9.51355 12.4135 11.5765 14.4765 14.08 15.9L15.35 14.63C15.6219 14.3611 15.9651 14.1758 16.3391 14.0961C16.7131 14.0163 17.1021 14.0454 17.46 14.18C18.3673 14.5185 19.3099 14.7534 20.27 14.88C20.7558 14.9485 21.1996 15.1907 21.5177 15.5627C21.8359 15.9347 22.0057 16.4108 22 16.92Z"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                    </div>
-                    <div className="lt_transcript_empty_title">
-                      Waiting for Connection
-                    </div>
-                    <div className="lt_transcript_empty_subtitle">
-                      Please login to Amazon Connect to start receiving calls
-                    </div>
-                    <div className="lt_transcript_empty_steps">
-                      <div className="lt_step_item">
-                        <span className="lt_step_number">1</span>
-                        <span className="lt_step_text">
-                          Login to Amazon Connect CCP
-                        </span>
-                      </div>
-                      <div className="lt_step_item">
-                        <span className="lt_step_number">2</span>
-                        <span className="lt_step_text">
-                          Set your status to Available
-                        </span>
-                      </div>
-                      <div className="lt_step_item">
-                        <span className="lt_step_number">3</span>
-                        <span className="lt_step_text">
-                          Accept incoming call
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  // Logged in but no active call - Ready to listen
-                  <div className="lt_transcript_ready_state">
-                    <div className="lt_ready_icon_container">
-                      <div className="lt_ready_icon">
-                        <svg
-                          width="40"
-                          height="40"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          xmlns="http://www.w3.org/2000/svg"
-                        >
-                          <path
-                            d="M12 1C12 1 12 1 12 1C5.92487 1 1 5.92487 1 12C1 18.0751 5.92487 23 12 23C18.0751 23 23 18.0751 23 12C23 5.92487 18.0751 1 12 1Z"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                          />
-                          <path
-                            d="M8 14C8 14 9.5 16 12 16C14.5 16 16 14 16 14"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                          />
-                          <circle cx="9" cy="10" r="1" fill="currentColor" />
-                          <circle cx="15" cy="10" r="1" fill="currentColor" />
-                        </svg>
-                      </div>
-                      <div className="lt_ready_pulse"></div>
-                    </div>
-                    <div className="lt_ready_title">Ready to Listen</div>
-                    <div className="lt_ready_subtitle">
-                      Waiting for incoming calls. The live transcript will
-                      appear here automatically once a call is connected.
-                    </div>
-                    <div className="lt_ready_status">
-                      <span className="lt_ready_dot"></span>
-                      <span>Agent Online</span>
-                    </div>
-                  </div>
-                )
-              ) : (
-                <div className="lt_chat">
-                  {transcripts.map((t, idx) => {
-                    const role = getTurnRole(t.speaker);
-                    const rowClass =
-                      role === "agent"
-                        ? "lt_row lt_row--right"
-                        : "lt_row lt_row--left";
-                    const bubbleClass =
-                      role === "agent"
-                        ? "lt_bubble lt_bubble--agent"
-                        : role === "customer"
-                        ? "lt_bubble lt_bubble--customer"
-                        : "lt_bubble lt_bubble--unknown";
-
-                    return (
-                      <div key={idx} className={rowClass}>
-                        <div className={bubbleClass}>
-                          <div className="lt_meta">
-                            <span className="lt_speaker">
-                              {String(t?.speaker || "UNKNOWN").toUpperCase()}
-                            </span>
-                            <span className="lt_time">
-                              {formatOffsetToTime(t?.begin)}
-                            </span>
-                          </div>
-                          <div className="lt_text">{t?.text || ""}</div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {isCallConnected ? (
-                <div className="lt_row lt_row--left" aria-label="Typing">
-                  <div className="lt_bubble lt_bubble--unknown lt_typing_bubble">
-                    <div className="lt_typing_dots" aria-hidden="true">
-                      <span />
-                      <span />
-                      <span />
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          </div>
-        </div>
-      </main>
-
-      {/* RIGHT: AI Suggestions Panel */}
+      {/* CENTER: AI Suggestions Panel */}
       <aside className="lt_right lt_ai_panel">
         {/* USER DETAILS - Commented out per request
         <div className="live_transcript_card lt_right_section">
@@ -682,6 +688,17 @@ const LiveTranscript = () => {
               <div className="lt_ai_count">{copilotCards.length}</div>
             )}
             <div className="lt_ai_badge">Live</div>
+            <div className="lt_ai_spacer" aria-hidden="true" />
+            <button
+              type="button"
+              className="lt_ai_transcript_button"
+              onClick={() => setIsTranscriptOpen((prev) => !prev)}
+              aria-pressed={isTranscriptOpen}
+              aria-label={isTranscriptOpen ? "Collapse transcript" : "Expand transcript"}
+              title={isTranscriptOpen ? "Collapse transcript" : "Expand transcript"}
+            >
+              {isTranscriptOpen ? "<" : ">"}
+            </button>
           </div>
 
           <div className="lt_ai_body" ref={suggestionsScrollerRef}>
@@ -848,6 +865,20 @@ const LiveTranscript = () => {
           </div>
         </div>
       </aside>
+
+      {isTranscriptOpen ? (
+        <div className="lt_transcript_panel_wrap">
+          <button
+            type="button"
+            className="lt_transcript_close"
+            onClick={() => setIsTranscriptOpen(false)}
+            aria-label="Close transcript"
+          >
+            {"<"}
+          </button>
+          {transcriptPanel}
+        </div>
+      ) : null}
     </div>
   );
 };
