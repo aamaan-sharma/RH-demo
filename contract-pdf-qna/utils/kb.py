@@ -132,7 +132,7 @@ def _retrieve_policy_chunks_for_claims(docs: dict, query: str, k: int = 6):
                 src = metadata.get("source")
             header = f"Clause {i}"
             if src:
-                tmp = src.get("title", "kk")
+                tmp = src.get("title", "")
                 header += f" ({tmp})"
             text_lines.append(header)
             text_lines.append(content)
