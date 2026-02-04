@@ -26,7 +26,7 @@ from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from config import MILVUS_HOST
 from tqdm import tqdm
 
-collections_name = ["Arizona_RE_ShieldEssential", "Arizona_RE_ShieldPlus", "Arizona_DTC_ShieldPlatinum", "Arizona_DTC_ShieldSilver", "Arizona_DTC_ShieldGold", "California_RE_ShieldEssential", "California_RE_ShieldPlus", "California_DTC_ShieldPlatinum", "California_DTC_ShieldSilver", "California_DTC_ShieldGold", "Georgia_RE_ShieldEssential", "Georgia_RE_ShieldPlus", "Georgia_DTC_ShieldPlatinum", "Georgia_DTC_ShieldSilver", "Georgia_DTC_ShieldGold", "Maryland_RE_ShieldEssential", "Maryland_RE_ShieldPlus", "Maryland_DTC_ShieldPlatinum", "Maryland_DTC_ShieldSilver", "Maryland_DTC_ShieldGold", "Minnesota_RE_ShieldEssential", "Minnesota_RE_ShieldPlus", "Minnesota_DTC_ShieldPlatinum", "Minnesota_DTC_ShieldSilver", "Minnesota_DTC_ShieldGold", "Nevada_RE_ShieldEssential", "Nevada_RE_ShieldPlus", "Nevada_DTC_ShieldPlatinum", "Nevada_DTC_ShieldSilver", "Nevada_DTC_ShieldGold", "Texas_RE_ShieldEssential", "Texas_RE_ShieldPlus", "Texas_DTC_ShieldPlatinum", "Texas_DTC_ShieldSilver", "Texas_DTC_ShieldGold", "Utah_RE_ShieldEssential", "Utah_RE_ShieldPlus", "Utah_DTC_ShieldPlatinum", "Utah_DTC_ShieldSilver", "Utah_DTC_ShieldGold", "Wisconsin_RE_ShieldEssential", "Wisconsin_RE_ShieldPlus", "Wisconsin_DTC_ShieldPlatinum", "Wisconsin_DTC_ShieldSilver", "Wisconsin_DTC_ShieldGold", "Arizona_RE_ShieldComplete"] 
+collections_name = ["policies"] 
 connections.connect(host=MILVUS_HOST, port="19530")
 collections_vector_db = {}
 
@@ -49,7 +49,7 @@ preloadCollections()
 
 
 def get_vector_db(collection_name: str) -> Milvus:
-    vector_db1 = collections_vector_db.get(collection_name, None)
+    vector_db1 = collections_vector_db.get("policies", None)
     if vector_db1 ==  None:
         raise Exception(f"Milvus collection {collection_name!r} not found")
     return vector_db1
@@ -59,10 +59,9 @@ def get_vector_db(collection_name: str) -> Milvus:
 #help with repeated questions
 @lru_cache(maxsize=32)
 def cache_fetch_chunks(selected_collection_name, query, k):
-    vector_db1 = get_vector_db(selected_collection_name)
-    retriever = vector_db1.as_retriever(search_kwargs={"k": max(1, min(int(k), 12))})
-
-    raw_docs = retriever.get_relevant_documents(query)
+    vector_db1 = get_vector_db("policies")
+    retriever = vector_db1.as_retriever(search_kwargs={"k": max(1, min(int(k), 12)), "expr": f"policyId == '{selected_collection_name.lower()}'"})
+    raw_docs = retriever.invoke(query)
     return raw_docs
 
 def _retrieve_policy_chunks_for_claims(docs: dict, query: str, k: int = 6):
@@ -130,10 +129,11 @@ def _retrieve_policy_chunks_for_claims(docs: dict, query: str, k: int = 6):
             # Build a readable blob for legacy referred clauses page
             src = ""
             if isinstance(metadata, dict):
-                src = metadata.get("source") or metadata.get("file") or metadata.get("document") or ""
+                src = metadata.get("source")
             header = f"Clause {i}"
             if src:
-                header += f" ({src})"
+                tmp = src.get("title", "kk")
+                header += f" ({tmp})"
             text_lines.append(header)
             text_lines.append(content)
             text_lines.append("")

@@ -2264,7 +2264,7 @@ def process_live_copilot_question(
             vector_db1 = get_vector_db(selected_collection_name)
             
             # Initialize retriever
-            retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
+            retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K, "expr": f"policyId == '{selected_collection_name.lower()}'"})
             
             # Initialize LLMs for Infer mode
             llm = ChatOpenAI(temperature=0.0, model="gpt-4o")
@@ -2533,7 +2533,7 @@ def start():
                     with tracer.start_as_current_span('llm-retriever-initialization'):
                         llm2 = ChatOpenAI(temperature=0.0, model="ft:gpt-3.5-turbo-0613:mindstix::8YYD56aA")
                         llm = ChatOpenAI(temperature=0.0, model="gpt-4o")
-                        retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
+                        retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K, "expr": f"policyId == '{selected_collection_name.lower()}'"})
                     
                     with tracer.start_as_current_span('memory_update'):
                         memory1.clear()
@@ -2637,7 +2637,7 @@ def start():
                         llm3 = ChatOpenAI(temperature=0.0, model="ft:gpt-3.5-turbo-0613:mindstix::8YYD56aA")
                         llm = ChatOpenAI(temperature=0.0, model='gpt-4o')
                         llm2 = ChatOpenAI(temperature=0.0, model='gpt-4o')
-                        retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
+                        retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K, "expr": f"policyId == '{selected_collection_name.lower()}'"})
                         
                     with tracer.start_as_current_span('memory_update'):
                         memory1.clear()
@@ -2951,6 +2951,11 @@ def chat_history():
                 chat["relevantChunks"] = chat.get("relevant_chunks")
             if "underlying_model" in chat and "underlyingModel" not in chat:
                 chat["underlyingModel"] = chat.get("underlying_model")
+            for x in chat["relevantChunks"]:
+                if type(x) is dict and "metadata" in x:
+                    x= x["metadata"]
+                    if "source" in x:
+                        x["source"] = x["source"].get("title", None) if type(x["source"]) is dict else x["source"]
 
         # IMPORTANT:
         # Transcript (Claims/Calls) conversations must always be treated as "Calls" mode for UI routing.
@@ -4813,7 +4818,7 @@ def _claims_background_process_transcript(
             selected_state=selected_state,
         )
         vector_db1 = get_vector_db(selected_collection_name)
-        retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
+        retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K, "expr": f"policyId == '{selected_collection_name.lower()}'"})
 
         if gpt_model == "Search":
             llm2 = ChatOpenAI(temperature=0.0, model="ft:gpt-3.5-turbo-0613:mindstix::8YYD56aA")
@@ -5956,7 +5961,7 @@ def process_transcript():
 
                 vector_db1 = get_vector_db(selected_collection_name)
                 
-                retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
+                retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K, "expr": f"policyId == '{selected_collection_name.lower()}'"})
                 
                 if gpt_model == "Search":
                     llm2 = ChatOpenAI(temperature=0.0, model="ft:gpt-3.5-turbo-0613:mindstix::8YYD56aA")
@@ -6632,7 +6637,7 @@ def _process_transcript_core(data, yield_sse_fn=None):
                     selected_plan_norm, collection_mapping.get(contract_type_norm, {}).get("default")
                 )
                 vector_db1 = get_vector_db(selected_collection_name)
-                retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
+                retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K, "expr": f"policyId == '{selected_collection_name.lower()}'"})
 
                 if gpt_model == "Search":
                     llm2 = ChatOpenAI(temperature=0.0, model="ft:gpt-3.5-turbo-0613:mindstix::8YYD56aA")
