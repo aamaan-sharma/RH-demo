@@ -97,6 +97,29 @@ def _ctx_from_parent(parent_span):
     except Exception:
         return None
 
+
+def _is_answer_fallback(answer_text: str) -> bool:
+    """
+    Answer-quality helper: detect common fallback/refusal phrases.
+    Used only for resolution_score and relevance_score; must not affect security metrics.
+    """
+    if not answer_text or not isinstance(answer_text, str):
+        return True
+    t = (answer_text or "").strip().lower()
+    if not t:
+        return True
+    fallback_phrases = [
+        "i couldn't find", "i could not find", "i don't have", "i'm unable to",
+        "i am unable to", "i can't", "i cannot", "no relevant", "not enough information",
+        "i don't have access", "i'm not able", "i am not able", "no policy language",
+        "couldn't find relevant", "no supporting",
+    ]
+    for p in fallback_phrases:
+        if p in t:
+            return True
+    return False
+
+
 _MONITORING_AVAILABLE = False
 
 # Monitoring stack (whylogs/langkit/sentence-transformers/bigquery) is optional.
@@ -157,6 +180,17 @@ def func_Binsert(parent1, dicts,prompt):
     if not _MONITORING_AVAILABLE:
         return
     with tracer.start_as_current_span('func_Binsert', context=_ctx_from_parent(parent1)) as child2:
+        # Answer-quality metrics (computed in app.py / live_copilot.py); default 0 if missing.
+        relevance_score = 0
+        resolution_score = 0
+        try:
+            relevance_score = int(dicts.get('relevance_score', 0) or 0)
+            resolution_score = int(dicts.get('resolution_score', 0) or 0)
+        except (TypeError, ValueError):
+            pass
+        relevance_score = 1 if relevance_score else 0
+        resolution_score = 1 if resolution_score else 0
+
         # Get the current time
         current_time = datetime.now()
 
@@ -181,11 +215,22 @@ def func_Binsert(parent1, dicts,prompt):
                 'difficult_words':dicts['prompt.difficult_words'],
                 'ontopic':dicts['ontopic'],
                 'offtopic':dicts["offtopic"],
-                'Products':dicts['closest_topic']
+                'Products':dicts['closest_topic'],
+                'relevance_score': relevance_score,
+                'resolution_score': resolution_score,
 
             },
             # Add more dictionaries for additional rows
         ]
+
+        # Attach answer-quality metrics to current span (no new spans).
+        try:
+            span = trace.get_current_span()
+            if span and span.get_span_context().is_valid:
+                span.set_attribute("score.relevance_score", relevance_score)
+                span.set_attribute("score.resolution_score", resolution_score)
+        except Exception:
+            pass
 
         # Insert the data into the table
         errors = client.insert_rows(table, data_to_insert)

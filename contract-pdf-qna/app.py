@@ -81,7 +81,7 @@ except ImportError:
 
 # Safe import of monitoring_module - handle missing dependencies gracefully
 # try:
-from monitoring_module import q_monitor, tracer, llm_trace_to_jaeger
+from monitoring_module import q_monitor, tracer, llm_trace_to_jaeger, func_Binsert, security_scores, _is_answer_fallback
 # except ImportError as e:
 #     print(f"Warning: Could not import monitoring_module: {e}")
 #     print("Monitoring features will be disabled. The app will continue to run.")
@@ -2593,11 +2593,6 @@ def start():
 
                         print(f"time taken for standalone = {time() - start}")
 
-                    with tracer.start_as_current_span('q_monitor') as parentq:
-                        t = threading.Thread(target=q_monitor, args=(parentq,entered_query,))
-                        t.start()
-                        # q_monitor(parentq,entered_query)
-
                     with tracer.start_as_current_span('llm-RetrievalQA-chain') as q:
                         # Using retrieval QA prompt from utils.prompts with dynamic question
                         # Create a custom prompt for this case since it has a dynamic question
@@ -2690,10 +2685,6 @@ def start():
                         a = threading.Thread(target=token_calculator, args=(tok1,))
                         a.start()
 
-                    with tracer.start_as_current_span('q_monitor') as parentq:
-                        t = threading.Thread(target=q_monitor, args=(parentq,entered_query,))
-                        t.start()
-
                     with tracer.start_as_current_span('llm-RetrievalQA-chain') as q:
                         qa = RetrievalQA.from_chain_type(llm=llm2, retriever=retriever, verbose=True)
                         agent_response = input_prompt(standalone_result, qa, llm)
@@ -2750,6 +2741,21 @@ def start():
                     "latency": latency,
                     "word_count": word_count
                 }
+
+                # Score insert with answer-quality metrics (relevance_score, resolution_score).
+                # Security metrics from security_scores; relevance/resolution computed from answer and relevant_docs.
+                def _run_monitor_after_answer():
+                    with tracer.start_as_current_span('q_monitor') as parentq:
+                        dicts = security_scores(parentq, entered_query)
+                        if dicts:
+                            answer_str = str(agent_resp or "").strip()
+                            is_fallback = _is_answer_fallback(answer_str)
+                            resolution_score = 1 if (answer_str and not is_fallback) else 0
+                            relevance_score = 1 if (resolution_score == 1 and (relevant_documents or "").strip() and not is_fallback) else 0
+                            dicts['relevance_score'] = relevance_score
+                            dicts['resolution_score'] = resolution_score
+                            func_Binsert(parentq, dicts, entered_query)
+                threading.Thread(target=_run_monitor_after_answer, daemon=True).start()
 
                 if conversation_id is None or conversation_id == "":
                     print(
