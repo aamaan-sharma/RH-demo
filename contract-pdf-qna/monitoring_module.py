@@ -176,7 +176,7 @@ except Exception:
 
 
 
-def func_Binsert(parent1, dicts,prompt):
+def func_Binsert(parent1, dicts,prompt, session_id=None, user_email=None, answer_text=None):
     if not _MONITORING_AVAILABLE:
         return
     with tracer.start_as_current_span('func_Binsert', context=_ctx_from_parent(parent1)) as child2:
@@ -222,6 +222,12 @@ def func_Binsert(parent1, dicts,prompt):
             },
             # Add more dictionaries for additional rows
         ]
+        if session_id is not None:
+            data_to_insert[0]['session_id'] = session_id
+        if user_email is not None:
+            data_to_insert[0]['user_email'] = user_email
+        if answer_text is not None:
+            data_to_insert[0]['answer_text'] = answer_text
 
         # Attach answer-quality metrics to current span (no new spans).
         try:

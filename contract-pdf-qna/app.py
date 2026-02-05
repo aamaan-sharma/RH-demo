@@ -2588,7 +2588,7 @@ def start():
                         print(standalone_result)
                         res1, tok1 = handler.infi()
                         llm_trace_to_jaeger(res1, tok1)
-                        a = threading.Thread(target=token_calculator, args=(tok1,))
+                        a = threading.Thread(target=token_calculator, args=(tok1,), kwargs={"session_id": conversation_id})
                         a.start()
 
                         print(f"time taken for standalone = {time() - start}")
@@ -2612,7 +2612,7 @@ def start():
                         agent_resp = qa_resp["result"] if isinstance(qa_resp, dict) else qa_resp
                         res2, tok2 = handler.infi()
                         llm_trace_to_jaeger(res2, tok2)
-                        b = threading.Thread(target=token_calculator, args=(tok2,))
+                        b = threading.Thread(target=token_calculator, args=(tok2,), kwargs={"session_id": conversation_id})
                         b.start()
                     
                     with tracer.start_as_current_span('relevant_documents'):
@@ -2682,7 +2682,7 @@ def start():
                         print(standalone_result)
                         res1, tok1 = handler.infi()
                         llm_trace_to_jaeger(res1, tok1)
-                        a = threading.Thread(target=token_calculator, args=(tok1,))
+                        a = threading.Thread(target=token_calculator, args=(tok1,), kwargs={"session_id": conversation_id})
                         a.start()
 
                     with tracer.start_as_current_span('llm-RetrievalQA-chain') as q:
@@ -2691,7 +2691,7 @@ def start():
                         agent_resp = agent_response["output"]
                         res2, tok2 = handler.infi()
                         llm_trace_to_jaeger(res2, tok2)
-                        b = threading.Thread(target=token_calculator, args=(tok2,))
+                        b = threading.Thread(target=token_calculator, args=(tok2,), kwargs={"session_id": conversation_id})
                         b.start()
                     
                     with tracer.start_as_current_span('relevant_documents'):
@@ -2754,7 +2754,7 @@ def start():
                             relevance_score = 1 if (resolution_score == 1 and (relevant_documents or "").strip() and not is_fallback) else 0
                             dicts['relevance_score'] = relevance_score
                             dicts['resolution_score'] = resolution_score
-                            func_Binsert(parentq, dicts, entered_query)
+                            func_Binsert(parentq, dicts, entered_query, session_id=conversation_id, user_email=user_email, answer_text=agent_resp if agent_resp else None)
                 threading.Thread(target=_run_monitor_after_answer, daemon=True).start()
 
                 if conversation_id is None or conversation_id == "":

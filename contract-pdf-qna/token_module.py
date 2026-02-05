@@ -101,11 +101,11 @@ else:
     table_ref = None
     table = None
 
-def token_calculator(dict):
+def token_calculator(dict, session_id=None):
     for i in dict:
-        token_insert_to_bigquery(i)
+        token_insert_to_bigquery(i, session_id=session_id)
 
-def token_insert_to_bigquery(dic):
+def token_insert_to_bigquery(dic, session_id=None):
     if not BIGQUERY_ENABLED:
         # Keep the rest of the app working even if BigQuery is not configured.
         # You can enable by mounting /run/secrets/bigquery.json or setting env vars.
@@ -124,6 +124,8 @@ def token_insert_to_bigquery(dic):
         },
         # Add more dictionaries for additional rows
     ]
+    if session_id is not None:
+        data_to_insert[0]['session_id'] = session_id
     # Insert the data into the table
     errors = client_t.insert_rows(table, data_to_insert)
     if not errors:
