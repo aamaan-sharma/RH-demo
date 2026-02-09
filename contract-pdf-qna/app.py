@@ -2947,15 +2947,30 @@ def chat_history():
             if chat_id in feedback_dict:
                 chat["reaction"] = feedback_dict[chat_id]
             # Normalize chunk fields for frontend consumption (keep backwards-compatible snake_case too)
+            #
+            # IMPORTANT: We intentionally keep full metadata (including `metadata.source` object)
+            # so the frontend can show page / bbox / clause numbers when available.
+            if "relevant_chunks_detail" in chat and "relevantChunksDetail" not in chat:
+                chat["relevantChunksDetail"] = chat.get("relevant_chunks_detail")
             if "relevant_chunks" in chat and "relevantChunks" not in chat:
                 chat["relevantChunks"] = chat.get("relevant_chunks")
+            # If older records only have detail objects, derive the text-only list for UI + legacy uses.
+            if (not chat.get("relevantChunks")) and chat.get("relevantChunksDetail"):
+                try:
+                    derived = []
+                    for d in chat.get("relevantChunksDetail") or []:
+                        if isinstance(d, dict):
+                            txt = str(d.get("content") or "").strip()
+                            if txt:
+                                derived.append(txt)
+                        elif isinstance(d, str) and d.strip():
+                            # tolerate accidental string entries
+                            derived.append(d.strip())
+                    chat["relevantChunks"] = derived
+                except Exception:
+                    chat["relevantChunks"] = []
             if "underlying_model" in chat and "underlyingModel" not in chat:
                 chat["underlyingModel"] = chat.get("underlying_model")
-            for x in chat["relevantChunks"]:
-                if type(x) is dict and "metadata" in x:
-                    x= x["metadata"]
-                    if "source" in x:
-                        x["source"] = x["source"].get("title", None) if type(x["source"]) is dict else x["source"]
 
         # IMPORTANT:
         # Transcript (Claims/Calls) conversations must always be treated as "Calls" mode for UI routing.
@@ -3650,6 +3665,20 @@ def claims_followup_chat():
             now_ts = datetime.utcnow()
             underlying = docs.get("underlying_model") or "Search"
             try:
+                # Persist both:
+                # - relevant_chunks: list[str] (text-only, stable API contract)
+                # - relevant_chunks_detail: list[dict] with {content, metadata} (full provenance)
+                policy_chunk_texts = []
+                try:
+                    for ch in policy_chunks or []:
+                        if isinstance(ch, dict):
+                            t = str(ch.get("content") or "").strip()
+                            if t:
+                                policy_chunk_texts.append(t)
+                        elif isinstance(ch, str) and ch.strip():
+                            policy_chunk_texts.append(ch.strip())
+                except Exception:
+                    policy_chunk_texts = []
                 qna_collection.update_one(
                     {"_id": ObjectId(conversation_id)},
                     {
@@ -3658,7 +3687,8 @@ def claims_followup_chat():
                                 "chat_id": chat_id,
                                 "entered_query": entered_query,
                                 "response": ai_text,
-                                "relevant_chunks": policy_chunks or [],
+                                "relevant_chunks": policy_chunk_texts,
+                                "relevant_chunks_detail": policy_chunks or [],
                                 "relevant_docs": referred_docs_text or "",
                                 "gpt_model": "Calls",
                                 "underlying_model": underlying,
@@ -4893,6 +4923,7 @@ def _claims_background_process_transcript(
             # Persist incremental chat to Mongo
             try:
                 chunks = result.get("relevantChunks") or []
+                chunks_detail = result.get("relevantChunksDetail") or []
                 relevant_docs_text = "\n\n---\n\n".join([str(c) for c in chunks if str(c).strip()])
                 qna_collection.update_one(
                     {"_id": ObjectId(cid)},
@@ -4903,6 +4934,7 @@ def _claims_background_process_transcript(
                                 "entered_query": display_question_text,
                                 "response": result.get("answer", ""),
                                 "relevant_chunks": chunks,
+                                "relevant_chunks_detail": chunks_detail,
                                 "relevant_docs": relevant_docs_text,
                                 "gpt_model": "Calls",
                                 "underlying_model": gpt_model,
@@ -4925,6 +4957,7 @@ def _claims_background_process_transcript(
                     "question": display_question_text,
                     "answer": result.get("answer", ""),
                     "relevantChunks": result.get("relevantChunks", []),
+                    "relevantChunksDetail": result.get("relevantChunksDetail", []),
                     "confidence": result.get("confidence", 0.0),
                     "latency": result.get("latency", 0.0),
                     "questionType": result.get("questionType"),
@@ -5780,6 +5813,7 @@ def process_transcript():
                             "question": c.get("entered_query"),
                             "answer": c.get("response"),
                             "relevantChunks": c.get("relevant_chunks", []),
+                            "relevantChunksDetail": c.get("relevant_chunks_detail", []),
                             "latency": c.get("latency", 0.0),
                             "confidence": c.get("confidence", 0.0),
                         }
@@ -6114,6 +6148,7 @@ def process_transcript():
             for res in results:
                 # chunks are list[str] in API contract; keep a text blob for legacy /referred-clauses
                 chunks = res.get("relevantChunks", []) or []
+                chunks_detail = res.get("relevantChunksDetail", []) or []
                 relevant_docs_text = "\n\n---\n\n".join([str(c) for c in chunks if str(c).strip()])
                 transcript_chats.append({
                     "chat_id": res.get("questionId"),
@@ -6121,6 +6156,7 @@ def process_transcript():
                     "response": res.get("answer", ""),
                     # For UI: keep chunks as JSON
                     "relevant_chunks": chunks,
+                    "relevant_chunks_detail": chunks_detail,
                     # For existing /referred-clauses UI: keep a text version too
                     "relevant_docs": relevant_docs_text,
                     # Conversation is a Calls mode conversation in UI; keep underlying model separately.

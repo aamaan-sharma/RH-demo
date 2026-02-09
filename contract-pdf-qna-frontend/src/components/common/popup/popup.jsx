@@ -8,11 +8,12 @@ const Popup = ({
   feedbackResponse,
   setFeedbackResponse,
   submitFeedback,
+  title = "Why was it not helpful?",
+  chipOptions = ["Doesn’t address my problem", "Inadequate", "Other"],
+  placeholder = "Please share your feedback here..",
 }) => {
   const [selectedChip, setSelectedChip] = useState(""); // Track the selected chip
   const textareaRef = useRef(null); // Ref to focus the textarea
-
-  const chipOptions = ["Doesn’t address my problem", "Inadequate", "Other"];
 
   const handleChipClick = (chip) => {
     setSelectedChip(chip);
@@ -46,7 +47,7 @@ const Popup = ({
   return (
     <div className="popup_wrapper" ref={popupRef}>
       <div className="header">
-        <div className="title">Why was it not helpful?</div>
+        <div className="title">{title}</div>
         <img
           src={cancelIcon}
           alt="cancel icon"
@@ -71,7 +72,7 @@ const Popup = ({
         <textarea
           ref={textareaRef} // Attach ref to the textarea
           className="form_control"
-          placeholder={"Please share your feedback here.."}
+          placeholder={placeholder}
           rows="3"
           value={feedbackResponse}
           onKeyDown={(e) => {

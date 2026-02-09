@@ -214,6 +214,11 @@ const Home = ({ bearerToken, setBearerToken }) => {
   const hasFinalAnswerChat = chats?.some(
     (c) => c?.entered_query === "Final Answer for transcript",
   );
+  const canReviewProceed =
+    Boolean(conversationId) &&
+    (hasFinalAnswerChat || Boolean((finalSummary || "").trim())) &&
+    callsGenerationStage !== "generating" &&
+    !isCallsProcessing;
 
   axios.interceptors.request.use(setHeaders, (error) => {
     Promise.reject(error);
@@ -589,6 +594,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
             questions.length > 0
               ? questions.map((q) => {
                   const chunks = q.relevantChunks || [];
+                  const chunksDetail = q.relevantChunksDetail || q.relevant_chunks_detail || [];
                   const isFinal = q.questionId === "final_answer";
                   return {
                     entered_query: q.question,
@@ -598,6 +604,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
                     questionType: q.questionType,
                     userIntent: q.userIntent,
                     relevant_chunks: chunks,
+                    relevant_chunks_detail: chunksDetail,
                     underlying_model: requestBody.gptModel,
                     source: isFinal ? "final_answer" : "transcript_extracted",
                   };
@@ -722,6 +729,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
           if (viewKeyRef.current !== viewKeyAtStart) return;
           if (callsProcessRunIdRef.current !== runId) return;
           const chunks = q.relevantChunks || [];
+          const chunksDetail = q.relevantChunksDetail || q.relevant_chunks_detail || [];
           const isFinal = q.questionId === "final_answer";
           setChats((prev) => [
             ...(prev || []),
@@ -733,6 +741,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
               questionType: q.questionType,
               userIntent: q.userIntent,
               relevant_chunks: chunks,
+              relevant_chunks_detail: chunksDetail,
               underlying_model: requestBody.gptModel,
               source: isFinal ? "final_answer" : "transcript_extracted",
             },
@@ -1846,7 +1855,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
                           >
                             Show Transcript
                           </button>
-                          {conversationId ? (
+                          {canReviewProceed ? (
                             <button
                               type="button"
                               className="review_approve_button"
