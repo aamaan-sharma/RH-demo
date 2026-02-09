@@ -568,6 +568,43 @@
                 transform-origin: center;
               }
             }
+
+            .question_facts {
+              display: flex;
+              flex-wrap: wrap;
+              gap: 8px;
+              margin: 8px 0 10px 0;
+            }
+
+            .fact_chip {
+              display: inline-flex;
+              align-items: center;
+              gap: 6px;
+              padding: 6px 10px;
+              border-radius: 999px;
+              border: 1px solid #e6e6e6;
+              background: #fbfbfb;
+              max-width: 100%;
+              font-size: 12px;
+              line-height: 16px;
+              color: #2f3a57;
+              font-weight: 800;
+
+              .k {
+                color: #6b6b6b;
+                font-weight: 900;
+                white-space: nowrap;
+              }
+
+              .v {
+                color: #2f3a57;
+                font-weight: 900;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                max-width: 320px;
+              }
+            }
           }
         }
       }

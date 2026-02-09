@@ -226,15 +226,63 @@
         }
       }
 
-      .chunk_content {
+      .chunk_body {
         margin-top: 10px;
-        white-space: pre-wrap;
-        word-break: break-word;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .chunk_ref {
+        font-size: 12px;
+        font-weight: 800;
+        color: #2f3a57;
+        opacity: 0.9;
+      }
+
+      .chunk_meta_row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .meta_chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        border: 1px solid #e6e6e6;
+        background: #ffffff;
+        max-width: 100%;
+        font-size: 12px;
+        line-height: 16px;
+        color: #2f3a57;
+        font-weight: 800;
+
+        .k {
+          color: #6b6b6b;
+          font-weight: 900;
+          white-space: nowrap;
+        }
+
+        .v {
+          color: #2f3a57;
+          font-weight: 900;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          max-width: 340px;
+        }
+      }
+
+      .chunk_text {
         font-size: 13px;
         line-height: 18px;
         color: #333333;
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-          "Liberation Mono", "Courier New", monospace;
+        white-space: pre-wrap;
+        word-break: break-word;
+        overflow-wrap: anywhere;
       }
     }
   }
@@ -252,6 +300,26 @@
       align-items: center;
       justify-content: center;
       border-radius: 50%;
+      border: 1px solid transparent;
+
+      &.locked {
+        opacity: 0.45;
+        cursor: not-allowed;
+        img {
+          cursor: not-allowed;
+          filter: grayscale(1);
+        }
+      }
+
+      &.selected {
+        opacity: 1; // keep selected readable even when locked
+        border-color: #5e7bc6;
+        background: #eef1ff;
+        img {
+          filter: none;
+        }
+      }
+
       &.active {
         background-color: #F2F2F2;
       }

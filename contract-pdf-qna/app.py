@@ -2264,7 +2264,7 @@ def process_live_copilot_question(
             vector_db1 = get_vector_db(selected_collection_name)
             
             # Initialize retriever
-            retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
+            retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K, "expr": f"policyId == '{selected_collection_name.lower()}'"})
             
             # Initialize LLMs for Infer mode
             llm = ChatOpenAI(temperature=0.0, model="gpt-4o")
@@ -2533,7 +2533,7 @@ def start():
                     with tracer.start_as_current_span('llm-retriever-initialization'):
                         llm2 = ChatOpenAI(temperature=0.0, model="ft:gpt-3.5-turbo-0613:mindstix::8YYD56aA")
                         llm = ChatOpenAI(temperature=0.0, model="gpt-4o")
-                        retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
+                        retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K, "expr": f"policyId == '{selected_collection_name.lower()}'"})
                     
                     with tracer.start_as_current_span('memory_update'):
                         memory1.clear()
@@ -2637,7 +2637,7 @@ def start():
                         llm3 = ChatOpenAI(temperature=0.0, model="ft:gpt-3.5-turbo-0613:mindstix::8YYD56aA")
                         llm = ChatOpenAI(temperature=0.0, model='gpt-4o')
                         llm2 = ChatOpenAI(temperature=0.0, model='gpt-4o')
-                        retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
+                        retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K, "expr": f"policyId == '{selected_collection_name.lower()}'"})
                         
                     with tracer.start_as_current_span('memory_update'):
                         memory1.clear()
@@ -2947,8 +2947,28 @@ def chat_history():
             if chat_id in feedback_dict:
                 chat["reaction"] = feedback_dict[chat_id]
             # Normalize chunk fields for frontend consumption (keep backwards-compatible snake_case too)
+            #
+            # IMPORTANT: We intentionally keep full metadata (including `metadata.source` object)
+            # so the frontend can show page / bbox / clause numbers when available.
+            if "relevant_chunks_detail" in chat and "relevantChunksDetail" not in chat:
+                chat["relevantChunksDetail"] = chat.get("relevant_chunks_detail")
             if "relevant_chunks" in chat and "relevantChunks" not in chat:
                 chat["relevantChunks"] = chat.get("relevant_chunks")
+            # If older records only have detail objects, derive the text-only list for UI + legacy uses.
+            if (not chat.get("relevantChunks")) and chat.get("relevantChunksDetail"):
+                try:
+                    derived = []
+                    for d in chat.get("relevantChunksDetail") or []:
+                        if isinstance(d, dict):
+                            txt = str(d.get("content") or "").strip()
+                            if txt:
+                                derived.append(txt)
+                        elif isinstance(d, str) and d.strip():
+                            # tolerate accidental string entries
+                            derived.append(d.strip())
+                    chat["relevantChunks"] = derived
+                except Exception:
+                    chat["relevantChunks"] = []
             if "underlying_model" in chat and "underlyingModel" not in chat:
                 chat["underlyingModel"] = chat.get("underlying_model")
 
@@ -3645,6 +3665,20 @@ def claims_followup_chat():
             now_ts = datetime.utcnow()
             underlying = docs.get("underlying_model") or "Search"
             try:
+                # Persist both:
+                # - relevant_chunks: list[str] (text-only, stable API contract)
+                # - relevant_chunks_detail: list[dict] with {content, metadata} (full provenance)
+                policy_chunk_texts = []
+                try:
+                    for ch in policy_chunks or []:
+                        if isinstance(ch, dict):
+                            t = str(ch.get("content") or "").strip()
+                            if t:
+                                policy_chunk_texts.append(t)
+                        elif isinstance(ch, str) and ch.strip():
+                            policy_chunk_texts.append(ch.strip())
+                except Exception:
+                    policy_chunk_texts = []
                 qna_collection.update_one(
                     {"_id": ObjectId(conversation_id)},
                     {
@@ -3653,7 +3687,8 @@ def claims_followup_chat():
                                 "chat_id": chat_id,
                                 "entered_query": entered_query,
                                 "response": ai_text,
-                                "relevant_chunks": policy_chunks or [],
+                                "relevant_chunks": policy_chunk_texts,
+                                "relevant_chunks_detail": policy_chunks or [],
                                 "relevant_docs": referred_docs_text or "",
                                 "gpt_model": "Calls",
                                 "underlying_model": underlying,
@@ -4813,7 +4848,7 @@ def _claims_background_process_transcript(
             selected_state=selected_state,
         )
         vector_db1 = get_vector_db(selected_collection_name)
-        retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
+        retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K, "expr": f"policyId == '{selected_collection_name.lower()}'"})
 
         if gpt_model == "Search":
             llm2 = ChatOpenAI(temperature=0.0, model="ft:gpt-3.5-turbo-0613:mindstix::8YYD56aA")
@@ -4888,6 +4923,7 @@ def _claims_background_process_transcript(
             # Persist incremental chat to Mongo
             try:
                 chunks = result.get("relevantChunks") or []
+                chunks_detail = result.get("relevantChunksDetail") or []
                 relevant_docs_text = "\n\n---\n\n".join([str(c) for c in chunks if str(c).strip()])
                 qna_collection.update_one(
                     {"_id": ObjectId(cid)},
@@ -4898,6 +4934,7 @@ def _claims_background_process_transcript(
                                 "entered_query": display_question_text,
                                 "response": result.get("answer", ""),
                                 "relevant_chunks": chunks,
+                                "relevant_chunks_detail": chunks_detail,
                                 "relevant_docs": relevant_docs_text,
                                 "gpt_model": "Calls",
                                 "underlying_model": gpt_model,
@@ -4920,6 +4957,7 @@ def _claims_background_process_transcript(
                     "question": display_question_text,
                     "answer": result.get("answer", ""),
                     "relevantChunks": result.get("relevantChunks", []),
+                    "relevantChunksDetail": result.get("relevantChunksDetail", []),
                     "confidence": result.get("confidence", 0.0),
                     "latency": result.get("latency", 0.0),
                     "questionType": result.get("questionType"),
@@ -5775,6 +5813,7 @@ def process_transcript():
                             "question": c.get("entered_query"),
                             "answer": c.get("response"),
                             "relevantChunks": c.get("relevant_chunks", []),
+                            "relevantChunksDetail": c.get("relevant_chunks_detail", []),
                             "latency": c.get("latency", 0.0),
                             "confidence": c.get("confidence", 0.0),
                         }
@@ -5956,7 +5995,7 @@ def process_transcript():
 
                 vector_db1 = get_vector_db(selected_collection_name)
                 
-                retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
+                retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K, "expr": f"policyId == '{selected_collection_name.lower()}'"})
                 
                 if gpt_model == "Search":
                     llm2 = ChatOpenAI(temperature=0.0, model="ft:gpt-3.5-turbo-0613:mindstix::8YYD56aA")
@@ -6109,6 +6148,7 @@ def process_transcript():
             for res in results:
                 # chunks are list[str] in API contract; keep a text blob for legacy /referred-clauses
                 chunks = res.get("relevantChunks", []) or []
+                chunks_detail = res.get("relevantChunksDetail", []) or []
                 relevant_docs_text = "\n\n---\n\n".join([str(c) for c in chunks if str(c).strip()])
                 transcript_chats.append({
                     "chat_id": res.get("questionId"),
@@ -6116,6 +6156,7 @@ def process_transcript():
                     "response": res.get("answer", ""),
                     # For UI: keep chunks as JSON
                     "relevant_chunks": chunks,
+                    "relevant_chunks_detail": chunks_detail,
                     # For existing /referred-clauses UI: keep a text version too
                     "relevant_docs": relevant_docs_text,
                     # Conversation is a Calls mode conversation in UI; keep underlying model separately.
@@ -6230,6 +6271,7 @@ def _process_transcript_core(data, yield_sse_fn=None):
         conv_name = None
         transcript_status = "active"
         extraction_warning = None
+        _logpfx = "[INTERNAL_PROCESS]"
         
         try:
             # Note: `contactId` is used as the live session correlation key in this internal processor.
@@ -6295,10 +6337,22 @@ def _process_transcript_core(data, yield_sse_fn=None):
                     new_conversation = bool(data.get("newConversation", False))
                     requested_conversation_name = data.get("conversationName")
 
+                    # Keep raw contactId (no normalization)
                     contact_id = data.get("contactId")
                     agent_name = data.get("agentName")
                     # session correlation (prefer contactId)
                     session_id = (contact_id or data.get("sessionId") or "").strip()
+
+                    try:
+                        print(
+                            f"{_logpfx} request parsed: "
+                            f"transcriptFileName={transcript_file_name!r}, "
+                            f"gptModel={gpt_model!r}, extractQuestions={bool(extract_questions)}, "
+                            f"contactId={contact_id!r}, "
+                            f"agentName={agent_name!r}, session_id={session_id!r}"
+                        )
+                    except Exception:
+                        pass
 
                     # Validate required fields
                     if not transcript_file_name:
@@ -6333,6 +6387,7 @@ def _process_transcript_core(data, yield_sse_fn=None):
                     sp.set_attribute("claims.stage", "enrichment")
                     sp.set_attribute("claims.operation", "resolve_email")
                     user_email = None
+                    resolved_via = None
 
                     # (A) Best: resolve from sessions mapping (contactId -> email)
                     sessions_collection = db.get_collection("sessions")  # safer
@@ -6344,6 +6399,7 @@ def _process_transcript_core(data, yield_sse_fn=None):
                         )
                         if sess and sess.get("email"):
                             user_email = sess["email"]
+                            resolved_via = "sessions"
 
                     # (B) Fallback: resolve from agent_email_mapping (agentName -> email)
                     if not user_email and agent_name:
@@ -6354,6 +6410,7 @@ def _process_transcript_core(data, yield_sse_fn=None):
                         )
                         if m and m.get("email"):
                             user_email = m["email"]
+                            resolved_via = "agent_email_mapping"
 
                     if not user_email:
                         yield _sse("error", {
@@ -6365,6 +6422,15 @@ def _process_transcript_core(data, yield_sse_fn=None):
                         })
                         return
 
+                    try:
+                        print(
+                            f"{_logpfx} email resolved: "
+                            f"contactId={contact_id!r}, agentName={agent_name!r}, "
+                            f"user_email={user_email!r}, via={resolved_via!r}"
+                        )
+                    except Exception:
+                        pass
+
                 # --- Now same as your existing logic, starting from here ---
                 milvus_state = normalize_state_for_milvus(selected_state)
                 contract_type_norm = normalize_contract_type(contract_type)
@@ -6373,6 +6439,10 @@ def _process_transcript_core(data, yield_sse_fn=None):
                 # Use the existing per-user chat collection (same as Search/Infer) for transcript conversations.
                 qna_collection_user = f"chats_{user_email}"
                 qna_collection = db[qna_collection_user]
+                try:
+                    print(f"{_logpfx} Mongo target: db='FrontDoorDB', collection={qna_collection_user!r}")
+                except Exception:
+                    pass
 
                 # If we have already processed this transcript for this user, stream the cached conversation.
                 existing_conv = None
@@ -6443,6 +6513,12 @@ def _process_transcript_core(data, yield_sse_fn=None):
                                 "question": q.get("question") or q.get("entered_query") or "",
                                 "answer": q.get("answer") or q.get("response") or "",
                                 "relevantChunks": q.get("relevantChunks") or q.get("relevant_chunks") or [],
+                                # Rich chunk objects for UI clause cards (content + metadata.source)
+                                "relevantChunksDetail": (
+                                    q.get("relevantChunksDetail")
+                                    or q.get("relevant_chunks_detail")
+                                    or []
+                                ),
                                 "confidence": q.get("confidence", 0.0),
                                 "latency": q.get("latency", 0.0),
                                 "questionType": q.get("questionType"),
@@ -6506,11 +6582,26 @@ def _process_transcript_core(data, yield_sse_fn=None):
                     }
                     inserted = qna_collection.insert_one(stub)
                     conv_doc_id = inserted.inserted_id
+                    try:
+                        print(
+                            f"{_logpfx} inserted conversation stub: "
+                            f"conv_doc_id={str(conv_doc_id)!r}, transcript_id={transcript_id!r}, "
+                            f"contact_id={contact_id!r}, user_email={user_email!r}"
+                        )
+                    except Exception:
+                        pass
                 else:
                     qna_collection.update_one(
                         {"_id": conv_doc_id},
                         {"$set": {"processing": True, "updated_at": now_ts}},
                     )
+                    try:
+                        print(
+                            f"{_logpfx} updated existing conversation stub: "
+                            f"conv_doc_id={str(conv_doc_id)!r}, processing=True"
+                        )
+                    except Exception:
+                        pass
 
                 yield _sse(
                     "status",
@@ -6632,7 +6723,7 @@ def _process_transcript_core(data, yield_sse_fn=None):
                     selected_plan_norm, collection_mapping.get(contract_type_norm, {}).get("default")
                 )
                 vector_db1 = get_vector_db(selected_collection_name)
-                retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K})
+                retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K, "expr": f"policyId == '{selected_collection_name.lower()}'"})
 
                 if gpt_model == "Search":
                     llm2 = ChatOpenAI(temperature=0.0, model="ft:gpt-3.5-turbo-0613:mindstix::8YYD56aA")
@@ -6676,7 +6767,9 @@ def _process_transcript_core(data, yield_sse_fn=None):
                     )
 
                     result["questionId"] = question_id
-                    result["question"] = question_text
+                    # Keep UI question clean (match normal Claims flow)
+                    display_question_text = re.sub(r"\[CALL_CONTEXT:.*?\]\s*", "", str(question_text or "")).strip()
+                    result["question"] = display_question_text
                     result["context"] = question_obj.get("context", "")
                     result["questionType"] = question_obj.get("questionType", "general")
                     result["userIntent"] = question_obj.get("userIntent", "")
@@ -6702,16 +6795,18 @@ def _process_transcript_core(data, yield_sse_fn=None):
                     # Persist incremental chat to Mongo
                     try:
                         chunks = result.get("relevantChunks") or []
+                        chunks_detail = result.get("relevantChunksDetail") or []
                         relevant_docs_text = "\n\n---\n\n".join([str(c) for c in chunks if str(c).strip()])
-                        qna_collection.update_one(
+                        upd_res = qna_collection.update_one(
                             {"_id": conv_doc_id},
                             {
                                 "$push": {
                                     "chats": {
                                         "chat_id": question_id,
-                                        "entered_query": question_text,
+                                        "entered_query": display_question_text,
                                         "response": result.get("answer", ""),
                                         "relevant_chunks": chunks,
+                                        "relevant_chunks_detail": chunks_detail,
                                         "relevant_docs": relevant_docs_text,
                                         "gpt_model": "Calls",
                                         "underlying_model": gpt_model,
@@ -6723,6 +6818,16 @@ def _process_transcript_core(data, yield_sse_fn=None):
                                 "$set": {"updated_at": datetime.utcnow()},
                             },
                         )
+                        try:
+                            mc = getattr(upd_res, "matched_count", None)
+                            modc = getattr(upd_res, "modified_count", None)
+                            print(
+                                f"{_logpfx} persisted chat: conv_doc_id={str(conv_doc_id)!r}, "
+                                f"chat_id={question_id!r}, chunks={len(chunks)}, "
+                                f"matched={mc}, modified={modc}"
+                            )
+                        except Exception:
+                            pass
                     except Exception as e:
                         print(f"Warning: failed to persist incremental transcript chat: {e}")
 
@@ -6731,9 +6836,10 @@ def _process_transcript_core(data, yield_sse_fn=None):
                         "answer",
                         {
                             "questionId": question_id,
-                            "question": question_text,
+                            "question": display_question_text,
                             "answer": result.get("answer", ""),
                             "relevantChunks": result.get("relevantChunks", []),
+                            "relevantChunksDetail": result.get("relevantChunksDetail", []),
                             "confidence": result.get("confidence", 0.0),
                             "latency": result.get("latency", 0.0),
                             "questionType": result.get("questionType"),
@@ -6880,6 +6986,66 @@ def _process_transcript_core(data, yield_sse_fn=None):
         "X-Accel-Buffering": "no",
     }
     return Response(generate(), headers=headers)
+
+
+@app.route("/internal/transcripts/process", methods=["POST"])
+def process_transcript_internal():
+    """
+    Internal transcript processor (streaming)
+    (Cloud Run / system-triggered)
+    - No JWT required
+    - Reuses the same streaming/core logic as the internal processor below
+    - If called from GCS (agentName="gcs-trigger*"), processes in background and returns 202
+    """
+    expected = os.getenv("INTERNAL_PROCESS_SECRET")
+    got = request.headers.get("X-Internal-Auth")
+    if not expected or got != expected:
+        return jsonify({"error": "unauthorized"}), 401
+
+    try:
+        data = request.get_json() or {}
+    except Exception:
+        data = {}
+    if not data:
+        return jsonify({"error": "Request body is missing or invalid"}), 400
+
+    agent_name = (data.get("agentName") or "").strip()
+    is_gcs_trigger = bool(agent_name) and agent_name.startswith("gcs-trigger")
+
+    if is_gcs_trigger:
+        # Fire-and-forget: do the work in a background thread and return 202 immediately.
+        # We reuse the same streaming generator, but we exhaust it without sending bytes to the client.
+        # IMPORTANT: the core logic relies on Flask request context (headers + get_json),
+        # so we create a request context inside the background thread.
+        def _bg():
+            try:
+                with app.test_request_context(
+                    "/internal/transcripts/process",
+                    method="POST",
+                    json=data,
+                    headers={"X-Internal-Auth": got},
+                ):
+                    resp = _process_transcript_core(data, yield_sse_fn=None)
+                    try:
+                        iterable = getattr(resp, "response", None)
+                        if iterable is not None:
+                            for _ in iterable:
+                                pass
+                    except Exception as e:
+                        print(f"[internal/transcripts/process][bg] Warning: failed to exhaust SSE generator: {e}")
+            except Exception as e:
+                print(f"[internal/transcripts/process][bg] ERROR: {e}")
+
+        try:
+            t = threading.Thread(target=_bg, daemon=True)
+            t.start()
+        except Exception as e:
+            return jsonify({"error": "failed to start background processing", "details": str(e)}), 500
+
+        return jsonify({"ok": True, "status": "accepted"}), 202
+
+    # Streaming path: return the normal SSE stream (200).
+    return _process_transcript_core(data, yield_sse_fn=None)
 
 @app.route("/webhook", methods=["POST"])
 def transcript_event():
