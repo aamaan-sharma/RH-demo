@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from "react";
 import Question from "../common/question/question";
 import Response from "../common/response/response";
-import { stripTranscribeAppendix } from "../utils/chatText";
+import { parseExtractedQuestion, stripTranscribeAppendix } from "../utils/chatText";
 
 const isTranscriptExtractedChat = (chat) => {
   const id = chat?.questionId || chat?.chat_id;
@@ -46,7 +46,9 @@ const ChatList = ({ chats, setChats, conversationId, isCallsMode = false, server
             <div className="section_title">Extracted questions</div>
             <div className="questions_list">
               {extracted.map((chat, idx) => {
-                const qText = stripTranscribeAppendix(chat?.entered_query || "");
+                const parsed = parseExtractedQuestion(chat?.entered_query || "");
+                const qText = parsed?.questionText || stripTranscribeAppendix(chat?.entered_query || "");
+                const facts = Array.isArray(parsed?.facts) ? parsed.facts : [];
                 return (
                   <details className="question_item" key={chat?.chat_id || chat?.questionId || idx}>
                     <summary className="question_summary">
@@ -58,6 +60,16 @@ const ChatList = ({ chats, setChats, conversationId, isCallsMode = false, server
                         ▸
                       </span>
                     </summary>
+                    {facts.length > 0 ? (
+                      <div className="question_facts" aria-label="Extracted case facts">
+                        {facts.map((f, i) => (
+                          <div className="fact_chip" key={`${f.key || "k"}-${i}`} title={`${f.label}: ${f.value}`}>
+                            <span className="k">{f.label}</span>
+                            <span className="v">{f.value}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
                     {chat?.response ? (
                       <Response
                         response={chat.response}
@@ -65,7 +77,14 @@ const ChatList = ({ chats, setChats, conversationId, isCallsMode = false, server
                         conversationId={conversationId}
                         chats={chats}
                         setChats={setChats}
-                        relevantChunks={chat.relevantChunks || chat.relevant_chunks || []}
+                        showReferenceIcon={false}
+                        relevantChunks={
+                          chat.relevantChunksDetail ||
+                          chat.relevant_chunks_detail ||
+                          chat.relevantChunks ||
+                          chat.relevant_chunks ||
+                          []
+                        }
                         headerLabel="AI Draft Answer"
                         tone="blue"
                         isError={chat.isError}
@@ -98,7 +117,14 @@ const ChatList = ({ chats, setChats, conversationId, isCallsMode = false, server
                     conversationId={conversationId}
                     chats={chats}
                     setChats={setChats}
-                    relevantChunks={chat.relevantChunks || chat.relevant_chunks || []}
+                    showReferenceIcon={false}
+                    relevantChunks={
+                      chat.relevantChunksDetail ||
+                      chat.relevant_chunks_detail ||
+                      chat.relevantChunks ||
+                      chat.relevant_chunks ||
+                      []
+                    }
                     headerLabel="Assistant"
                     isError={chat.isError}
                     onRetry={chat.isError && onRetryChat ? onRetryChat : null}
@@ -118,7 +144,14 @@ const ChatList = ({ chats, setChats, conversationId, isCallsMode = false, server
               conversationId={conversationId}
               chats={chats}
               setChats={setChats}
-              relevantChunks={finalAnswer.relevantChunks || finalAnswer.relevant_chunks || []}
+              showReferenceIcon={false}
+            relevantChunks={
+              finalAnswer.relevantChunksDetail ||
+              finalAnswer.relevant_chunks_detail ||
+              finalAnswer.relevantChunks ||
+              finalAnswer.relevant_chunks ||
+              []
+            }
               variant="finalAnswer"
               headerLabel="Final Analyzed Answer"
               tone="blue"
@@ -155,7 +188,14 @@ const ChatList = ({ chats, setChats, conversationId, isCallsMode = false, server
               conversationId={conversationId}
               chats={chats}
               setChats={setChats}
-              relevantChunks={chat.relevantChunks || chat.relevant_chunks || []}
+              showReferenceIcon={true}
+              relevantChunks={
+                chat.relevantChunksDetail ||
+                chat.relevant_chunks_detail ||
+                chat.relevantChunks ||
+                chat.relevant_chunks ||
+                []
+              }
               variant={isCallsMode && isFinalAnswerChat(chat) ? "finalAnswer" : "default"}
               isError={chat.isError}
               onRetry={chat.isError && onRetryChat ? onRetryChat : null}
