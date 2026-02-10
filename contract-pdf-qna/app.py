@@ -2742,21 +2742,6 @@ def start():
                     "word_count": word_count
                 }
 
-                # Score insert with answer-quality metrics (relevance_score, resolution_score).
-                # Security metrics from security_scores; relevance/resolution computed from answer and relevant_docs.
-                def _run_monitor_after_answer():
-                    with tracer.start_as_current_span('q_monitor') as parentq:
-                        dicts = security_scores(parentq, entered_query)
-                        if dicts:
-                            answer_str = str(agent_resp or "").strip()
-                            is_fallback = _is_answer_fallback(answer_str)
-                            resolution_score = 1 if (answer_str and not is_fallback) else 0
-                            relevance_score = 1 if (resolution_score == 1 and (relevant_documents or "").strip() and not is_fallback) else 0
-                            dicts['relevance_score'] = relevance_score
-                            dicts['resolution_score'] = resolution_score
-                            func_Binsert(parentq, dicts, entered_query, session_id=conversation_id, user_email=user_email, answer_text=agent_resp if agent_resp else None)
-                threading.Thread(target=_run_monitor_after_answer, daemon=True).start()
-
                 if conversation_id is None or conversation_id == "":
                     print(
                         "[CHUNKS] /start: creating NEW conversation document with "
@@ -2802,6 +2787,20 @@ def start():
                             )
                     except Exception:
                         pass
+
+                # Score insert after conversation_id is set (new or existing) so session_id reaches BigQuery.
+                def _run_monitor_after_answer():
+                    with tracer.start_as_current_span('q_monitor') as parentq:
+                        dicts = security_scores(parentq, entered_query)
+                        if dicts:
+                            answer_str = str(agent_resp or "").strip()
+                            is_fallback = _is_answer_fallback(answer_str)
+                            resolution_score = 1 if (answer_str and not is_fallback) else 0
+                            relevance_score = 1 if (resolution_score == 1 and (relevant_documents or "").strip() and not is_fallback) else 0
+                            dicts['relevance_score'] = relevance_score
+                            dicts['resolution_score'] = resolution_score
+                            func_Binsert(parentq, dicts, entered_query, session_id=str(conversation_id) if conversation_id else None, user_email=user_email, answer_text=agent_resp if agent_resp else None)
+                threading.Thread(target=_run_monitor_after_answer, daemon=True).start()
 
                 output_json = {"aiResponse": ai_response, "conversationId": str(conversation_id), "chatId":chat.get("chat_id")}
 

@@ -323,14 +323,14 @@ def security_scores(parent1, question):
         return dicts
 
 
-def q_monitor(parent1, question):
+def q_monitor(parent1, question, session_id=None, user_email=None, answer_text=None):
     if not _MONITORING_AVAILABLE:
         return
     # Guard against empty / bad input
     if not question or not isinstance(question, str):
         return
     dicts = security_scores(parent1,question)
-    func_Binsert(parent1,dicts,question)
+    func_Binsert(parent1,dicts,question, session_id=session_id, user_email=user_email, answer_text=answer_text)
 
 
 def llm_trace_to_jaeger(data, token_usage=None):
