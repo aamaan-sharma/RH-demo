@@ -173,7 +173,9 @@ except Exception:
     table = None
     text_schema = None
 
-
+# Bias / Fairness Monitoring: proxy bias-risk indicators only (non-deterministic). Thresholds for derived flag.
+_BIAS_RISK_TOXICITY_THRESHOLD = float(os.getenv("BIAS_RISK_TOXICITY_THRESHOLD", "0.5"))
+_BIAS_RISK_SENTIMENT_STRONG_NEGATIVE = float(os.getenv("BIAS_RISK_SENTIMENT_STRONG_NEGATIVE", "-0.5"))
 
 
 def func_Binsert(parent1, dicts,prompt, session_id=None, user_email=None, answer_text=None, feature_name=None, agent_name=None, flow_type=None):
@@ -254,6 +256,23 @@ def func_Binsert(parent1, dicts,prompt, session_id=None, user_email=None, answer
             _is_clarification = any(_p in _pt for _p in _phrases)
         if _is_clarification is not None:
             data_to_insert[0]['is_clarification'] = _is_clarification
+        # Bias / Fairness Monitoring: proxy bias-risk indicators only (non-deterministic). Reuse existing toxicity/sentiment; do not recalculate.
+        _toxicity_val = dicts.get('prompt.toxicity')
+        _sentiment_val = dicts.get('prompt.sentiment_nltk')
+        _toxicity_ok = _toxicity_val is not None and isinstance(_toxicity_val, (int, float))
+        _sentiment_ok = _sentiment_val is not None and isinstance(_sentiment_val, (int, float))
+        _toxicity_triggered = _toxicity_ok and float(_toxicity_val) > _BIAS_RISK_TOXICITY_THRESHOLD
+        _sentiment_triggered = _sentiment_ok and float(_sentiment_val) < _BIAS_RISK_SENTIMENT_STRONG_NEGATIVE
+        if _toxicity_ok or _sentiment_ok:
+            _bias_risk_flag = 1 if (_toxicity_triggered or _sentiment_triggered) else 0
+            data_to_insert[0]['bias_risk_flag'] = _bias_risk_flag
+            if _bias_risk_flag == 1:
+                _reasons = []
+                if _toxicity_triggered:
+                    _reasons.append("toxicity_above_threshold")
+                if _sentiment_triggered:
+                    _reasons.append("strong_negative_sentiment")
+                data_to_insert[0]['bias_risk_reason'] = ",".join(_reasons)
 
         # Attach answer-quality metrics to current span (no new spans).
         try:
