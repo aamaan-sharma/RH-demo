@@ -243,6 +243,17 @@ def func_Binsert(parent1, dicts,prompt, session_id=None, user_email=None, answer
             data_to_insert[0]['agent_name'] = agent_name
         if flow_type is not None:
             data_to_insert[0]['flow_type'] = flow_type
+        # Re-asks / Clarification Rate: derive is_clarification from prompt (rule-based only); do not set if prompt missing or not string.
+        _is_clarification = None
+        if prompt is not None and isinstance(prompt, str) and prompt.strip():
+            _phrases = (
+                "can you explain", "what do you mean", "i don't understand", "i dont understand",
+                "can you repeat", "clarify",
+            )
+            _pt = prompt.lower()
+            _is_clarification = any(_p in _pt for _p in _phrases)
+        if _is_clarification is not None:
+            data_to_insert[0]['is_clarification'] = _is_clarification
 
         # Attach answer-quality metrics to current span (no new spans).
         try:
