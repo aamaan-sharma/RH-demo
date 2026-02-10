@@ -176,6 +176,9 @@ except Exception:
 # Bias / Fairness Monitoring: proxy bias-risk indicators only (non-deterministic). Thresholds for derived flag.
 _BIAS_RISK_TOXICITY_THRESHOLD = float(os.getenv("BIAS_RISK_TOXICITY_THRESHOLD", "0.5"))
 _BIAS_RISK_SENTIMENT_STRONG_NEGATIVE = float(os.getenv("BIAS_RISK_SENTIMENT_STRONG_NEGATIVE", "-0.5"))
+# Response clarity: threshold above which reading_level is considered low clarity; length above which to flag.
+_RESPONSE_READING_LEVEL_HIGH_THRESHOLD = float(os.getenv("RESPONSE_READING_LEVEL_HIGH_THRESHOLD", "12"))
+_RESPONSE_LENGTH_VERY_HIGH = int(os.getenv("RESPONSE_LENGTH_VERY_HIGH", "8000"))
 
 
 def func_Binsert(parent1, dicts,prompt, session_id=None, user_email=None, answer_text=None, feature_name=None, agent_name=None, flow_type=None):
@@ -273,6 +276,30 @@ def func_Binsert(parent1, dicts,prompt, session_id=None, user_email=None, answer
                 if _sentiment_triggered:
                     _reasons.append("strong_negative_sentiment")
                 data_to_insert[0]['bias_risk_reason'] = ",".join(_reasons)
+        # Response readability: same langkit.textstat pipeline as prompt; append only when answer_text present and valid.
+        _response_flesch = None
+        _response_ari = None
+        _response_reading_level = None
+        _low_clarity_flag = None
+        if answer_text is not None and isinstance(answer_text, str) and answer_text.strip():
+            try:
+                _resp_results = why.log({"prompt": answer_text}, schema=text_schema)
+                _resp_view = _resp_results.view()
+                _response_flesch = _resp_view.get_column("prompt.flesch_reading_ease").to_summary_dict().get("distribution/mean")
+                _response_ari = _resp_view.get_column("prompt.automated_readability_index").to_summary_dict().get("distribution/mean")
+                _response_reading_level = _resp_view.get_column("prompt.aggregate_reading_level").to_summary_dict().get("distribution/mean")
+                if _response_flesch is not None:
+                    data_to_insert[0]["response_flesch_reading_ease"] = _response_flesch
+                if _response_ari is not None:
+                    data_to_insert[0]["response_ari"] = _response_ari
+                if _response_reading_level is not None:
+                    data_to_insert[0]["response_reading_level"] = _response_reading_level
+                    _rd_high = float(_response_reading_level) > _RESPONSE_READING_LEVEL_HIGH_THRESHOLD
+                    _len_high = len(answer_text) > _RESPONSE_LENGTH_VERY_HIGH
+                    _low_clarity_flag = 1 if (_rd_high or _len_high) else 0
+                    data_to_insert[0]["low_clarity_flag"] = _low_clarity_flag
+            except Exception:
+                pass
 
         # Attach answer-quality metrics to current span (no new spans).
         try:
