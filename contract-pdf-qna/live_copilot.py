@@ -1573,7 +1573,7 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                             if not _question:
                                 continue
 
-                            def _run_monitor_live(span, question, result):
+                            def _run_monitor_live(span, question, result, _session_id, _user_email):
                                 dicts = security_scores(span, question)
                                 if not dicts:
                                     return
@@ -1585,11 +1585,12 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                                 relevance_score = 1 if (resolution_score == 1 and has_relevant and not is_fallback) else 0
                                 dicts["relevance_score"] = relevance_score
                                 dicts["resolution_score"] = resolution_score
-                                func_Binsert(span, dicts, question)
-
+                                # Feature Usage: webhook/live → Live Copilot, flow_type=live; forward session_id, user_email.
+                                func_Binsert(span, dicts, question, session_id=_session_id, user_email=_user_email, answer_text=answer if answer else None, feature_name="Live Copilot", flow_type="live")
+                            _user_email = (getattr(st, "customer", None) or {}).get("email") or None
                             threading.Thread(
                                 target=_run_monitor_live,
-                                args=(sp_rag, _question, _result),
+                                args=(sp_rag, _question, _result, session_id, _user_email),
                                 daemon=True,
                             ).start()
 

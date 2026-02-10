@@ -176,10 +176,18 @@ except Exception:
 
 
 
-def func_Binsert(parent1, dicts,prompt, session_id=None, user_email=None, answer_text=None):
+def func_Binsert(parent1, dicts,prompt, session_id=None, user_email=None, answer_text=None, feature_name=None, agent_name=None, flow_type=None):
     if not _MONITORING_AVAILABLE:
         return
     with tracer.start_as_current_span('func_Binsert', context=_ctx_from_parent(parent1)) as child2:
+        # Feature Usage Insights: agent_name from span attribute agent.name if not passed.
+        if agent_name is None and parent1 is not None:
+            try:
+                attrs = getattr(parent1, 'attributes', None) or getattr(parent1, '_attributes', None)
+                if attrs and isinstance(attrs, dict):
+                    agent_name = attrs.get('agent.name')
+            except Exception:
+                pass
         # Answer-quality metrics (computed in app.py / live_copilot.py); default 0 if missing.
         relevance_score = 0
         resolution_score = 0
@@ -228,6 +236,13 @@ def func_Binsert(parent1, dicts,prompt, session_id=None, user_email=None, answer
             data_to_insert[0]['user_email'] = user_email
         if answer_text is not None:
             data_to_insert[0]['answer_text'] = answer_text
+        # Feature Usage Insights (nullable; append only when present).
+        if feature_name is not None:
+            data_to_insert[0]['feature_name'] = feature_name
+        if agent_name is not None:
+            data_to_insert[0]['agent_name'] = agent_name
+        if flow_type is not None:
+            data_to_insert[0]['flow_type'] = flow_type
 
         # Attach answer-quality metrics to current span (no new spans).
         try:
@@ -323,14 +338,14 @@ def security_scores(parent1, question):
         return dicts
 
 
-def q_monitor(parent1, question, session_id=None, user_email=None, answer_text=None):
+def q_monitor(parent1, question, session_id=None, user_email=None, answer_text=None, feature_name=None, agent_name=None, flow_type=None):
     if not _MONITORING_AVAILABLE:
         return
     # Guard against empty / bad input
     if not question or not isinstance(question, str):
         return
     dicts = security_scores(parent1,question)
-    func_Binsert(parent1,dicts,question, session_id=session_id, user_email=user_email, answer_text=answer_text)
+    func_Binsert(parent1,dicts,question, session_id=session_id, user_email=user_email, answer_text=answer_text, feature_name=feature_name, agent_name=agent_name, flow_type=flow_type)
 
 
 def llm_trace_to_jaeger(data, token_usage=None):

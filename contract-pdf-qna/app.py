@@ -2799,7 +2799,8 @@ def start():
                             relevance_score = 1 if (resolution_score == 1 and (relevant_documents or "").strip() and not is_fallback) else 0
                             dicts['relevance_score'] = relevance_score
                             dicts['resolution_score'] = resolution_score
-                            func_Binsert(parentq, dicts, entered_query, session_id=str(conversation_id) if conversation_id else None, user_email=user_email, answer_text=agent_resp if agent_resp else None)
+                            # Feature Usage: /start endpoint → feature_name from gpt_model (Search/Infer), flow_type=rag.
+                            func_Binsert(parentq, dicts, entered_query, session_id=str(conversation_id) if conversation_id else None, user_email=user_email, answer_text=agent_resp if agent_resp else None, feature_name=gpt_model, flow_type="rag")
                 threading.Thread(target=_run_monitor_after_answer, daemon=True).start()
 
                 output_json = {"aiResponse": ai_response, "conversationId": str(conversation_id), "chatId":chat.get("chat_id")}
