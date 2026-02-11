@@ -97,6 +97,29 @@ def _ctx_from_parent(parent_span):
     except Exception:
         return None
 
+
+def _is_answer_fallback(answer_text: str) -> bool:
+    """
+    Answer-quality helper: detect common fallback/refusal phrases.
+    Used only for resolution_score and relevance_score; must not affect security metrics.
+    """
+    if not answer_text or not isinstance(answer_text, str):
+        return True
+    t = (answer_text or "").strip().lower()
+    if not t:
+        return True
+    fallback_phrases = [
+        "i couldn't find", "i could not find", "i don't have", "i'm unable to",
+        "i am unable to", "i can't", "i cannot", "no relevant", "not enough information",
+        "i don't have access", "i'm not able", "i am not able", "no policy language",
+        "couldn't find relevant", "no supporting",
+    ]
+    for p in fallback_phrases:
+        if p in t:
+            return True
+    return False
+
+
 _MONITORING_AVAILABLE = False
 
 # Monitoring stack (whylogs/langkit/sentence-transformers/bigquery) is optional.
@@ -150,13 +173,41 @@ except Exception:
     table = None
     text_schema = None
 
+# Bias / Fairness Monitoring: proxy bias-risk indicators only (non-deterministic). Thresholds for derived flag.
+_BIAS_RISK_TOXICITY_THRESHOLD = float(os.getenv("BIAS_RISK_TOXICITY_THRESHOLD", "0.5"))
+_BIAS_RISK_SENTIMENT_STRONG_NEGATIVE = float(os.getenv("BIAS_RISK_SENTIMENT_STRONG_NEGATIVE", "-0.5"))
+# Response clarity: threshold above which reading_level is considered low clarity; length above which to flag.
+_RESPONSE_READING_LEVEL_HIGH_THRESHOLD = float(os.getenv("RESPONSE_READING_LEVEL_HIGH_THRESHOLD", "12"))
+_RESPONSE_LENGTH_VERY_HIGH = int(os.getenv("RESPONSE_LENGTH_VERY_HIGH", "8000"))
+# Refusal Appropriateness: thresholds for when a refusal is considered justified (deterministic, no LLM).
+_TOXICITY_THRESHOLD = float(os.getenv("REFUSAL_TOXICITY_THRESHOLD", "0.7"))
+_JAILBREAK_THRESHOLD = float(os.getenv("REFUSAL_JAILBREAK_THRESHOLD", "0.8"))
+_RELEVANCE_THRESHOLD = float(os.getenv("REFUSAL_RELEVANCE_THRESHOLD", "0.2"))
 
 
-
-def func_Binsert(parent1, dicts,prompt):
+def func_Binsert(parent1, dicts,prompt, session_id=None, user_email=None, answer_text=None, feature_name=None, agent_name=None, flow_type=None):
     if not _MONITORING_AVAILABLE:
         return
     with tracer.start_as_current_span('func_Binsert', context=_ctx_from_parent(parent1)) as child2:
+        # Feature Usage Insights: agent_name from span attribute agent.name if not passed.
+        if agent_name is None and parent1 is not None:
+            try:
+                attrs = getattr(parent1, 'attributes', None) or getattr(parent1, '_attributes', None)
+                if attrs and isinstance(attrs, dict):
+                    agent_name = attrs.get('agent.name')
+            except Exception:
+                pass
+        # Answer-quality metrics (computed in app.py / live_copilot.py); default 0 if missing.
+        relevance_score = 0
+        resolution_score = 0
+        try:
+            relevance_score = int(dicts.get('relevance_score', 0) or 0)
+            resolution_score = int(dicts.get('resolution_score', 0) or 0)
+        except (TypeError, ValueError):
+            pass
+        relevance_score = 1 if relevance_score else 0
+        resolution_score = 1 if resolution_score else 0
+
         # Get the current time
         current_time = datetime.now()
 
@@ -181,11 +232,114 @@ def func_Binsert(parent1, dicts,prompt):
                 'difficult_words':dicts['prompt.difficult_words'],
                 'ontopic':dicts['ontopic'],
                 'offtopic':dicts["offtopic"],
-                'Products':dicts['closest_topic']
+                'Products':dicts['closest_topic'],
+                'relevance_score': relevance_score,
+                'resolution_score': resolution_score,
 
             },
             # Add more dictionaries for additional rows
         ]
+        if session_id is not None:
+            data_to_insert[0]['session_id'] = session_id
+        if user_email is not None:
+            data_to_insert[0]['user_email'] = user_email
+        if answer_text is not None:
+            data_to_insert[0]['answer_text'] = answer_text
+        # Feature Usage Insights (nullable; append only when present).
+        if feature_name is not None:
+            data_to_insert[0]['feature_name'] = feature_name
+        if agent_name is not None:
+            data_to_insert[0]['agent_name'] = agent_name
+        if flow_type is not None:
+            data_to_insert[0]['flow_type'] = flow_type
+        # Re-asks / Clarification Rate: derive is_clarification from prompt (rule-based only); do not set if prompt missing or not string.
+        _is_clarification = None
+        if prompt is not None and isinstance(prompt, str) and prompt.strip():
+            _phrases = (
+                "can you explain", "what do you mean", "i don't understand", "i dont understand",
+                "can you repeat", "clarify",
+            )
+            _pt = prompt.lower()
+            _is_clarification = any(_p in _pt for _p in _phrases)
+        if _is_clarification is not None:
+            data_to_insert[0]['is_clarification'] = _is_clarification
+        # Bias / Fairness Monitoring: proxy bias-risk indicators only (non-deterministic). Reuse existing toxicity/sentiment; do not recalculate.
+        _toxicity_val = dicts.get('prompt.toxicity')
+        _sentiment_val = dicts.get('prompt.sentiment_nltk')
+        _toxicity_ok = _toxicity_val is not None and isinstance(_toxicity_val, (int, float))
+        _sentiment_ok = _sentiment_val is not None and isinstance(_sentiment_val, (int, float))
+        _toxicity_triggered = _toxicity_ok and float(_toxicity_val) > _BIAS_RISK_TOXICITY_THRESHOLD
+        _sentiment_triggered = _sentiment_ok and float(_sentiment_val) < _BIAS_RISK_SENTIMENT_STRONG_NEGATIVE
+        if _toxicity_ok or _sentiment_ok:
+            _bias_risk_flag = 1 if (_toxicity_triggered or _sentiment_triggered) else 0
+            data_to_insert[0]['bias_risk_flag'] = _bias_risk_flag
+            if _bias_risk_flag == 1:
+                _reasons = []
+                if _toxicity_triggered:
+                    _reasons.append("toxicity_above_threshold")
+                if _sentiment_triggered:
+                    _reasons.append("strong_negative_sentiment")
+                data_to_insert[0]['bias_risk_reason'] = ",".join(_reasons)
+        # Response readability: same langkit.textstat pipeline as prompt; append only when answer_text present and valid.
+        _response_flesch = None
+        _response_ari = None
+        _response_reading_level = None
+        _low_clarity_flag = None
+        if answer_text is not None and isinstance(answer_text, str) and answer_text.strip():
+            try:
+                _resp_results = why.log({"prompt": answer_text}, schema=text_schema)
+                _resp_view = _resp_results.view()
+                _response_flesch = _resp_view.get_column("prompt.flesch_reading_ease").to_summary_dict().get("distribution/mean")
+                _response_ari = _resp_view.get_column("prompt.automated_readability_index").to_summary_dict().get("distribution/mean")
+                _response_reading_level = _resp_view.get_column("prompt.aggregate_reading_level").to_summary_dict().get("distribution/mean")
+                if _response_flesch is not None:
+                    data_to_insert[0]["response_flesch_reading_ease"] = _response_flesch
+                if _response_ari is not None:
+                    data_to_insert[0]["response_ari"] = _response_ari
+                if _response_reading_level is not None:
+                    data_to_insert[0]["response_reading_level"] = _response_reading_level
+                    _rd_high = float(_response_reading_level) > _RESPONSE_READING_LEVEL_HIGH_THRESHOLD
+                    _len_high = len(answer_text) > _RESPONSE_LENGTH_VERY_HIGH
+                    _low_clarity_flag = 1 if (_rd_high or _len_high) else 0
+                    data_to_insert[0]["low_clarity_flag"] = _low_clarity_flag
+            except Exception:
+                pass
+        # Refusal Appropriateness: is_refusal from answer phrases; refusal_appropriate only when refusal, using toxicity/jailbreak/relevance.
+        _refusal_phrases = (
+            "i can't help with that", "i cannot help with that", "i'm unable to answer", "i cannot answer",
+            "this request is not allowed", "i can't provide that information", "i cannot provide that information",
+            "i'm unable to help", "i can't assist with that",
+        )
+        _is_refusal = 0
+        if answer_text is not None and isinstance(answer_text, str) and answer_text.strip():
+            _at_lower = answer_text.lower()
+            _is_refusal = 1 if any(_p in _at_lower for _p in _refusal_phrases) else 0
+        data_to_insert[0]["is_refusal"] = _is_refusal
+        if _is_refusal == 1:
+            _tox_ref = dicts.get("prompt.toxicity")
+            _jail_ref = dicts.get("prompt.jailbreak_similarity")
+            _tox_high = _tox_ref is not None and isinstance(_tox_ref, (int, float)) and float(_tox_ref) >= _TOXICITY_THRESHOLD
+            _jail_high = _jail_ref is not None and isinstance(_jail_ref, (int, float)) and float(_jail_ref) >= _JAILBREAK_THRESHOLD
+            _rel_low = relevance_score < _RELEVANCE_THRESHOLD
+            if _tox_high:
+                _refusal_appropriate = 1  # Appropriate: prompt toxicity above threshold, refusal justified.
+            elif _jail_high:
+                _refusal_appropriate = 1  # Appropriate: jailbreak similarity above threshold, refusal justified.
+            elif _rel_low:
+                _refusal_appropriate = 1  # Appropriate: no relevant docs / low relevance, refusal justified.
+            else:
+                _refusal_appropriate = 0  # Potentially inappropriate: no safety/relevance signal to justify refusal.
+            data_to_insert[0]["refusal_appropriate"] = _refusal_appropriate
+        # When is_refusal = 0, refusal_appropriate is not set (NULL in BigQuery).
+
+        # Attach answer-quality metrics to current span (no new spans).
+        try:
+            span = trace.get_current_span()
+            if span and span.get_span_context().is_valid:
+                span.set_attribute("score.relevance_score", relevance_score)
+                span.set_attribute("score.resolution_score", resolution_score)
+        except Exception:
+            pass
 
         # Insert the data into the table
         errors = client.insert_rows(table, data_to_insert)
@@ -272,14 +426,14 @@ def security_scores(parent1, question):
         return dicts
 
 
-def q_monitor(parent1, question):
+def q_monitor(parent1, question, session_id=None, user_email=None, answer_text=None, feature_name=None, agent_name=None, flow_type=None):
     if not _MONITORING_AVAILABLE:
         return
     # Guard against empty / bad input
     if not question or not isinstance(question, str):
         return
     dicts = security_scores(parent1,question)
-    func_Binsert(parent1,dicts,question)
+    func_Binsert(parent1,dicts,question, session_id=session_id, user_email=user_email, answer_text=answer_text, feature_name=feature_name, agent_name=agent_name, flow_type=flow_type)
 
 
 def llm_trace_to_jaeger(data, token_usage=None):

@@ -24,7 +24,7 @@ from langchain_community.vectorstores import Milvus
 from langchain.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
-from monitoring_module import tracer, llm_trace_to_jaeger
+from monitoring_module import tracer, llm_trace_to_jaeger, func_Binsert, security_scores, _is_answer_fallback
 from token_module import CallbackHandler
 
 from utils.transcript_filters import is_trivial_utterance
@@ -1565,6 +1565,34 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                         ]
                         tool_result["newAnswers"] = answered_now
                         important_change = True
+
+                        # Score insert with answer-quality metrics (relevance_score, resolution_score).
+                        for item in answered_now:
+                            _question = item.get("question") or ""
+                            _result = item.get("result") or {}
+                            if not _question:
+                                continue
+
+                            def _run_monitor_live(span, question, result, _session_id, _user_email):
+                                dicts = security_scores(span, question)
+                                if not dicts:
+                                    return
+                                answer = (result.get("answer") or "").strip()
+                                cited_chunks = result.get("citedChunks") or []
+                                is_fallback = _is_answer_fallback(answer)
+                                resolution_score = 1 if (answer and not is_fallback) else 0
+                                has_relevant = len(cited_chunks) > 0
+                                relevance_score = 1 if (resolution_score == 1 and has_relevant and not is_fallback) else 0
+                                dicts["relevance_score"] = relevance_score
+                                dicts["resolution_score"] = resolution_score
+                                # Feature Usage: webhook/live → Live Copilot, flow_type=live; forward session_id, user_email.
+                                func_Binsert(span, dicts, question, session_id=_session_id, user_email=_user_email, answer_text=answer if answer else None, feature_name="Live Copilot", flow_type="live")
+                            _user_email = (getattr(st, "customer", None) or {}).get("email") or None
+                            threading.Thread(
+                                target=_run_monitor_live,
+                                args=(sp_rag, _question, _result, session_id, _user_email),
+                                daemon=True,
+                            ).start()
 
             if intent == "PROBLEM":
                 # Generate diagnostics steps

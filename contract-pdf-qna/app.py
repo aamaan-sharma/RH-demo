@@ -81,7 +81,7 @@ except ImportError:
 
 # Safe import of monitoring_module - handle missing dependencies gracefully
 # try:
-from monitoring_module import q_monitor, tracer, llm_trace_to_jaeger
+from monitoring_module import q_monitor, tracer, llm_trace_to_jaeger, func_Binsert, security_scores, _is_answer_fallback
 # except ImportError as e:
 #     print(f"Warning: Could not import monitoring_module: {e}")
 #     print("Monitoring features will be disabled. The app will continue to run.")
@@ -2588,15 +2588,10 @@ def start():
                         print(standalone_result)
                         res1, tok1 = handler.infi()
                         llm_trace_to_jaeger(res1, tok1)
-                        a = threading.Thread(target=token_calculator, args=(tok1,))
+                        a = threading.Thread(target=token_calculator, args=(tok1,), kwargs={"session_id": conversation_id})
                         a.start()
 
                         print(f"time taken for standalone = {time() - start}")
-
-                    with tracer.start_as_current_span('q_monitor') as parentq:
-                        t = threading.Thread(target=q_monitor, args=(parentq,entered_query,))
-                        t.start()
-                        # q_monitor(parentq,entered_query)
 
                     with tracer.start_as_current_span('llm-RetrievalQA-chain') as q:
                         # Using retrieval QA prompt from utils.prompts with dynamic question
@@ -2617,7 +2612,7 @@ def start():
                         agent_resp = qa_resp["result"] if isinstance(qa_resp, dict) else qa_resp
                         res2, tok2 = handler.infi()
                         llm_trace_to_jaeger(res2, tok2)
-                        b = threading.Thread(target=token_calculator, args=(tok2,))
+                        b = threading.Thread(target=token_calculator, args=(tok2,), kwargs={"session_id": conversation_id})
                         b.start()
                     
                     with tracer.start_as_current_span('relevant_documents'):
@@ -2687,12 +2682,8 @@ def start():
                         print(standalone_result)
                         res1, tok1 = handler.infi()
                         llm_trace_to_jaeger(res1, tok1)
-                        a = threading.Thread(target=token_calculator, args=(tok1,))
+                        a = threading.Thread(target=token_calculator, args=(tok1,), kwargs={"session_id": conversation_id})
                         a.start()
-
-                    with tracer.start_as_current_span('q_monitor') as parentq:
-                        t = threading.Thread(target=q_monitor, args=(parentq,entered_query,))
-                        t.start()
 
                     with tracer.start_as_current_span('llm-RetrievalQA-chain') as q:
                         qa = RetrievalQA.from_chain_type(llm=llm2, retriever=retriever, verbose=True)
@@ -2700,7 +2691,7 @@ def start():
                         agent_resp = agent_response["output"]
                         res2, tok2 = handler.infi()
                         llm_trace_to_jaeger(res2, tok2)
-                        b = threading.Thread(target=token_calculator, args=(tok2,))
+                        b = threading.Thread(target=token_calculator, args=(tok2,), kwargs={"session_id": conversation_id})
                         b.start()
                     
                     with tracer.start_as_current_span('relevant_documents'):
@@ -2796,6 +2787,21 @@ def start():
                             )
                     except Exception:
                         pass
+
+                # Score insert after conversation_id is set (new or existing) so session_id reaches BigQuery.
+                def _run_monitor_after_answer():
+                    with tracer.start_as_current_span('q_monitor') as parentq:
+                        dicts = security_scores(parentq, entered_query)
+                        if dicts:
+                            answer_str = str(agent_resp or "").strip()
+                            is_fallback = _is_answer_fallback(answer_str)
+                            resolution_score = 1 if (answer_str and not is_fallback) else 0
+                            relevance_score = 1 if (resolution_score == 1 and (relevant_documents or "").strip() and not is_fallback) else 0
+                            dicts['relevance_score'] = relevance_score
+                            dicts['resolution_score'] = resolution_score
+                            # Feature Usage: /start endpoint → feature_name from gpt_model (Search/Infer), flow_type=rag.
+                            func_Binsert(parentq, dicts, entered_query, session_id=str(conversation_id) if conversation_id else None, user_email=user_email, answer_text=agent_resp if agent_resp else None, feature_name=gpt_model, flow_type="rag")
+                threading.Thread(target=_run_monitor_after_answer, daemon=True).start()
 
                 output_json = {"aiResponse": ai_response, "conversationId": str(conversation_id), "chatId":chat.get("chat_id")}
 
