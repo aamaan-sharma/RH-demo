@@ -179,6 +179,10 @@ _BIAS_RISK_SENTIMENT_STRONG_NEGATIVE = float(os.getenv("BIAS_RISK_SENTIMENT_STRO
 # Response clarity: threshold above which reading_level is considered low clarity; length above which to flag.
 _RESPONSE_READING_LEVEL_HIGH_THRESHOLD = float(os.getenv("RESPONSE_READING_LEVEL_HIGH_THRESHOLD", "12"))
 _RESPONSE_LENGTH_VERY_HIGH = int(os.getenv("RESPONSE_LENGTH_VERY_HIGH", "8000"))
+# Refusal Appropriateness: thresholds for when a refusal is considered justified (deterministic, no LLM).
+_TOXICITY_THRESHOLD = float(os.getenv("REFUSAL_TOXICITY_THRESHOLD", "0.7"))
+_JAILBREAK_THRESHOLD = float(os.getenv("REFUSAL_JAILBREAK_THRESHOLD", "0.8"))
+_RELEVANCE_THRESHOLD = float(os.getenv("REFUSAL_RELEVANCE_THRESHOLD", "0.2"))
 
 
 def func_Binsert(parent1, dicts,prompt, session_id=None, user_email=None, answer_text=None, feature_name=None, agent_name=None, flow_type=None):
@@ -300,6 +304,33 @@ def func_Binsert(parent1, dicts,prompt, session_id=None, user_email=None, answer
                     data_to_insert[0]["low_clarity_flag"] = _low_clarity_flag
             except Exception:
                 pass
+        # Refusal Appropriateness: is_refusal from answer phrases; refusal_appropriate only when refusal, using toxicity/jailbreak/relevance.
+        _refusal_phrases = (
+            "i can't help with that", "i cannot help with that", "i'm unable to answer", "i cannot answer",
+            "this request is not allowed", "i can't provide that information", "i cannot provide that information",
+            "i'm unable to help", "i can't assist with that",
+        )
+        _is_refusal = 0
+        if answer_text is not None and isinstance(answer_text, str) and answer_text.strip():
+            _at_lower = answer_text.lower()
+            _is_refusal = 1 if any(_p in _at_lower for _p in _refusal_phrases) else 0
+        data_to_insert[0]["is_refusal"] = _is_refusal
+        if _is_refusal == 1:
+            _tox_ref = dicts.get("prompt.toxicity")
+            _jail_ref = dicts.get("prompt.jailbreak_similarity")
+            _tox_high = _tox_ref is not None and isinstance(_tox_ref, (int, float)) and float(_tox_ref) >= _TOXICITY_THRESHOLD
+            _jail_high = _jail_ref is not None and isinstance(_jail_ref, (int, float)) and float(_jail_ref) >= _JAILBREAK_THRESHOLD
+            _rel_low = relevance_score < _RELEVANCE_THRESHOLD
+            if _tox_high:
+                _refusal_appropriate = 1  # Appropriate: prompt toxicity above threshold, refusal justified.
+            elif _jail_high:
+                _refusal_appropriate = 1  # Appropriate: jailbreak similarity above threshold, refusal justified.
+            elif _rel_low:
+                _refusal_appropriate = 1  # Appropriate: no relevant docs / low relevance, refusal justified.
+            else:
+                _refusal_appropriate = 0  # Potentially inappropriate: no safety/relevance signal to justify refusal.
+            data_to_insert[0]["refusal_appropriate"] = _refusal_appropriate
+        # When is_refusal = 0, refusal_appropriate is not set (NULL in BigQuery).
 
         # Attach answer-quality metrics to current span (no new spans).
         try:
