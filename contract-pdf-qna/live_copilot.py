@@ -1695,3 +1695,52 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
             pass
 
 
+def handle_copilot_enable_event(session_id: str, phone_number: str = None) -> Optional[Dict[str, Any]]:
+    """
+    Proactively initialize session state and lookup user details when copilot is enabled.
+    This allows displaying user details card as soon as the call connects.
+    """
+    if not session_id:
+        return None
+        
+    st = _get_state(session_id)
+    
+    # If phone number is provided from connection metadata, perform proactive lookup
+    if phone_number:
+        # Normalize phone number
+        phone_clean = re.sub(r"\D+", "", phone_number)
+        if len(phone_clean) == 10:
+            phone_candidates = [phone_clean, "+1" + phone_clean]
+        elif len(phone_clean) == 11 and phone_clean.startswith("1"):
+            phone_candidates = [phone_clean[1:], "+1" + phone_clean[1:], phone_clean]
+        else:
+            phone_candidates = [phone_clean]
+            
+        _log("info", "📞", f"Proactive lookup for session {session_id} with phone {phone_number}")
+        doc = _lookup_user_by_phone(phone_candidates)
+        if doc:
+            st.customer = _normalize_customer_doc(doc, phone_candidates[0])
+            st.mongo_user_details = _build_mongo_user_details(doc, phone_candidates[0])
+            
+            # Sync plan context
+            try:
+                mongo_ct = _s(st.customer.get("contractType"))
+                mongo_pl = _s(st.customer.get("plan")) or _s(st.customer.get("selectedPlan")) or _s(st.customer.get("planName"))
+                mongo_st = _s(st.customer.get("state")) or _s(st.customer.get("selectedState")) or _s(st.customer.get("stateName"))
+                if mongo_ct: st.contract_type = mongo_ct
+                if mongo_pl: st.selected_plan = mongo_pl
+                if mongo_st: st.selected_state = mongo_st
+            except Exception:
+                pass
+                
+            return {
+                "sessionId": session_id,
+                "intent": "OTHER",
+                "userDetails": st.mongo_user_details,
+                "createdAt": str(_now_epoch()),
+            }
+            
+    return None
+
+
+

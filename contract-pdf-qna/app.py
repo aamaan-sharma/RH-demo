@@ -40,7 +40,7 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 # Live Copilot for real-time AI suggestions during calls
 try:
-    from live_copilot import handle_transcript_event
+    from live_copilot import handle_transcript_event, handle_copilot_enable_event
     LIVE_COPILOT_AVAILABLE = True
 except ImportError:
     LIVE_COPILOT_AVAILABLE = False
@@ -7091,7 +7091,7 @@ def transcript_event():
             except Exception:
                 pass
         try:
-            socketio.emit("transcript_update", data, room=data["sessionId"])
+            socketio.emit("transcript_update", data, room=session_id)
         except Exception as e:
             print(f"⚠️ Transcript emission error (non-blocking): {e}")
 
@@ -7253,15 +7253,29 @@ def on_join_conversation(data):
 def on_copilot_enable(data):
     """Enable Live Copilot for a session when call connects."""
     session_id = data.get("sessionId")
+    phone_number = data.get("phoneNumber") # Pass phone number from CCP
+    
     if session_id:
         with _copilot_sessions_lock:
             _copilot_enabled_sessions[session_id] = time() + _copilot_session_ttl_seconds()
             _copilot_session_context[session_id] = {
+                "phoneNumber": phone_number,
                 "contractType": data.get("contractType", ""),
                 "selectedPlan": data.get("selectedPlan", ""),
                 "selectedState": data.get("selectedState", ""),
             }
-        print(f"🟢 COPILOT ENABLED for session: {session_id}")
+        print(f"🟢 COPILOT ENABLED for session: {session_id} (Phone: {phone_number})")
+        
+        # Proactive lookup for user details if phone is provided
+        if LIVE_COPILOT_AVAILABLE and phone_number:
+            try:
+                res = handle_copilot_enable_event(session_id, phone_number)
+                if res and res.get("userDetails"):
+                    print(f"💡 Emitting proactive userDetails for {session_id}")
+                    socketio.emit("suggestion_update", res, room=session_id)
+            except Exception as e:
+                print(f"Error in proactive lookup: {e}")
+
         # Emit status back to UI
         socketio.emit("copilot_status", {
             "sessionId": session_id,
