@@ -38,6 +38,7 @@ import json
 import re
 from typing import List, Dict, Any, Optional
 from pathlib import Path
+from utils.milvus_utils import get_milvus_collection_name
 # Live Copilot for real-time AI suggestions during calls
 try:
     from live_copilot import handle_transcript_event, handle_copilot_enable_event
@@ -406,8 +407,35 @@ def run_coro_in_thread(coro):
         asyncio.set_event_loop(None)
 
 
-def input_prompt(entered_query, qa, llm):
-    # Retriever chain as Tool for agent
+from functools import cache
+import asyncio
+
+@cache
+async def get_memory_instance(*, session_id):
+    memory = MotorheadMemory(
+        api_key=MOTORHEAD_API_KEY,
+        client_id=MOTORHEAD_CLIENT_ID,
+        session_id=session_id,
+        memory_key="chat_history",
+        return_messages=True,
+        input_key="input",
+        output_key="output",
+    )
+
+    await memory.init()
+    return memory
+
+
+
+llm_repo = {}
+
+@cache
+def get_agent_instance(policyId):
+    llm = llm_repo.get("agent_llm", ChatOpenAI(model="gpt-4o", temperature=0.0))
+    vector_db1 = get_vector_db("policies")
+    retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K, "expr": f"policyId == '{policyId.lower()}'"})
+    qa = RetrievalQA.from_chain_type(llm=llm, retriever=retriever, verbose=True)
+
     knowledge_base_tool = Tool(
         name="Knowledge Base",
         func=qa.run,
@@ -429,42 +457,11 @@ def input_prompt(entered_query, qa, llm):
 
     tools = [knowledge_base_tool, user_lookup_tool]
 
-    current_time = time()
+    current_time = str(time())
 
-    MOTORHEAD_SESSION_ID = str(current_time)
-    MOTORHEAD_MEMORY_KEY = "chat_history"
 
-    # Long Term chat memory
-    memory = MotorheadMemory(
-        api_key=MOTORHEAD_API_KEY,
-        client_id=MOTORHEAD_CLIENT_ID,
-        session_id=MOTORHEAD_SESSION_ID,
-        memory_key=MOTORHEAD_MEMORY_KEY,
-        return_messages=True,
-        input_key="input",
-        output_key="output",
-    )
+    memory = asyncio.run(get_memory_instance(session_id=current_time))
 
-    #
-    # async def memory_initialize():
-        # await memory.init()
-
-    # # Simplified version for threading mode
-    # try:
-    #     loop = asyncio.get_event_loop()
-    #     if not loop.is_running():
-    #         loop.run_until_complete(memory_initialize())
-    #     else:
-    #         # Only needed if somehow loop is running
-    #         import concurrent.futures
-    #         with concurrent.futures.ThreadPoolExecutor() as executor:
-    #             future = executor.submit(asyncio.run, memory_initialize())
-    #             future.result()
-    # except RuntimeError:
-    #     asyncio.run(memory_initialize())
-    run_coro_in_thread(memory.init())
-
-    # Initializing agent
     agent = initialize_agent(
         agent=AgentType.CHAT_CONVERSATIONAL_REACT_DESCRIPTION,
         tools=tools,
@@ -473,15 +470,30 @@ def input_prompt(entered_query, qa, llm):
         memory=memory,
         early_stopping_method="generate",
         handle_parsing_errors=True,
-        return_intermediate_steps=True,
     )
 
     new_prompt = agent.agent.create_prompt(system_message=sys_msg, tools=tools)
-
     agent.agent.llm_chain.prompt = new_prompt
 
-    response = agent({"input": entered_query},callbacks=[handler])
-    return response
+    return agent
+
+from langchain.callbacks.base import BaseCallbackHandler
+
+class DocCaptureHandler(BaseCallbackHandler):
+    def __init__(self):
+        self.docs = []
+
+    def on_retriever_end(self, documents, **kwargs):
+        self.docs.extend(documents)
+
+
+def input_prompt(entered_query, policyId):
+    # Retriever chain as Tool for agent
+    docHandler = DocCaptureHandler()
+    agent = get_agent_instance(policyId)
+    response = agent({"input": entered_query},callbacks=[handler, docHandler])
+    docs = docHandler.docs
+    return response, docs
 
 
 # Function to get relevant documents
@@ -1772,58 +1784,36 @@ def process_single_transcript_question(
 
         if gpt_model == "Search":
             # Using search mode prompt from utils.prompts
-            PROMPT = ANSWERING_PROMPT_SEARCH
-            chain_type_kwargs = {"prompt": PROMPT}
-            qa = RetrievalQA.from_chain_type(
+            qa_search = RetrievalQA.from_chain_type(
                 llm=llm,
                 retriever=retriever,
-                verbose=True,
-                chain_type_kwargs=chain_type_kwargs
+                verbose=False,
+                return_source_documents=True,
+                chain_type_kwargs = {"prompt": ANSWERING_PROMPT_SEARCH}
             )
             
             # print("[CHUNKS] process_single_transcript_question: calling QA chain (Search)")
-            qa_response = qa.invoke(
+            qa_search_response = qa_search.invoke(
                 {"query": enriched_query},
                 config={"callbacks": [handler]},
             )
-            answer = qa_response["result"] if isinstance(qa_response, dict) else qa_response
+            answer_search = qa_search_response["result"] if isinstance(qa_search_response, dict) else qa_search_response
             print(
                 "[CHUNKS] process_single_transcript_question: QA chain completed "
-                f"answer_len={len(str(answer))}"
+                f"answer_len={len(str(answer_search))}"
             )
 
-            # print("[CHUNKS] process_single_transcript_question: calling relevant_docs (Search)")
-            relevant_documents = relevant_docs(enriched_query, retriever=retriever)
-            # print(
-            #     "[CHUNKS] process_single_transcript_question: relevant_documents string length "
-            #     f"len={len(relevant_documents)}"
-            # )
+            relevant_documents = str(qa_search_response["source_documents"])
+            #relevant_docs(enriched_query, retriever=retriever)
             
         elif gpt_model == "Infer":
-            # print("[CHUNKS] process_single_transcript_question: building QA chain (Infer)")
-            qa = RetrievalQA.from_chain_type(llm=llm, retriever=retriever, verbose=True)
-            agent_response = input_prompt(enriched_query, qa, llm)
+            agent_response, docs = input_prompt(enriched_query, get_milvus_collection_name(contract_type=contract_type, selected_plan=selected_plan, selected_state=selected_state))
             answer = agent_response["output"]
             print(
                 "[CHUNKS] process_single_transcript_question: agent_response received "
                 f"answer_len={len(str(answer))}"
             )
-            knowledge_base_thoughts = [
-                item[0].tool_input for item in agent_response["intermediate_steps"] 
-                if item[0].tool == 'Knowledge Base'
-            ]
-            relevant_documents = ""
-            for action_input in knowledge_base_thoughts:
-                print(
-                    "[CHUNKS] process_single_transcript_question: calling relevant_docs (Infer) "
-                    f"for tool_input='{str(action_input)[:200]}'"
-                )
-                rd = relevant_docs(action_input, retriever)
-                print(
-                    "[CHUNKS] process_single_transcript_question: returned from relevant_docs (Infer) "
-                    f"len={len(rd)}"
-                )
-                relevant_documents += rd
+            relevant_documents = str(docs)
         else:
             return {
                 "error": f"Invalid gpt_model: {gpt_model}",
@@ -1841,7 +1831,7 @@ def process_single_transcript_question(
         chunk_details = []
         try:
             # First attempt: retriever (normal path)
-            docs_for_chunks = retriever.get_relevant_documents(enriched_query)
+            docs_for_chunks = docs
             if not docs_for_chunks:
                 # Fallbacks to ensure we still fetch something from Milvus
                 fallback_queries = [
@@ -2197,6 +2187,9 @@ def process_questions_parallel_stream(
     # Return results in original order (for metrics calculation)
     return [results_dict[i] for i in range(len(questions))]
 
+# Initialize LLMs for Infer mode
+llm_infer = ChatOpenAI(temperature=0.0, model="gpt-4o")
+llm_infer2 = ChatOpenAI(temperature=0.0, model="gpt-4o")
 
 # -------------------------------------------------------------------
 # process_live_copilot_question: Wrapper for Live Copilot INFER
@@ -2248,8 +2241,8 @@ def process_live_copilot_question(
                 # Get normalized values for error logging
                 contract_type_norm = normalize_contract_type(contract_type)
                 selected_plan_norm = normalize_plan_for_milvus(contract_type_norm, selected_plan)
-                print(f"[LIVE_COPILOT_INFER] Could not determine collection name for contract_type={contract_type_norm}, plan={selected_plan_norm}")
-                span.set_attribute("live_copilot.error", "collection_not_found")
+                print(f"[LIVE_COPILOT_INFER] Could not determine policy Id name for contract_type={contract_type_norm}, plan={selected_plan_norm}")
+                span.set_attribute("live_copilot.error", "policyId_not_found")
                 return {
                     "answer": "Unable to determine the appropriate knowledge base for your query.",
                     "relevantChunks": [],
@@ -2257,18 +2250,12 @@ def process_live_copilot_question(
                     "latency": 0.0,
                 }
             
-            span.set_attribute("live_copilot.collection_name", selected_collection_name)
-            print(f"[LIVE_COPILOT_INFER] Using Milvus collection: {selected_collection_name}")
-            
             # Initialize Milvus vector DB
-            vector_db1 = get_vector_db(selected_collection_name)
+            vector_db1 = get_vector_db("policies")
             
             # Initialize retriever
             retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K, "expr": f"policyId == '{selected_collection_name.lower()}'"})
             
-            # Initialize LLMs for Infer mode
-            llm = ChatOpenAI(temperature=0.0, model="gpt-4o")
-            llm2 = ChatOpenAI(temperature=0.0, model="gpt-4o")
             
             # Call the existing INFER implementation
             result = process_single_transcript_question(
@@ -2278,8 +2265,8 @@ def process_live_copilot_question(
                 selected_state=selected_state,
                 gpt_model="Infer",  # Use INFER mode with LangChain Agent
                 vector_db=vector_db1,
-                llm=llm,
-                llm2=llm2,
+                llm=llm_infer,
+                llm2=llm_infer2,
                 retriever=retriever,
                 handler=handler,
                 transcript_context=transcript_context,
