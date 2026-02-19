@@ -38,6 +38,7 @@ import re
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 from utils.milvus_utils import get_milvus_collection_name
+import threading
 # Live Copilot for real-time AI suggestions during calls
 try:
     from live_copilot import handle_transcript_event, handle_copilot_enable_event
@@ -45,6 +46,202 @@ try:
 except ImportError:
     LIVE_COPILOT_AVAILABLE = False
     print("Warning: live_copilot module not available - Live Copilot disabled")
+
+# -------------------------
+# Pending transcript debounce
+# -------------------------
+# Coalesce micro-segment transcripts (e.g., "I have" / "problem" / "water")
+# into a single utterance before sending to Live Copilot to avoid redundant LLM calls.
+# Coalesce micro-segment transcripts (e.g., "I have" / "problem" / "water")
+# into a single utterance before sending to Live Copilot to avoid redundant LLM calls.
+COPILOT_DEBOUNCE_SECONDS = float(os.getenv("COPILOT_DEBOUNCE_SECONDS", "0.5"))
+COPILOT_MIN_AGGREGATE_CHARS = int(os.getenv("COPILOT_MIN_AGGREGATE_CHARS", "10"))
+COPILOT_MIN_AGGREGATE_WORDS = int(os.getenv("COPILOT_MIN_AGGREGATE_WORDS", "3"))
+# Enable debug logging for copilot debounce/coalesce logic
+COPILOT_DEBUG = str(os.getenv("COPILOT_DEBUG", "0") or "").strip().lower() in ("1", "true", "yes", "on")
+
+# sessionId -> { text:str, speaker:str, contactId:..., phoneNumber:..., last_update:float, running:bool, parent_ctx }
+_pending_transcripts: Dict[str, Dict[str, Any]] = {}
+_pending_transcripts_lock = threading.Lock()
+
+def _enqueue_pending_transcript(session_id: str, payload: Dict[str, Any], parent_ctx=None) -> None:
+    """Append incoming transcript segment to pending buffer and schedule worker.
+
+    If speaker changes, flush previous pending immediately and start a new buffer.
+    """
+    now = _time_mod.time()
+    with _pending_transcripts_lock:
+        entry = _pending_transcripts.get(session_id)
+        # If existing pending from a different speaker, flush it first
+        if entry and entry.get("speaker") and entry.get("speaker") != payload.get("speaker"):
+            # schedule immediate flush of existing entry
+            old_parent = entry.get("parent_ctx")
+            old_payload = {
+                "sessionId": session_id,
+                "contactId": entry.get("contactId"),
+                "speaker": entry.get("speaker"),
+                "text": entry.get("text"),
+                "isPartial": False,
+                "phoneNumber": entry.get("phoneNumber"),
+                "state": entry.get("state"),
+                "contractType": entry.get("contractType"),
+                "plan": entry.get("plan"),
+            }
+            try:
+                if COPILOT_DEBUG:
+                    print(f"[COPILOT_DEBOUNCE] speaker change - flushing pending for session={session_id} old_speaker={entry.get('speaker')} new_speaker={payload.get('speaker')}")
+                socketio.start_background_task(_pending_transcript_worker, session_id, old_payload, old_parent)
+            except Exception as e:
+                if COPILOT_DEBUG:
+                    print(f"[COPILOT_DEBOUNCE] failed to start pending worker on speaker-change flush: {e}")
+                # best-effort; continue
+                pass
+            # replace with new entry
+            _pending_transcripts[session_id] = {
+                "text": payload.get("text") or "",
+                "speaker": payload.get("speaker"),
+                "contactId": payload.get("contactId"),
+                "phoneNumber": payload.get("phoneNumber"),
+                "state": payload.get("state"),
+                "contractType": payload.get("contractType"),
+                "plan": payload.get("plan"),
+                "last_update": now,
+                "running": False,
+                "parent_ctx": parent_ctx,
+            }
+            if COPILOT_DEBUG:
+                print(f"[COPILOT_DEBOUNCE] created pending entry for session={session_id} speaker={payload.get('speaker')} text='{(payload.get('text') or '')[:120]}'")
+        else:
+            if not entry:
+                _pending_transcripts[session_id] = {
+                    "text": payload.get("text") or "",
+                    "speaker": payload.get("speaker"),
+                    "contactId": payload.get("contactId"),
+                    "phoneNumber": payload.get("phoneNumber"),
+                    "state": payload.get("state"),
+                    "contractType": payload.get("contractType"),
+                    "plan": payload.get("plan"),
+                    "last_update": now,
+                    "running": False,
+                    "parent_ctx": parent_ctx,
+                }
+                if COPILOT_DEBUG:
+                    print(f"[COPILOT_DEBOUNCE] started new pending entry session={session_id} speaker={payload.get('speaker')} text='{(payload.get('text') or '')[:120]}'")
+            else:
+                # append text with a separating space
+                txt = (entry.get("text") or "")
+                add = payload.get("text") or ""
+                if txt:
+                    txt = txt + " " + add
+                else:
+                    txt = add
+                entry["text"] = txt
+                entry["last_update"] = now
+                # keep parent_ctx if already set; prefer latest if provided
+                entry["parent_ctx"] = entry.get("parent_ctx") or parent_ctx
+                if COPILOT_DEBUG:
+                    print(f"[COPILOT_DEBOUNCE] appended text for session={session_id} speaker={entry.get('speaker')} new_text_fragment='{add[:120]}' combined_len={len(txt)}")
+
+        # start worker if not already running
+        entry = _pending_transcripts.get(session_id)
+        if entry and not entry.get("running"):
+            entry["running"] = True
+            try:
+                if COPILOT_DEBUG:
+                    print(f"[COPILOT_DEBOUNCE] scheduling worker for session={session_id}")
+                socketio.start_background_task(_pending_transcript_worker, session_id, None, parent_ctx)
+            except Exception as e:
+                entry["running"] = False
+                if COPILOT_DEBUG:
+                    print(f"[COPILOT_DEBOUNCE] failed to start worker for session={session_id}: {e}")
+
+
+def _pending_transcript_worker(session_id: str, payload_override: Optional[Dict[str, Any]], parent_ctx=None) -> None:
+    """Background worker that waits for silence (debounce) then processes the coalesced transcript."""
+    try:
+        while True:
+            with _pending_transcripts_lock:
+                entry = _pending_transcripts.get(session_id)
+                if not entry:
+                    return
+                last = float(entry.get("last_update") or 0.0)
+                text = entry.get("text") or ""
+                speaker = entry.get("speaker")
+                contactId = entry.get("contactId")
+                phoneNumber = entry.get("phoneNumber")
+                state = entry.get("state")
+                contractType = entry.get("contractType")
+                plan = entry.get("plan")
+                entry_parent = entry.get("parent_ctx") or parent_ctx
+
+            now = _time_mod.time()
+            elapsed = now - last
+            wait = COPILOT_DEBOUNCE_SECONDS - elapsed
+            if wait > 0:
+                # sleep until debounce window elapsed (coalesce more segments)
+                if COPILOT_DEBUG:
+                    print(f"[COPILOT_DEBOUNCE] session={session_id} waiting {wait:.3f}s for more segments (len={len(text)})")
+                _time_mod.sleep(wait)
+                continue
+
+            # Decide whether to process based on aggregate length/words
+            text_stripped = (text or "").strip()
+            words = text_stripped.split()
+            if len(text_stripped) < COPILOT_MIN_AGGREGATE_CHARS and len(words) < COPILOT_MIN_AGGREGATE_WORDS:
+                # Too small; drop it and clear pending
+                if COPILOT_DEBUG:
+                    print(f"[COPILOT_DEBOUNCE] dropping small aggregate for session={session_id} text='{text_stripped}' len={len(text_stripped)} words={len(words)}")
+                with _pending_transcripts_lock:
+                    _pending_transcripts.pop(session_id, None)
+                return
+
+            # Build copilot payload (use override if caller requested immediate flush)
+            if payload_override:
+                copilot_payload = payload_override
+            else:
+                copilot_payload = {
+                    "sessionId": session_id,
+                    "contactId": contactId,
+                    "speaker": speaker,
+                    "text": text_stripped,
+                    "isPartial": False,
+                    "phoneNumber": phoneNumber,
+                    "state": state,
+                    "contractType": contractType,
+                    "plan": plan,
+                }
+
+            if COPILOT_DEBUG:
+                print(f"[COPILOT_DEBOUNCE] processing pending session={session_id} speaker={speaker} text='{text_stripped[:200]}'")
+
+            # Clear pending before processing to allow new segments to accumulate
+            with _pending_transcripts_lock:
+                _pending_transcripts.pop(session_id, None)
+
+            # Process via existing Live Copilot handler
+            try:
+                copilot_result = None
+                if LIVE_COPILOT_AVAILABLE:
+                    copilot_result = handle_transcript_event(copilot_payload, parent_context=entry_parent)
+
+                if copilot_result:
+                    try:
+                        if COPILOT_DEBUG:
+                            cards = copilot_result.get('cards') or []
+                            print(f"[COPILOT_DEBOUNCE] emit suggestion_update session={session_id} cards={len(cards)} intent={copilot_result.get('intent')}")
+                        socketio.emit("suggestion_update", copilot_result, room=session_id)
+                    except Exception as e:
+                        print(f"⚠️ Pending worker emit error: {e}")
+            except Exception as e:
+                print(f"⚠️ Copilot pending processing error: {e}")
+                if COPILOT_DEBUG:
+                    import traceback
+                    traceback.print_exc()
+            return
+    finally:
+        with _pending_transcripts_lock:
+            if session_id in _pending_transcripts:
+                _pending_transcripts[session_id]["running"] = False
 
 # GCP Storage imports using fsspec (unified filesystem interface)
 try:
@@ -373,6 +570,100 @@ def run_coro_in_thread(coro):
         asyncio.set_event_loop(None)
 
 
+<<<<<<< Updated upstream
+=======
+from functools import cache
+import asyncio
+
+@cache
+async def get_memory_instance(*, session_id):
+    memory = MotorheadMemory(
+        api_key=MOTORHEAD_API_KEY,
+        client_id=MOTORHEAD_CLIENT_ID,
+        session_id=session_id,
+        memory_key="chat_history",
+        return_messages=True,
+        input_key="input",
+        output_key="output",
+    )
+
+    await memory.init()
+    return memory
+
+
+
+llm_repo = {}
+
+@cache
+def get_agent_instance(policyId, sessionId=None):
+    llm = llm_repo.get("agent_llm", ChatOpenAI(model="gpt-4o", temperature=0.0))
+    vector_db1 = get_vector_db("policies")
+    retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K, "expr": f"policyId == '{policyId.lower()}'"})
+    qa = RetrievalQA.from_chain_type(llm=llm, retriever=retriever, verbose=True)
+
+    knowledge_base_tool = Tool(
+        name="Knowledge Base",
+        func=qa.run,
+        description=(
+            "Useful for answering questions related to insurance coverage of home appliances, home fixtures, their repairs/replacement, service requests, about the renewal, cancellation or refund policies, whether a certain service is covered under the contract, permit limit, code violation limit, modification limit, limitations and exclusions."
+        ),
+    )
+    
+    # User lookup tool
+    user_lookup_tool = Tool(
+        name="User Lookup",
+        func=fetch_user_by_mobile,
+        description=(
+            "Useful for fetching user details from the database based on mobile number. "
+            "Use this tool when you need to retrieve customer information, user profile, or any user-related data. "
+            "Input should be the mobile number as a string. Returns user details in JSON format if found, or an error message if not found."
+        ),
+    )
+
+    tools = [knowledge_base_tool, user_lookup_tool]
+
+    if sessionId is None:
+        current_time = str(time())
+    else:
+        current_time = sessionId
+
+
+    memory = asyncio.run(get_memory_instance(session_id=current_time))
+
+    agent = initialize_agent(
+        agent=AgentType.CHAT_CONVERSATIONAL_REACT_DESCRIPTION,
+        tools=tools,
+        llm=llm,
+        verbose=True,
+        memory=memory,
+        early_stopping_method="generate",
+        handle_parsing_errors=True,
+    )
+
+    new_prompt = agent.agent.create_prompt(system_message=sys_msg, tools=tools)
+    agent.agent.llm_chain.prompt = new_prompt
+
+    return agent
+
+from langchain.callbacks.base import BaseCallbackHandler
+
+class DocCaptureHandler(BaseCallbackHandler):
+    def __init__(self):
+        self.docs = []
+
+    def on_retriever_end(self, documents, **kwargs):
+        self.docs.extend(documents)
+
+
+def input_prompt(entered_query, policyId, sessionId = None):
+    # Retriever chain as Tool for agent
+    docHandler = DocCaptureHandler()
+    agent = get_agent_instance(policyId, sessionId)
+    response = agent({"input": entered_query},callbacks=[handler, docHandler])
+    docs = docHandler.docs
+    return response, docs
+
+>>>>>>> Stashed changes
 
 # Function to get relevant documents
 def relevant_docs(entered_query, retriever):
@@ -1624,6 +1915,176 @@ def heuristic_extract_claim_questions(transcript_text: str, max_items: int = 100
     return questions
 
 
+<<<<<<< Updated upstream
+=======
+def process_single_transcript_question(
+    question: str,
+    contract_type: str,
+    selected_plan: str,
+    selected_state: str,
+    gpt_model: str,
+    vector_db: Milvus,
+    llm,
+    llm2,
+    retriever,
+    handler,
+    transcript_context: str = "",
+    sessionId = None
+) -> Dict:
+    """
+    Process a single question from transcript and return answer with chunks
+    Reuses logic from /start endpoint but without conversation context
+    """
+    try:
+        q_start_time = time()
+        # No conversation context for transcript questions, but we CAN pass the transcript-derived
+        # situation/evidence as part of the query to improve retrieval + answer relevance.
+        # Keep the user-visible question unchanged elsewhere; only enrich the internal query.
+        standalone_result = question
+        enriched_query = (
+            f"{question}\n\nTranscript situation/evidence:\n{transcript_context}".strip()
+            if (transcript_context or "").strip()
+            else question
+        )
+        
+        print(
+            "[CHUNKS] process_single_transcript_question: START "
+            f"question='{str(question)[:200]}', "
+            f"contract_type={contract_type}, selected_plan={selected_plan}, "
+            f"selected_state={selected_state}, gpt_model={gpt_model}"
+        )
+
+        if gpt_model == "Search":
+            # Using search mode prompt from utils.prompts
+            qa_search = RetrievalQA.from_chain_type(
+                llm=llm,
+                retriever=retriever,
+                verbose=False,
+                return_source_documents=True,
+                chain_type_kwargs = {"prompt": ANSWERING_PROMPT_SEARCH}
+            )
+            
+            # print("[CHUNKS] process_single_transcript_question: calling QA chain (Search)")
+            qa_search_response = qa_search.invoke(
+                {"query": enriched_query},
+                config={"callbacks": [handler]},
+            )
+            answer_search = qa_search_response["result"] if isinstance(qa_search_response, dict) else qa_search_response
+            print(
+                "[CHUNKS] process_single_transcript_question: QA chain completed "
+                f"answer_len={len(str(answer_search))}"
+            )
+
+            relevant_documents = str(qa_search_response["source_documents"])
+            #relevant_docs(enriched_query, retriever=retriever)
+            
+        elif gpt_model == "Infer":
+            agent_response, docs = input_prompt(enriched_query, get_milvus_collection_name(contract_type=contract_type, selected_plan=selected_plan, selected_state=selected_state), sessionId)
+            answer = agent_response["output"]
+            print(
+                "[CHUNKS] process_single_transcript_question: agent_response received "
+                f"answer_len={len(str(answer))}"
+            )
+            relevant_documents = str(docs)
+        else:
+            return {
+                "error": f"Invalid gpt_model: {gpt_model}",
+                "answer": "",
+                "relevantChunks": [],
+                "confidence": 0.0,
+                "latency": 0.0
+            }
+        
+        q_latency = time() - q_start_time
+        
+        # Build relevantChunks from Milvus docs (always list[str] in the API response)
+        # This ensures frontend receives text chunks (not placeholder "[]" / not dict objects).
+        chunk_texts = []
+        chunk_details = []
+        try:
+            # First attempt: retriever (normal path)
+            docs_for_chunks = docs
+            if not docs_for_chunks:
+                # Fallbacks to ensure we still fetch something from Milvus
+                fallback_queries = [
+                    f"{enriched_query} {contract_type} {selected_plan} {selected_state}",
+                    f"{contract_type} {selected_plan} contract coverage",
+                    "contract coverage",
+                ]
+                for fq in fallback_queries:
+                    try:
+                        docs_for_chunks = vector_db.similarity_search(fq, k=MILVUS_FALLBACK_K)
+                        if docs_for_chunks:
+                            break
+                    except Exception as e:
+                        print(f"[CHUNKS] process_single_transcript_question: fallback similarity_search failed: {e}")
+                        continue
+
+            docs_for_chunks = docs_for_chunks or []
+            print(
+                "[CHUNKS] process_single_transcript_question: docs_for_chunks_count="
+                f"{len(docs_for_chunks)}"
+            )
+
+            docs_iter = docs_for_chunks
+            if MILVUS_MAX_RETURN_CHUNKS is not None:
+                docs_iter = docs_for_chunks[:MILVUS_MAX_RETURN_CHUNKS]
+
+            for doc in docs_iter:
+                content = (getattr(doc, "page_content", "") or "").strip()
+                metadata = getattr(doc, "metadata", {}) or {}
+                if not content:
+                    continue
+                chunk_texts.append(content)
+                chunk_details.append({"content": content, "metadata": metadata})
+        except Exception as e:
+            print(f"[CHUNKS] process_single_transcript_question: ERROR building chunks: {e}")
+
+        if not chunk_texts:
+            # As a last resort, still return a non-empty list (but keep it explicit for debugging).
+            # This should be rare; most Milvus collections should return at least some results.
+            chunk_texts = ["(No supporting excerpts found)"]
+        
+        # print(
+        #     "[CHUNKS] process_single_transcript_question: FINAL "
+        #     f"chunks_count={len(chunk_texts)}, latency={q_latency}"
+        # )
+
+        # Log the exact chunks that will be returned with this question
+        returned_chunks = chunk_texts
+        if MILVUS_MAX_RETURN_CHUNKS is not None:
+            returned_chunks = chunk_texts[:MILVUS_MAX_RETURN_CHUNKS]
+        # print(
+        #     "[CHUNKS] process_single_transcript_question: returning relevantChunks="
+        #     f"{[c[:200].replace(chr(10), ' ') for c in returned_chunks]}"
+        # )
+
+        return {
+            "answer": answer,
+            # API contract: array of strings
+            "relevantChunks": returned_chunks,
+            # Keep details for optional persistence/debugging
+            "relevantChunksDetail": (
+                chunk_details[:MILVUS_MAX_RETURN_CHUNKS]
+                if MILVUS_MAX_RETURN_CHUNKS is not None
+                else chunk_details
+            ),
+            "confidence": 0.90,  # Default confidence, can be calculated from LLM
+            "latency": q_latency
+        }
+    except Exception as e:
+        print(f"Error processing transcript question: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "error": str(e),
+            "answer": "Error processing question",
+            "relevantChunks": [],
+            "confidence": 0.0,
+            "latency": 0.0
+        }
+
+>>>>>>> Stashed changes
 
 def _process_question_with_index(
     idx: int,
@@ -1906,6 +2367,110 @@ llm_infer2 = ChatOpenAI(temperature=0.0, model="gpt-4o")
 # -------------------------------------------------------------------
 # process_live_copilot_question: Wrapper for Live Copilot INFER
 # -------------------------------------------------------------------
+<<<<<<< Updated upstream
+=======
+def process_live_copilot_question(
+    question: str,
+    contract_type: str,
+    selected_plan: str,
+    selected_state: str,
+    transcript_context: str = "",
+    sessionId = None
+) -> Dict:
+    """
+    Wrapper for Live Copilot to use the existing INFER implementation.
+    
+    This function initializes Milvus, LLMs, and retriever, then calls
+    process_single_transcript_question with gpt_model="Infer" to leverage
+    the full LangChain Agent with Knowledge Base and User Lookup tools.
+    
+    Args:
+        question: The customer question to answer
+        contract_type: Contract type (RE or DTC)
+        selected_plan: Plan name (ShieldPlus, ShieldGold, etc.)
+        selected_state: State name (California, Texas, etc.)
+        transcript_context: Optional transcript context for enrichment
+        
+    Returns:
+        Dict with keys: answer, relevantChunks, confidence, latency
+    """
+    with tracer.start_as_current_span("live_copilot.process_question") as span:
+        try:
+            span.set_attribute("live_copilot.question.preview", question[:200] if question else "")
+            span.set_attribute("live_copilot.contract_type", contract_type or "")
+            span.set_attribute("live_copilot.plan", selected_plan or "")
+            span.set_attribute("live_copilot.state", selected_state or "")
+            
+            print(
+                f"[LIVE_COPILOT_INFER] Processing question='{question[:100]}...', "
+                f"contract_type={contract_type}, plan={selected_plan}, state={selected_state}"
+            )
+            
+            # Get collection name using utility function
+            selected_collection_name = get_milvus_collection_name(
+                contract_type=contract_type,
+                selected_plan=selected_plan,
+                selected_state=selected_state
+            )
+            
+            if not selected_collection_name:
+                # Get normalized values for error logging
+                contract_type_norm = normalize_contract_type(contract_type)
+                selected_plan_norm = normalize_plan_for_milvus(contract_type_norm, selected_plan)
+                print(f"[LIVE_COPILOT_INFER] Could not determine policy Id name for contract_type={contract_type_norm}, plan={selected_plan_norm}")
+                span.set_attribute("live_copilot.error", "policyId_not_found")
+                return {
+                    "answer": "Unable to determine the appropriate knowledge base for your query.",
+                    "relevantChunks": [],
+                    "confidence": 0.0,
+                    "latency": 0.0,
+                }
+            
+            # Initialize Milvus vector DB
+            vector_db1 = get_vector_db("policies")
+            
+            # Initialize retriever
+            retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K, "expr": f"policyId == '{selected_collection_name.lower()}'"})
+            
+            
+            # Call the existing INFER implementation
+            result = process_single_transcript_question(
+                question=question,
+                contract_type=contract_type,
+                selected_plan=selected_plan,
+                selected_state=selected_state,
+                gpt_model="Infer",  # Use INFER mode with LangChain Agent
+                vector_db=vector_db1,
+                llm=llm_infer,
+                llm2=llm_infer2,
+                retriever=retriever,
+                handler=handler,
+                transcript_context=transcript_context,
+                sessionId = sessionId
+            )
+            
+            print(f"[LIVE_COPILOT_INFER] Result: answer_len={len(result.get('answer', ''))}, chunks={len(result.get('relevantChunks', []))}")
+            
+            if result:
+                span.set_attribute("live_copilot.answer_length", len(result.get("answer", "")))
+                span.set_attribute("live_copilot.chunks_count", len(result.get("relevantChunks", [])))
+                span.set_attribute("live_copilot.confidence", result.get("confidence", 0.0))
+            
+            return result
+            
+        except Exception as e:
+            print(f"[LIVE_COPILOT_INFER] Error: {e}")
+            import traceback
+            traceback.print_exc()
+            span.set_attribute("live_copilot.error", str(e)[:200])
+            return {
+                "answer": f"Error processing question: {str(e)}",
+                "relevantChunks": [],
+                "confidence": 0.0,
+                "latency": 0.0,
+            }
+
+>>>>>>> Stashed changes
 
 # Feedback CRUD Operations
 
@@ -6709,67 +7274,27 @@ def transcript_event():
             and should_start_copilot(data)
         )
         if copilot_ok and (not require_session or _copilot_session_is_enabled(session_id)):
-            def process_copilot_async():
-                try:
-                    # Build copilot payload with session context
-                    # Include phone, state, plan, contractType from transcript payload
-                    # Normalize speaker so live_copilot sees "customer" for customer-side utterances
-                    raw_speaker = (data.get("speaker") or "").strip().lower()
-                    speaker = "customer" if raw_speaker in ("user", "caller", "participant", "customer") else raw_speaker or "customer"
-                    copilot_payload = {
-                        "sessionId": session_id,
-                        "contactId": data.get("contactId"),
-                        "speaker": speaker,
-                        "text": data.get("text"),
-                        "isPartial": data.get("isPartial", False),
-                        "beginOffsetMillis": data.get("beginOffsetMillis"),
-                        "endOffsetMillis": data.get("endOffsetMillis"),
-                        # New fields from transcript for session context
-                        # Support both 'phoneNumber' (Amazon Connect) and 'phone' keys
-                        "phoneNumber": data.get("phoneNumber") or data.get("phone"),
-                        "state": data.get("state"),
-                        "contractType": data.get("contractType"),
-                        "plan": data.get("plan"),
-                    }
-                    
-                    # Call Live Copilot to process transcript under the session trace root (1 trace per sessionId)
-                    # Use the same parent context so spans nest correctly
-                    copilot_result = handle_transcript_event(copilot_payload, parent_context=parent_ctx)
-                    
-                    if copilot_result:
-                        if include_payloads:
-                            try:
-                                limit = int(os.getenv("OTEL_TRACE_PAYLOAD_PREVIEW_CHARS", "500") or 500)
-                            except Exception:
-                                limit = 500
-                            print(
-                                "🟢 COPILOT SUGGESTION (payload):",
-                                json.dumps(copilot_result, indent=2, default=str)[: max(0, limit)],
-                            )
-                        else:
-                            try:
-                                cards = copilot_result.get("cards") or []
-                                print(
-                                    "🟢 COPILOT SUGGESTION (summary): "
-                                    f"sessionId={copilot_result.get('sessionId')}, intent={copilot_result.get('intent')}, cards={len(cards)}"
-                                )
-                            except Exception:
-                                pass
-                        # Emit suggestion to UI
-                        # socketio.emit("suggestion_update", copilot_result)
-                        socketio.emit("suggestion_update", copilot_result, room=session_id)
-                except Exception as e:
-                    print(f"⚠️ Copilot processing error (non-blocking): {e}")
-                    # Avoid spamming full tracebacks in normal demos; enable when debugging.
-                    try:
-                        show_tb = str(os.getenv("COPILOT_TRACEBACK", "0") or "").lower() in ("1", "true", "yes")
-                    except Exception:
-                        show_tb = False
-                    if show_tb:
-                        import traceback
-                        traceback.print_exc()
-            # threading.Thread(target=process_copilot_async, daemon=True).start()
-            socketio.start_background_task(process_copilot_async)
+            # Enqueue incoming transcript for debounce/coalescing. This reduces redundant
+            # LLM calls when ASR emits many short, final segments (e.g., "I have" / "problem" / ...).
+            raw_speaker = (data.get("speaker") or "").strip().lower()
+            speaker = "customer" if raw_speaker in ("user", "caller", "participant", "customer") else raw_speaker or "customer"
+            copilot_payload = {
+                "sessionId": session_id,
+                "contactId": data.get("contactId"),
+                "speaker": speaker,
+                "text": data.get("text"),
+                "isPartial": data.get("isPartial", False),
+                "beginOffsetMillis": data.get("beginOffsetMillis"),
+                "endOffsetMillis": data.get("endOffsetMillis"),
+                "phoneNumber": data.get("phoneNumber") or data.get("phone"),
+                "state": data.get("state"),
+                "contractType": data.get("contractType"),
+                "plan": data.get("plan"),
+            }
+            try:
+                _enqueue_pending_transcript(session_id, copilot_payload, parent_ctx)
+            except Exception as e:
+                print(f"⚠️ Failed to enqueue pending transcript: {e}")
         # =============================================================
 
         return jsonify({"ok": True}), 200

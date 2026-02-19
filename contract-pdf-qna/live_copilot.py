@@ -1,6 +1,3 @@
-from dotenv import load_dotenv
-load_dotenv(override=True)
-from functools import lru_cache
 import os
 import re
 import json
@@ -13,7 +10,6 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from time import time
 from typing import Any, Dict, List, Optional
-from pymongo.collection import Collection
 
 try:
     # openai>=1.x
@@ -100,7 +96,6 @@ def _get_infer_wrapper():
         return None
 
 
-_get_infer_wrapper()
 
 def _trace_include_payloads() -> bool:
     raw = (os.getenv("OTEL_TRACE_INCLUDE_PAYLOADS", "0") or "").strip().lower()
@@ -750,6 +745,7 @@ def _get_mongo_client() -> MongoClient:
     return _mongo_client
 
 
+<<<<<<< Updated upstream
 
 @lru_cache(maxsize=30)
 def cache_fetch_user_by_phone(phone: str, users: Collection):
@@ -812,6 +808,9 @@ def cache_fetch_user_by_phones(phone_candidates: tuple, users: Collection):
 
 def _lookup_user_by_phone(phone_candidates: tuple) -> Optional[Dict[str, Any]]:
     print("[LIVE_COPILOT DEBUG]: ", phone_candidates)
+=======
+def _lookup_user_by_phone(phone_candidates: List[str]) -> Optional[Dict[str, Any]]:
+>>>>>>> Stashed changes
     if not MONGO_URI:
         print("[LIVE_COPILOT] ERROR: MONGO_URI not configured, cannot lookup user", flush=True)
         return None
@@ -825,16 +824,72 @@ def _lookup_user_by_phone(phone_candidates: tuple) -> Optional[Dict[str, Any]]:
     # Try individual lookups first
     for p in phone_candidates:
         try:
+<<<<<<< Updated upstream
             doc = cache_fetch_user_by_phone(p, users)
             print("Find Candidates!!!")
             return doc
+=======
+            with tracer.start_as_current_span("db.mongo.find_one") as sp:
+                _set_session_attr(sp)
+                sp.set_attribute("db.system", "mongodb")
+                sp.set_attribute("db.operation", "find_one")
+                sp.set_attribute("db.collection", "Users")
+                sp.set_attribute("db.query.mobile", str(p))
+                doc = users.find_one({"mobile": p})
+            if doc:
+                try:
+                    name = doc.get('name') or doc.get('fullName') or doc.get('firstName') or ''
+                    plan = doc.get('plan') or doc.get('selectedPlan') or doc.get('planName') or ''
+                    state = doc.get('state') or doc.get('selectedState') or doc.get('stateName') or ''
+                    phone_masked = f"***{str(p)[-4:]}" if len(str(p)) >= 4 else "***"
+                    print(
+                        f"[LIVE_COPILOT] ✅ Mongo user match found!",
+                        f"phone={phone_masked}",
+                        f"name={name}",
+                        f"plan={plan}",
+                        f"state={state}",
+                        flush=True
+                    )
+                except Exception as e:
+                    print(f"[LIVE_COPILOT] User found but error logging details: {e}", flush=True)
+                return doc
+>>>>>>> Stashed changes
         except Exception as e:
             print(f"[LIVE_COPILOT] Error querying MongoDB with phone {p}: {e}", flush=True)
+            continue
     
     # Fallback: try $in query
     try:
+<<<<<<< Updated upstream
         doc = cache_fetch_user_by_phones(phone_candidates, users)
         return doc
+=======
+        with tracer.start_as_current_span("db.mongo.find_one") as sp:
+            _set_session_attr(sp)
+            sp.set_attribute("db.system", "mongodb")
+            sp.set_attribute("db.operation", "find_one")
+            sp.set_attribute("db.collection", "Users")
+            sp.set_attribute("db.query.mobile.$in", str(phone_candidates))
+            doc = users.find_one({"mobile": {"$in": phone_candidates}})
+        if doc:
+            try:
+                phone_val = doc.get("mobile") or ""
+                name = doc.get('name') or doc.get('fullName') or doc.get('firstName') or ''
+                plan = doc.get('plan') or doc.get('selectedPlan') or doc.get('planName') or ''
+                state = doc.get('state') or doc.get('selectedState') or doc.get('stateName') or ''
+                phone_masked = f"***{str(phone_val)[-4:]}" if len(str(phone_val)) >= 4 else "***"
+                print(
+                    f"[LIVE_COPILOT] ✅ Mongo user match found (via $in query)!",
+                    f"phone={phone_masked}",
+                    f"name={name}",
+                    f"plan={plan}",
+                    f"state={state}",
+                    flush=True
+                )
+            except Exception as e:
+                print(f"[LIVE_COPILOT] User found but error logging details: {e}", flush=True)
+            return doc
+>>>>>>> Stashed changes
     except Exception as e:
         print(f"[LIVE_COPILOT] Error with $in query: {e}", flush=True)
     
@@ -844,7 +899,7 @@ def _lookup_user_by_phone(phone_candidates: tuple) -> Optional[Dict[str, Any]]:
 
 def _normalize_customer_doc(doc: Dict[str, Any], phone: str) -> Dict[str, Any]:
     name = doc.get("name") or doc.get("fullName") or doc.get("firstName") or ""
-    if doc.get("lastName", "") not in str(name):
+    if doc.get("lastName") and name and doc.get("lastName") not in str(name):
         name = f"{name} {doc.get('lastName')}"
     plan = doc.get("plan") or doc.get("selectedPlan") or doc.get("planName") or ""
     contract_type = doc.get("contractType") or doc.get("contract_type") or ""
@@ -1071,6 +1126,7 @@ def _rag_answer(*, question: str, customer: Dict[str, Any], handler: CallbackHan
     contract_type = customer.get("contractType", "")
     plan = customer.get("plan", "")
     state = customer.get("state", "")
+    sessionId = customer.get("sessionId", "")
     
     # Try to use INFER wrapper first (full LangChain Agent)
     infer_wrapper = _get_infer_wrapper()
@@ -1084,6 +1140,7 @@ def _rag_answer(*, question: str, customer: Dict[str, Any], handler: CallbackHan
                     selected_plan=plan,
                     selected_state=state,
                     transcript_context="",  # Could add more context here if needed
+                    sessionId = sessionId,
                 )
             
             # Transform result to match expected format
@@ -1253,7 +1310,7 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
     session_id = _s(payload.get("sessionId"))
     speaker = _s(payload.get("speaker")).lower()
     text = _s(payload.get("text"))
-
+    # Default False so missing isPartial doesn't block (treat as final)
     is_partial = bool(payload.get("isPartial", False))
 
     if not session_id or not text:
@@ -1261,16 +1318,10 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
     if is_partial:
         return None
 
-    if is_trivial_utterance(text):
-        return None
-
     # Update buffer and session context (always needed for conversation history)
     st = _get_state(session_id)
     _update_session_context_from_payload(st, payload)
     _append_buffer(st, speaker=speaker, text=text)
-
-
-    # Skip AI processing for CSR text - only process customer prompts for suggestions
 
     # Check for phoneNumber in payload and lookup user in MongoDB
     # Always perform MongoDB lookup when phoneNumber is present for cross-verification
@@ -1280,7 +1331,7 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
         payload_contract_type = _s(payload.get("contractType"))
         payload_plan = _s(payload.get("plan"))
         payload_state = _s(payload.get("state"))
-        ''' 
+        
         print(f"[LIVE_COPILOT] Received phoneNumber from payload: {payload_phone}", flush=True)
         if payload_contract_type or payload_plan or payload_state:
             print(
@@ -1288,16 +1339,16 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                 f"plan={payload_plan}, state={payload_state}",
                 flush=True
             )
-        '''
+        
         # Normalize phone number - remove non-digits and handle +1 prefix
         phone_clean = re.sub(r"\D+", "", payload_phone)
-        #print(f"[LIVE_COPILOT] Normalized phone number: {phone_clean}", flush=True)
+        print(f"[LIVE_COPILOT] Normalized phone number: {phone_clean}", flush=True)
         if len(phone_clean) == 10:
-            phone_candidates = (phone_clean, "+1" + phone_clean)
+            phone_candidates = [phone_clean, "+1" + phone_clean]
         elif len(phone_clean) == 11 and phone_clean.startswith("1"):
-            phone_candidates = (phone_clean[1:], "+1" + phone_clean[1:], phone_clean)
+            phone_candidates = [phone_clean[1:], "+1" + phone_clean[1:], phone_clean]
         else:
-            phone_candidates = (phone_clean)
+            phone_candidates = [phone_clean]
         
         print(f"[LIVE_COPILOT] Searching MongoDB with phone candidates: {phone_candidates}", flush=True)
         doc = _lookup_user_by_phone(phone_candidates)
@@ -1328,7 +1379,6 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
             
             # Cross-verification: Compare payload data with MongoDB data (for debugging only)
             # NOTE: MongoDB values are the source of truth and will be used for inference
-            '''
             if payload_contract_type or payload_plan or payload_state:
                 print("-" * 80, flush=True)
                 print(f"[LIVE_COPILOT] 🔍 CROSS-VERIFICATION (Payload vs MongoDB - MongoDB is source of truth):", flush=True)
@@ -1377,7 +1427,7 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                     print(f"  ℹ️  State: Payload=Not provided, MongoDB={mongo_state}", flush=True)
             
             print("=" * 80, flush=True)
-            '''
+            
             # Update session state - ONLY use MongoDB data (no payload fallback)
             try:
                 if mongo_contract_type:
@@ -1397,6 +1447,7 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
             print(f"[LIVE_COPILOT] ❌ No user found in MongoDB for phone candidates: {phone_candidates}", flush=True)
             print(f"[LIVE_COPILOT] ⚠️  contractType, plan, and state will NOT be set (MongoDB lookup failed)", flush=True)
 
+    # Skip AI processing for CSR text - only process customer prompts for suggestions
     if speaker == "agent":
         # No AI suggestions needed for CSR text
         # But if user details were just fetched, send them for display
@@ -1409,6 +1460,8 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
             }
         return None
     
+    if is_trivial_utterance(text):
+        return None
 
     handler = CallbackHandler()
     output: Optional[Dict[str, Any]] = None
@@ -1428,15 +1481,15 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                 _set_session_attr(sp_intent)
                 
                 # Prioritize phoneNumber from payload, fallback to regex extraction from text
-                phone_candidates = None
+                phone_candidates = []
                 if payload_phone:
                     phone_clean = re.sub(r"\D+", "", payload_phone)
                     if len(phone_clean) == 10:
-                        phone_candidates = (phone_clean, "+1" + phone_clean)
+                        phone_candidates = [phone_clean, "+1" + phone_clean]
                     elif len(phone_clean) == 11 and phone_clean.startswith("1"):
-                        phone_candidates = (phone_clean[1:], "+1" + phone_clean[1:], phone_clean)
+                        phone_candidates = [phone_clean[1:], "+1" + phone_clean[1:], phone_clean]
                     else:
-                        phone_candidates = (phone_clean)
+                        phone_candidates = [phone_clean]
                 
                 if not phone_candidates:
                     phone_candidates = _extract_phone_candidates(text)
@@ -1507,7 +1560,11 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                         important_change = True
 
                 customer_ctx = _effective_customer_context(st)
+<<<<<<< Updated upstream
                 customer_ctx["sessionId"] = session
+=======
+                customer_ctx["sessions"] = session_id
+>>>>>>> Stashed changes
                 verified = bool(customer_ctx.get("verified"))
 
                 should_extract = (
@@ -1598,31 +1655,29 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                             _result = item.get("result") or {}
                             if not _question:
                                 continue
-                            '''
-                            def _run_monitor_live(span, question, result, _session_id, _user_email):
-                                dicts = security_scores(span, question)
-                                if not dicts:
-                                    return
-                                answer = (result.get("answer") or "").strip()
-                                cited_chunks = result.get("citedChunks") or []
-                                is_fallback = _is_answer_fallback(answer)
-                                resolution_score = 1 if (answer and not is_fallback) else 0
-                                has_relevant = len(cited_chunks) > 0
-                                relevance_score = 1 if (resolution_score == 1 and has_relevant and not is_fallback) else 0
-                                dicts["relevance_score"] = relevance_score
-                                dicts["resolution_score"] = resolution_score
-                                # Feature Usage: webhook/live → Live Copilot, flow_type=live; forward session_id, user_email.
-                                func_Binsert(span, dicts, question, session_id=_session_id, user_email=_user_email, answer_text=answer if answer else None, feature_name="Live Copilot", flow_type="live")
-                            _user_email = (getattr(st, "customer", None) or {}).get("email") or None
-                            threading.Thread(
-                                target=_run_monitor_live,
-                                args=(sp_rag, _question, _result, session_id, _user_email),
-                                daemon=True,
-                            ).start()
-                            '''
+
+                            # def _run_monitor_live(span, question, result, _session_id, _user_email):
+                            #     dicts = security_scores(span, question)
+                            #     if not dicts:
+                            #         return
+                            #     answer = (result.get("answer") or "").strip()
+                            #     cited_chunks = result.get("citedChunks") or []
+                            #     is_fallback = _is_answer_fallback(answer)
+                            #     resolution_score = 1 if (answer and not is_fallback) else 0
+                            #     has_relevant = len(cited_chunks) > 0
+                            #     relevance_score = 1 if (resolution_score == 1 and has_relevant and not is_fallback) else 0
+                            #     dicts["relevance_score"] = relevance_score
+                            #     dicts["resolution_score"] = resolution_score
+                            #     # Feature Usage: webhook/live → Live Copilot, flow_type=live; forward session_id, user_email.
+                            #     func_Binsert(span, dicts, question, session_id=_session_id, user_email=_user_email, answer_text=answer if answer else None, feature_name="Live Copilot", flow_type="live")
+                            # _user_email = (getattr(st, "customer", None) or {}).get("email") or None
+                            # threading.Thread(
+                            #     target=_run_monitor_live,
+                            #     args=(sp_rag, _question, _result, session_id, _user_email),
+                            #     daemon=True,
+                            # ).start()
 
             if intent == "PROBLEM":
-                cards = None
                 # Generate diagnostics steps
                 with tracer.start_as_current_span("live_copilot.diagnostics") as sp_diag:
                     _set_session_attr(sp_diag)
@@ -1648,6 +1703,7 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                         handler=handler,
                         span=sp_llm,
                     )
+
             # ---------------- phase: response_postprocessing ----------------
             # In-memory deduplication and token aggregation - no span needed
             if cards is None:
