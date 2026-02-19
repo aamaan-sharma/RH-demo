@@ -11,11 +11,8 @@ from pymilvus import Milvus
 
 from typing import Dict
 from functools import cache
-
-
 from langchain.tools import tool
 import asyncio
-
 from langchain_community.memory.motorhead_memory import MotorheadMemory
 from dataclasses import dataclass, field
 
@@ -32,6 +29,7 @@ from core.llms import TRANSCRIPT_QA_AGENT, SEARCH_LLM
 from enum import Enum
 from typing import Optional, List
 
+from token_module import CallbackHandler
 from monitoring_module import q_monitor, tracer, llm_trace_to_jaeger, func_Binsert, security_scores, _is_answer_fallback
 @dataclass
 class Response:
@@ -138,7 +136,7 @@ def knowledge_base_tool(query: str, policyId: str) -> str:
 
 
 @cache
-def get_agent_instance(policyId):
+def get_agent_instance(policyId, sessionId):
     retriever = getRetriver(policyId)
     tools = [knowledge_base_tool, fetch_user_by_mobile]
 
@@ -158,16 +156,16 @@ def get_agent_instance(policyId):
 
 
 
-def input_prompt(entered_query, policyId):
+def input_prompt(entered_query, policyId, handler, sessionId):
     # Retriever chain as Tool for agent
     docHandler = DocCaptureHandler()
-    agent_executor = get_agent_instance(policyId)
-    response = agent_executor({"input": entered_query, "policyId": policyId},callbacks=[docHandler])
+    agent_executor = get_agent_instance(policyId, sessionId)
+    response = agent_executor({"input": entered_query, "policyId": policyId},callbacks=[handler, docHandler])
     docs = docHandler.docs
     return response, docs
 
 
-def handle_request_search(question, transcript_context, policyId: str) -> tuple:
+def handle_request_search(question, transcript_context, policyId: str, sessionId: Optional[str] = None, *, handler: CallbackHandler) -> tuple:
 
     enriched_query = (
         f"{question}\n\nTranscript situation/evidence:\n{transcript_context}".strip()
@@ -185,7 +183,7 @@ def handle_request_search(question, transcript_context, policyId: str) -> tuple:
     # print("[CHUNKS] process_single_transcript_question: calling QA chain (Search)")
     qa_search_response = qa_search.invoke(
         {"query": enriched_query},
-        #config={"callbacks": [handler]},
+        config={"callbacks": [handler]},
     )
     answer_search = qa_search_response["result"] if isinstance(qa_search_response, dict) else qa_search_response
     print(
@@ -198,7 +196,7 @@ def handle_request_search(question, transcript_context, policyId: str) -> tuple:
     return answer_search, relevant_documents
 
 
-def handle_request_infer(question: str = "", transcript_context: str = "", policyId: str = "", sessionId: str="") -> tuple:
+def handle_request_infer(question: str = "", transcript_context: str = "", policyId: str = "",sessionId: Optional[str]=None, *, handler: CallbackHandler) -> tuple:
 
     enriched_query = (
         f"{question}\n\nTranscript situation/evidence:\n{transcript_context}".strip()
@@ -206,7 +204,7 @@ def handle_request_infer(question: str = "", transcript_context: str = "", polic
         else question
     )
 
-    agent_response, docs = input_prompt(enriched_query, policyId)
+    agent_response, docs = input_prompt(enriched_query, policyId,handler, sessionId)
     answer = agent_response["output"]
     print(
         "[CHUNKS] process_single_transcript_question: agent_response received "
@@ -218,6 +216,7 @@ def process_single_transcript_question(
     question: str,
     policyId: str,
     inferenceMode: InferenceMode,
+    handler: CallbackHandler,
     transcript_context: str = "",
     sessionId: str = "",
 ) -> Response:
@@ -238,9 +237,9 @@ def process_single_transcript_question(
 
         match inferenceMode:
             case InferenceMode.SEARCH: 
-                answer, docs = handle_request_search(question, transcript_context, policyId)
+                answer, docs = handle_request_search(question, transcript_context, policyId, sessionId, handler=handler)
             case InferenceMode.INFER : 
-                answer, docs = handle_request_infer(question, transcript_context, policyId)
+                answer, docs = handle_request_infer(question, transcript_context, policyId, sessionId, handler=handler)
 
         
         q_latency = time() - q_start_time
@@ -287,8 +286,8 @@ def process_live_copilot_question(
     question: str,
     policyId: str,
     transcript_context: str = "",
-    sessionId: str = ""
-) -> Dict:
+    sessionId: str = "",
+    *,handler: CallbackHandler) -> Dict:
     """
     Wrapper for Live Copilot to use the existing INFER implementation.
     
@@ -327,6 +326,7 @@ def process_live_copilot_question(
                 question=question,
                 policyId=policyId,
                 inferenceMode=InferenceMode.INFER,
+                handler=handler,
                 transcript_context=transcript_context,
             )
             

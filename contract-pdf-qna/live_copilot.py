@@ -64,10 +64,6 @@ def _set_session_attr(span) -> None:
 
 
 
-# -----------------------
-# In-proc session state
-# -----------------------
-
 
 
 _sessions: Dict[str, SessionState] = {}

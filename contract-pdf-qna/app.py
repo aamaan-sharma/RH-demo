@@ -1641,17 +1641,12 @@ def _process_question_with_index(
     question_text = question_obj.get("question", "")
     question_id = question_obj.get("questionId", f"q{idx + 1}")
     
+    policyId = getPolicyid(contract_type=contract_type,selected_plan=selected_plan,selected_state=selected_state)
     result = process_single_transcript_question(
-        question_text,
-        contract_type,
-        selected_plan,
-        selected_state,
-        gpt_model,
-        vector_db,
-        llm,
-        llm2,
-        retriever,
-        handler,
+        question=question_text,
+        policyId=policyId,
+        inferenceMode=InferenceMode(gpt_model),
+        handler=handler,
         transcript_context=question_obj.get("context", ""),
     )
     
@@ -1898,10 +1893,6 @@ def process_questions_parallel_stream(
 # Initialize LLMs for Infer mode
 llm_infer = ChatOpenAI(temperature=0.0, model="gpt-4o")
 llm_infer2 = ChatOpenAI(temperature=0.0, model="gpt-4o")
-
-# -------------------------------------------------------------------
-# process_live_copilot_question: Wrapper for Live Copilot INFER
-# -------------------------------------------------------------------
 
 # Feedback CRUD Operations
 
@@ -4472,6 +4463,7 @@ def _claims_background_process_transcript(
         total_latency = 0.0
         now_ts = datetime.utcnow()
 
+        policyId = getPolicyid(contract_type=contract_type,selected_plan=selected_plan,selected_state=selected_state)
         for idx, question_obj in enumerate(questions):
             question_text = str((question_obj or {}).get("question") or "")
             question_id = str((question_obj or {}).get("questionId") or f"q{idx + 1}")
@@ -4483,17 +4475,11 @@ def _claims_background_process_transcript(
             )
 
             result = process_single_transcript_question(
-                question_text,
-                contract_type,
-                selected_plan,
-                selected_state,
-                gpt_model,
-                vector_db1,
-                llm,
-                llm2,
-                retriever,
-                handler,
-                transcript_context=(question_obj or {}).get("context", ""),
+                question=question_text,
+                policyId=policyId,
+                inferenceMode=InferenceMode(gpt_model),
+                handler=handler,
+                transcript_context=question_obj.get("context", ""),
             )
 
             display_question_text = re.sub(r"\[CALL_CONTEXT:.*?\]\s*", "", question_text).strip()
@@ -6344,6 +6330,7 @@ def _process_transcript_core(data, yield_sse_fn=None):
                 confidences = []
                 total_latency = 0.0
 
+                policyId = getPolicyid(contract_type=contract_type,selected_plan=selected_plan,selected_state=selected_state)
                 # Process each question and stream immediately
                 for idx, question_obj in enumerate(questions):
                     question_text = question_obj.get("question", "")
@@ -6355,16 +6342,10 @@ def _process_transcript_core(data, yield_sse_fn=None):
                     )
 
                     result = process_single_transcript_question(
-                        question_text,
-                        contract_type,
-                        selected_plan,
-                        selected_state,
-                        gpt_model,
-                        vector_db1,
-                        llm,
-                        llm2,
-                        retriever,
-                        handler,
+                        question=question_text,
+                        policyId=policyId,
+                        inferenceMode=InferenceMode(gpt_model),
+                        handler=handler,
                         transcript_context=question_obj.get("context", ""),
                     )
 

@@ -333,6 +333,7 @@ def _rag_answer(*, question: str, customer: Dict[str, Any], handler: CallbackHan
                 question=question,
                 policyId=getPolicyid(contract_type=contract_type, selected_plan=plan, selected_state=state),
                 transcript_context="",  # Could add more context here if needed
+                handler=handler
             )
             
             # Transform result to match expected format

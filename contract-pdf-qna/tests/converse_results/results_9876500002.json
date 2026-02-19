@@ -11,11 +11,15 @@
       "contractType": "RE",
       "plan": "ShieldEssential"
     },
-    "createdAt": 1771527764,
+    "createdAt": 1771529670,
     "confidence": 0.0,
     "customer": {},
     "cards": [],
-    "timing": 0.9451055526733398
+    "conversation": {
+      "speaker": "AGENT",
+      "text": "Thank you for calling American Home Shield. How can I help you today?"
+    },
+    "timing": 0.9796640872955322
   },
   {
     "sessionId": "9876500002",
@@ -34,13 +38,13 @@
     },
     "cards": [
       {
-        "title": "Coverage Confirmation",
-        "csrScript": "Thank you for reaching out, Sarah. Could you please provide your account number or address so I can verify your coverage details?",
-        "evidence": "customer: hi, this is sarah. i need to request a claim for a couple of leakages at my house.",
+        "title": "Clarify Leakage Details",
+        "csrScript": "Could you please specify the locations of the leakages in your house?",
+        "evidence": "i need to request a claim for a couple of leakages at my house.",
         "priority": "high"
       }
     ],
-    "createdAt": "1771527772",
+    "createdAt": "1771529680",
     "userDetails": {
       "name": "Michael Andrew Johnson",
       "email": "user2@test.com",
@@ -50,7 +54,11 @@
       "contractType": "RE",
       "plan": "ShieldEssential"
     },
-    "timing": 7.785635232925415
+    "conversation": {
+      "speaker": "CUSTOMER",
+      "text": "Hi, this is Sarah. I need to request a claim for a couple of leakages at my house."
+    },
+    "timing": 9.72416639328003
   },
   {
     "sessionId": "9876500002",
@@ -64,11 +72,15 @@
       "contractType": "RE",
       "plan": "ShieldEssential"
     },
-    "createdAt": 1771527772,
+    "createdAt": 1771529680,
     "confidence": 0.0,
     "customer": {},
     "cards": [],
-    "timing": 0.000370025634765625
+    "conversation": {
+      "speaker": "AGENT",
+      "text": "Understood. Just to confirm, you are based in California and on the ShieldPlus plan. Is that correct?"
+    },
+    "timing": 0.0005497932434082031
   },
   {
     "sessionId": "9876500002",
@@ -87,13 +99,13 @@
     },
     "cards": [
       {
-        "title": "Coverage Confirmation",
-        "csrScript": "Unfortunately, I don't have the specific coverage details for the ShieldPlus plan in California at the moment. Let me verify the exact coverage for leakages under your plan.",
-        "evidence": "customer: that's right.",
+        "title": "Clarify Leakage Details",
+        "csrScript": "Could you please describe the location and severity of the leakages?",
+        "evidence": "I need to request a claim for a couple of leakages at my house.",
         "priority": "high"
       }
     ],
-    "createdAt": "1771527782",
+    "createdAt": "1771529688",
     "userDetails": {
       "name": "Michael Andrew Johnson",
       "email": "user2@test.com",
@@ -103,7 +115,11 @@
       "contractType": "RE",
       "plan": "ShieldEssential"
     },
-    "timing": 10.362295389175415
+    "conversation": {
+      "speaker": "CUSTOMER",
+      "text": "That's right."
+    },
+    "timing": 7.8273279666900635
   },
   {
     "sessionId": "9876500002",
@@ -117,15 +133,19 @@
       "contractType": "RE",
       "plan": "ShieldEssential"
     },
-    "createdAt": 1771527782,
+    "createdAt": 1771529688,
     "confidence": 0.0,
     "customer": {},
     "cards": [],
-    "timing": 0.0002570152282714844
+    "conversation": {
+      "speaker": "AGENT",
+      "text": "Great, can you help me with details about the leakages, please?"
+    },
+    "timing": 0.0005660057067871094
   },
   {
     "sessionId": "9876500002",
-    "intent": "INQUIRY",
+    "intent": "PROBLEM",
     "confidence": 0.85,
     "customer": {
       "name": "Michael Andrew Johnson",
@@ -140,13 +160,13 @@
     },
     "cards": [
       {
-        "title": "Coverage Confirmation",
-        "csrScript": "The leak by the foundation outside, specifically the backflow preventer for the irrigation system, is likely not covered under your current plan due to location and specific exclusions.",
-        "evidence": "customer: the first is a leak by the foundation outside. it’s the backflow preventer for the irrigation system. i need to check the issue and if that’s covered.",
+        "title": "Coverage for Foundation Leak",
+        "csrScript": "The leak by the foundation outside, specifically the backflow preventer for the irrigation system, is not covered under your plan. Coverage is limited to plumbing and water lines within the main foundation of the home.",
+        "evidence": "the first is a leak by the foundation outside. it’s the backflow preventer for the irrigation system.",
         "priority": "high"
       }
     ],
-    "createdAt": "1771527804",
+    "createdAt": "1771529715",
     "userDetails": {
       "name": "Michael Andrew Johnson",
       "email": "user2@test.com",
@@ -156,7 +176,11 @@
       "contractType": "RE",
       "plan": "ShieldEssential"
     },
-    "timing": 21.551480054855347
+    "conversation": {
+      "speaker": "CUSTOMER",
+      "text": "The first is a leak by the foundation outside. It’s the backflow preventer for the irrigation system. I need to check the issue and if that’s covered."
+    },
+    "timing": 27.099385976791382
   },
   {
     "sessionId": "9876500002",
@@ -170,11 +194,15 @@
       "contractType": "RE",
       "plan": "ShieldEssential"
     },
-    "createdAt": 1771527804,
+    "createdAt": 1771529715,
     "confidence": 0.0,
     "customer": {},
     "cards": [],
-    "timing": 0.00041604042053222656
+    "conversation": {
+      "speaker": "AGENT",
+      "text": "Irrigation and backflow preventers located outside the main foundation are not covered under this plan. Did you find a cause for that leak?"
+    },
+    "timing": 0.0005517005920410156
   },
   {
     "sessionId": "9876500002",
@@ -193,13 +221,13 @@
     },
     "cards": [
       {
-        "title": "Coverage Confirmation",
-        "csrScript": "The ShieldEssential plan does not cover leaks by the foundation outside the main structure of the home, including the backflow preventer for the irrigation system.",
-        "evidence": "customer: the first is a leak by the foundation outside. it’s the backflow preventer for the irrigation system. i need to check the issue and if that’s covered.",
+        "title": "Foundation Leak Coverage",
+        "csrScript": "The leak by the foundation outside, including the backflow preventer for the irrigation system, is not covered under your ShieldEssential plan. Coverage is limited to plumbing and water lines within the main foundation of the home.",
+        "evidence": "The first is a leak by the foundation outside. It’s the backflow preventer for the irrigation system.",
         "priority": "high"
       }
     ],
-    "createdAt": "1771527818",
+    "createdAt": "1771529727",
     "userDetails": {
       "name": "Michael Andrew Johnson",
       "email": "user2@test.com",
@@ -209,7 +237,11 @@
       "contractType": "RE",
       "plan": "ShieldEssential"
     },
-    "timing": 13.581109523773193
+    "conversation": {
+      "speaker": "CUSTOMER",
+      "text": "No idea. The technician mentioned that they do not handle this. I just wanted to check coverage before moving on to requesting another technician."
+    },
+    "timing": 12.77046275138855
   },
   {
     "sessionId": "9876500002",
@@ -223,11 +255,15 @@
       "contractType": "RE",
       "plan": "ShieldEssential"
     },
-    "createdAt": 1771527818,
+    "createdAt": 1771529727,
     "confidence": 0.0,
     "customer": {},
     "cards": [],
-    "timing": 0.0004439353942871094
+    "conversation": {
+      "speaker": "AGENT",
+      "text": "Understood. I will document the denial for the irrigation line. What is the second issue?"
+    },
+    "timing": 0.0005879402160644531
   },
   {
     "sessionId": "9876500002",
@@ -246,72 +282,13 @@
     },
     "cards": [
       {
-        "title": "Coverage Confirmation",
-        "csrScript": "Unfortunately, leaks in supply lines under the kitchen and bar sinks due to age and corrosion are not covered under your ShieldEssential plan.",
-        "evidence": "customer: two supply lines—one under the kitchen sink and one under the bar sink. they are probably lines leaking due to age and corrosion.",
-        "priority": "high"
-      },
-      {
-        "title": "Requesting a Technician",
-        "csrScript": "To request a technician for a leak issue, please contact AHS and provide details about the leak. A non-refundable service fee is required before scheduling an appointment.",
-        "evidence": "pendingQuestions: what are the steps to request a technician for a leak issue?",
-        "priority": "medium"
-      }
-    ],
-    "createdAt": "1771527837",
-    "userDetails": {
-      "name": "Michael Andrew Johnson",
-      "email": "user2@test.com",
-      "mobile": "9876500002",
-      "age": 25,
-      "state": "Minnesota",
-      "contractType": "RE",
-      "plan": "ShieldEssential"
-    },
-    "timing": 19.329561710357666
-  },
-  {
-    "sessionId": "9876500002",
-    "intent": "OTHER",
-    "userDetails": {
-      "name": "Michael Andrew Johnson",
-      "email": "user2@test.com",
-      "mobile": "9876500002",
-      "age": 25,
-      "state": "Minnesota",
-      "contractType": "RE",
-      "plan": "ShieldEssential"
-    },
-    "createdAt": 1771527837,
-    "confidence": 0.0,
-    "customer": {},
-    "cards": [],
-    "timing": 0.0004696846008300781
-  },
-  {
-    "sessionId": "9876500002",
-    "intent": "PROBLEM",
-    "confidence": 0.85,
-    "customer": {
-      "name": "Michael Andrew Johnson",
-      "email": "user2@test.com",
-      "mobile": "9876500002",
-      "age": 25,
-      "state": "Minnesota",
-      "contractType": "RE",
-      "plan": "ShieldEssential",
-      "verified": false,
-      "sessionId": "9876500002"
-    },
-    "cards": [
-      {
-        "title": "Coverage Confirmation for Supply Lines",
-        "csrScript": "Based on your ShieldEssential plan, leaks due to normal wear and tear in supply lines under the kitchen and bar sinks are covered. We can proceed with arranging a technician for you.",
+        "title": "Coverage for Supply Line Leaks",
+        "csrScript": "The leaks in the supply lines under the kitchen and bar sinks are covered under your ShieldEssential plan.",
         "evidence": "two supply lines—one under the kitchen sink and one under the bar sink. they are probably lines leaking due to age and corrosion.",
         "priority": "high"
       }
     ],
-    "createdAt": "1771527845",
+    "createdAt": "1771529750",
     "userDetails": {
       "name": "Michael Andrew Johnson",
       "email": "user2@test.com",
@@ -321,7 +298,11 @@
       "contractType": "RE",
       "plan": "ShieldEssential"
     },
-    "timing": 8.362482786178589
+    "conversation": {
+      "speaker": "CUSTOMER",
+      "text": "Two supply lines—one under the kitchen sink and one under the bar sink. They are probably lines leaking due to age and corrosion."
+    },
+    "timing": 22.61775040626526
   },
   {
     "sessionId": "9876500002",
@@ -335,11 +316,54 @@
       "contractType": "RE",
       "plan": "ShieldEssential"
     },
-    "createdAt": 1771527845,
+    "createdAt": 1771529750,
     "confidence": 0.0,
     "customer": {},
     "cards": [],
-    "timing": 0.0004177093505859375
+    "conversation": {
+      "speaker": "AGENT",
+      "text": "Was the failure caused by normal wear and tear?"
+    },
+    "timing": 0.0005624294281005859
+  },
+  {
+    "sessionId": "9876500002",
+    "intent": "PROBLEM",
+    "confidence": 0.85,
+    "customer": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential",
+      "verified": false,
+      "sessionId": "9876500002"
+    },
+    "cards": [
+      {
+        "title": "Coverage for Supply Lines Leak",
+        "csrScript": "The leaks in the supply lines under the kitchen and bar sinks caused by normal wear and tear are covered under your plan.",
+        "evidence": "two supply lines—one under the kitchen sink and one under the bar sink. they are probably lines leaking due to age and corrosion.",
+        "priority": "high"
+      }
+    ],
+    "createdAt": "1771529758",
+    "userDetails": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential"
+    },
+    "conversation": {
+      "speaker": "CUSTOMER",
+      "text": "Yes, normal wear and tear as mentioned by the technician."
+    },
+    "timing": 7.996588230133057
   },
   {
     "sessionId": "9876500002",
@@ -353,11 +377,37 @@
       "contractType": "RE",
       "plan": "ShieldEssential"
     },
-    "createdAt": 1771527845,
+    "createdAt": 1771529758,
     "confidence": 0.0,
     "customer": {},
     "cards": [],
-    "timing": 0.0005936622619628906
+    "conversation": {
+      "speaker": "AGENT",
+      "text": "And is the total for that repair quoted by the technician is?"
+    },
+    "timing": 0.0005502700805664062
+  },
+  {
+    "sessionId": "9876500002",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential"
+    },
+    "createdAt": 1771529758,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": [],
+    "conversation": {
+      "speaker": "AGENT",
+      "text": "Great, this is covered under your plan. I can authorize the $120 for the supply line repairs but will have to deny the exterior irrigation leak. Your authorization code is 120-RBDI."
+    },
+    "timing": 0.00016355514526367188
   },
   {
     "sessionId": "9876500002",
@@ -376,13 +426,19 @@
     },
     "cards": [
       {
-        "title": "Coverage Confirmation",
-        "csrScript": "The leak by the foundation outside, specifically the backflow preventer for the irrigation system, is not covered under your plan. However, the supply line leaks under the kitchen and bar sinks are covered due to normal wear and tear.",
-        "evidence": "customer: the first is a leak by the foundation outside. it’s the backflow preventer for the irrigation system. i need to check the issue and if that’s covered.",
+        "title": "Coverage Confirmation for Supply Line Repairs",
+        "csrScript": "The supply line repairs under the kitchen and bar sinks are covered under your plan due to normal wear and tear. I've authorized the $120 for these repairs with the code 120-rbdi.",
+        "evidence": "two supply lines—one under the kitchen sink and one under the bar sink. they are probably lines leaking due to age and corrosion.",
+        "priority": "high"
+      },
+      {
+        "title": "Denial of Coverage for Exterior Irrigation Leak",
+        "csrScript": "The leak by the foundation outside, specifically the backflow preventer for the irrigation system, is not covered under your plan.",
+        "evidence": "the first is a leak by the foundation outside. it’s the backflow preventer for the irrigation system.",
         "priority": "high"
       }
     ],
-    "createdAt": "1771527854",
+    "createdAt": "1771529768",
     "userDetails": {
       "name": "Michael Andrew Johnson",
       "email": "user2@test.com",
@@ -392,7 +448,11 @@
       "contractType": "RE",
       "plan": "ShieldEssential"
     },
-    "timing": 9.09588098526001
+    "conversation": {
+      "speaker": "CUSTOMER",
+      "text": "Got it. Thank you."
+    },
+    "timing": 10.351729154586792
   },
   {
     "sessionId": "9876500002",
@@ -406,11 +466,15 @@
       "contractType": "RE",
       "plan": "ShieldEssential"
     },
-    "createdAt": 1771527854,
+    "createdAt": 1771529768,
     "confidence": 0.0,
     "customer": {},
     "cards": [],
-    "timing": 0.0004622936248779297
+    "conversation": {
+      "speaker": "AGENT",
+      "text": "You're welcome. Is there anything else?"
+    },
+    "timing": 0.000522613525390625
   },
   {
     "sessionId": "9876500002",
@@ -429,13 +493,19 @@
     },
     "cards": [
       {
-        "title": "Coverage Confirmation",
-        "csrScript": "The leak by the foundation outside, specifically the backflow preventer for the irrigation system, is not covered under your plan. However, the supply line leaks under the kitchen and bar sinks are covered due to normal wear and tear.",
-        "evidence": "customer: the first is a leak by the foundation outside. it’s the backflow preventer for the irrigation system. i need to check the issue and if that’s covered.",
+        "title": "Coverage Confirmation for Supply Line Repairs",
+        "csrScript": "The repair for the supply lines under the kitchen and bar sinks is covered under your plan. I've authorized the $120 for these repairs with the code 120-rbdi.",
+        "evidence": "two supply lines—one under the kitchen sink and one under the bar sink. they are probably lines leaking due to age and corrosion.",
+        "priority": "high"
+      },
+      {
+        "title": "Denial of Coverage for Exterior Irrigation Leak",
+        "csrScript": "The leak by the foundation outside, specifically the backflow preventer for the irrigation system, is not covered under your plan.",
+        "evidence": "the first is a leak by the foundation outside. it’s the backflow preventer for the irrigation system.",
         "priority": "high"
       }
     ],
-    "createdAt": "1771527861",
+    "createdAt": "1771529777",
     "userDetails": {
       "name": "Michael Andrew Johnson",
       "email": "user2@test.com",
@@ -445,7 +515,11 @@
       "contractType": "RE",
       "plan": "ShieldEssential"
     },
-    "timing": 6.92890739440918
+    "conversation": {
+      "speaker": "CUSTOMER",
+      "text": "No, that’s it."
+    },
+    "timing": 9.070820569992065
   },
   {
     "sessionId": "9876500002",
@@ -459,10 +533,14 @@
       "contractType": "RE",
       "plan": "ShieldEssential"
     },
-    "createdAt": 1771527861,
+    "createdAt": 1771529777,
     "confidence": 0.0,
     "customer": {},
     "cards": [],
-    "timing": 0.0004315376281738281
+    "conversation": {
+      "speaker": "AGENT",
+      "text": "Thank you for calling American Home Shield. Have a safe and great day!"
+    },
+    "timing": 0.000553131103515625
   }
 ]
