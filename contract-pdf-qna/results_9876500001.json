@@ -1,0 +1,397 @@
+[
+  {
+    "sessionId": "9876500001",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Adarsh",
+      "email": "user1@test.com",
+      "mobile": "9876500001",
+      "age": 24,
+      "state": "Georgia",
+      "contractType": "DTC",
+      "plan": "ShieldGold"
+    },
+    "createdAt": 1771527862,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": [],
+    "timing": 0.2444925308227539
+  },
+  {
+    "sessionId": "9876500001",
+    "intent": "PROBLEM",
+    "confidence": 0.95,
+    "customer": {
+      "name": "Adarsh",
+      "email": "user1@test.com",
+      "mobile": "9876500001",
+      "age": 24,
+      "state": "Georgia",
+      "contractType": "DTC",
+      "plan": "ShieldGold",
+      "verified": false,
+      "sessionId": "9876500001"
+    },
+    "cards": [
+      {
+        "title": "Dishwasher Issue Diagnostics",
+        "csrScript": "I understand the inconvenience. Let's start by checking if the dishwasher spray arms are spinning freely and not clogged. This can often resolve the issue.",
+        "evidence": "my dishwasher stopped working properly. it starts, but the dishes come out dirty and sometimes there's water left at the bottom.",
+        "priority": "high"
+      }
+    ],
+    "createdAt": "1771527871",
+    "userDetails": {
+      "name": "Adarsh",
+      "email": "user1@test.com",
+      "mobile": "9876500001",
+      "age": 24,
+      "state": "Georgia",
+      "contractType": "DTC",
+      "plan": "ShieldGold"
+    },
+    "timing": 9.928270101547241
+  },
+  {
+    "sessionId": "9876500001",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Adarsh",
+      "email": "user1@test.com",
+      "mobile": "9876500001",
+      "age": 24,
+      "state": "Georgia",
+      "contractType": "DTC",
+      "plan": "ShieldGold"
+    },
+    "createdAt": 1771527871,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": [],
+    "timing": 0.0007233619689941406
+  },
+  {
+    "sessionId": "9876500001",
+    "intent": "PROBLEM",
+    "confidence": 0.95,
+    "customer": {
+      "name": "Adarsh",
+      "email": "user1@test.com",
+      "mobile": "9876500001",
+      "age": 24,
+      "state": "Georgia",
+      "contractType": "DTC",
+      "plan": "ShieldGold",
+      "verified": false,
+      "sessionId": "9876500001"
+    },
+    "cards": [
+      {
+        "title": "Diagnostic Steps for Dishwasher Issue",
+        "csrScript": "To address the issue with your dishwasher, please check if the filter is clogged and clean it if necessary. Also, ensure the spray arms are not blocked or damaged, and verify that the dishwasher is loaded correctly.",
+        "evidence": "my dishwasher stopped working properly. it starts, but the dishes come out dirty and sometimes there's water left at the bottom.",
+        "priority": "high"
+      }
+    ],
+    "createdAt": "1771527889",
+    "userDetails": {
+      "name": "Adarsh",
+      "email": "user1@test.com",
+      "mobile": "9876500001",
+      "age": 24,
+      "state": "Georgia",
+      "contractType": "DTC",
+      "plan": "ShieldGold"
+    },
+    "timing": 17.313137531280518
+  },
+  {
+    "sessionId": "9876500001",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Adarsh",
+      "email": "user1@test.com",
+      "mobile": "9876500001",
+      "age": 24,
+      "state": "Georgia",
+      "contractType": "DTC",
+      "plan": "ShieldGold"
+    },
+    "createdAt": 1771527889,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": [],
+    "timing": 0.00034499168395996094
+  },
+  {
+    "sessionId": "9876500001",
+    "intent": "PROBLEM",
+    "confidence": 0.95,
+    "customer": {
+      "name": "Adarsh",
+      "email": "user1@test.com",
+      "mobile": "9876500001",
+      "age": 24,
+      "state": "Georgia",
+      "contractType": "DTC",
+      "plan": "ShieldGold",
+      "verified": false,
+      "sessionId": "9876500001"
+    },
+    "cards": [
+      {
+        "title": "Dishwasher Warranty Coverage",
+        "csrScript": "Your DWX-4500 dishwasher is covered under the 'georgia_dtc_shieldgold' policy, provided it is not a portable or countertop model. However, if it is still under the manufacturer's warranty, it may not be covered under this policy.",
+        "evidence": "is my dwx-4500 dishwasher still under warranty?",
+        "priority": "high"
+      },
+      {
+        "title": "Cleaning the Dishwasher Filter",
+        "csrScript": "To clean the filter, locate it at the bottom of the dishwasher, twist or pull it out, rinse under warm water, and reinstall it securely.",
+        "evidence": "how do i clean the filter at the bottom of the dishwasher?",
+        "priority": "medium"
+      }
+    ],
+    "createdAt": "1771527911",
+    "userDetails": {
+      "name": "Adarsh",
+      "email": "user1@test.com",
+      "mobile": "9876500001",
+      "age": 24,
+      "state": "Georgia",
+      "contractType": "DTC",
+      "plan": "ShieldGold"
+    },
+    "timing": 21.73262095451355
+  },
+  {
+    "sessionId": "9876500001",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Adarsh",
+      "email": "user1@test.com",
+      "mobile": "9876500001",
+      "age": 24,
+      "state": "Georgia",
+      "contractType": "DTC",
+      "plan": "ShieldGold"
+    },
+    "createdAt": 1771527911,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": [],
+    "timing": 0.0003826618194580078
+  },
+  {
+    "sessionId": "9876500001",
+    "intent": "PROBLEM",
+    "confidence": 0.95,
+    "customer": {
+      "name": "Adarsh",
+      "email": "user1@test.com",
+      "mobile": "9876500001",
+      "age": 24,
+      "state": "Georgia",
+      "contractType": "DTC",
+      "plan": "ShieldGold",
+      "verified": false,
+      "sessionId": "9876500001"
+    },
+    "cards": [
+      {
+        "title": "Coverage Confirmation",
+        "csrScript": "Your DWX-4500 dishwasher is covered under the 'georgia_dtc_shieldgold' policy, which includes breakdowns due to insufficient maintenance. Since the filter was clogged, this may have contributed to the issue. Let's see if cleaning resolves the problem.",
+        "evidence": "customer: hi sarah, i'm calling because my dishwasher stopped working properly. it starts, but the dishes come out dirty and sometimes there's water left at the bottom.",
+        "priority": "high"
+      }
+    ],
+    "createdAt": "1771527925",
+    "userDetails": {
+      "name": "Adarsh",
+      "email": "user1@test.com",
+      "mobile": "9876500001",
+      "age": 24,
+      "state": "Georgia",
+      "contractType": "DTC",
+      "plan": "ShieldGold"
+    },
+    "timing": 14.047081470489502
+  },
+  {
+    "sessionId": "9876500001",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Adarsh",
+      "email": "user1@test.com",
+      "mobile": "9876500001",
+      "age": 24,
+      "state": "Georgia",
+      "contractType": "DTC",
+      "plan": "ShieldGold"
+    },
+    "createdAt": 1771527925,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": [],
+    "timing": 0.0003814697265625
+  },
+  {
+    "sessionId": "9876500001",
+    "intent": "PROBLEM",
+    "confidence": 0.95,
+    "customer": {
+      "name": "Adarsh",
+      "email": "user1@test.com",
+      "mobile": "9876500001",
+      "age": 24,
+      "state": "Georgia",
+      "contractType": "DTC",
+      "plan": "ShieldGold",
+      "verified": false,
+      "sessionId": "9876500001"
+    },
+    "cards": [
+      {
+        "title": "Coverage Confirmation",
+        "csrScript": "The DWX-4500 dishwasher is covered under your ShieldGold plan, provided it is not a portable or countertop model. Coverage includes breakdowns due to undetectable pre-existing conditions, normal wear and tear, and more. However, if it's still under the manufacturer's warranty, it may not be covered under this policy.",
+        "evidence": "is my dwx-4500 dishwasher still under warranty?",
+        "priority": "high"
+      }
+    ],
+    "createdAt": "1771527934",
+    "userDetails": {
+      "name": "Adarsh",
+      "email": "user1@test.com",
+      "mobile": "9876500001",
+      "age": 24,
+      "state": "Georgia",
+      "contractType": "DTC",
+      "plan": "ShieldGold"
+    },
+    "timing": 9.193307399749756
+  },
+  {
+    "sessionId": "9876500001",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Adarsh",
+      "email": "user1@test.com",
+      "mobile": "9876500001",
+      "age": 24,
+      "state": "Georgia",
+      "contractType": "DTC",
+      "plan": "ShieldGold"
+    },
+    "createdAt": 1771527934,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": [],
+    "timing": 0.0004885196685791016
+  },
+  {
+    "sessionId": "9876500001",
+    "intent": "PROBLEM",
+    "confidence": 0.95,
+    "customer": {
+      "name": "Adarsh",
+      "email": "user1@test.com",
+      "mobile": "9876500001",
+      "age": 24,
+      "state": "Georgia",
+      "contractType": "DTC",
+      "plan": "ShieldGold",
+      "verified": false,
+      "sessionId": "9876500001"
+    },
+    "cards": [
+      {
+        "title": "Coverage Confirmation",
+        "csrScript": "The DWX-4500 dishwasher is covered under your ShieldGold plan, provided it is not a portable or countertop model. Since it is not draining properly, this issue is covered under your plan.",
+        "evidence": "customer: i just ran a quick rinse cycle. the water still isn’t draining completely.",
+        "priority": "high"
+      }
+    ],
+    "createdAt": "1771527942",
+    "userDetails": {
+      "name": "Adarsh",
+      "email": "user1@test.com",
+      "mobile": "9876500001",
+      "age": 24,
+      "state": "Georgia",
+      "contractType": "DTC",
+      "plan": "ShieldGold"
+    },
+    "timing": 7.818475008010864
+  },
+  {
+    "sessionId": "9876500001",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Adarsh",
+      "email": "user1@test.com",
+      "mobile": "9876500001",
+      "age": 24,
+      "state": "Georgia",
+      "contractType": "DTC",
+      "plan": "ShieldGold"
+    },
+    "createdAt": 1771527942,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": [],
+    "timing": 0.0005080699920654297
+  },
+  {
+    "sessionId": "9876500001",
+    "intent": "OTHER",
+    "confidence": 0.2,
+    "customer": {
+      "name": "Adarsh",
+      "email": "user1@test.com",
+      "mobile": "9876500001",
+      "age": 24,
+      "state": "Georgia",
+      "contractType": "DTC",
+      "plan": "ShieldGold",
+      "verified": false,
+      "sessionId": "9876500001"
+    },
+    "cards": [
+      {
+        "title": "Warranty Claim Process",
+        "csrScript": "Since your DWX-4500 dishwasher is covered under the \"georgia_dtc_shieldgold\" policy, we can proceed with a warranty claim. I will initiate a service request for you, and a technician will be dispatched to assess and repair the issue.",
+        "evidence": "customer: that’s a relief. what do i need to do to file a warranty claim?",
+        "priority": "high"
+      }
+    ],
+    "createdAt": "1771527948",
+    "userDetails": {
+      "name": "Adarsh",
+      "email": "user1@test.com",
+      "mobile": "9876500001",
+      "age": 24,
+      "state": "Georgia",
+      "contractType": "DTC",
+      "plan": "ShieldGold"
+    },
+    "timing": 6.331801414489746
+  },
+  {
+    "sessionId": "9876500001",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Adarsh",
+      "email": "user1@test.com",
+      "mobile": "9876500001",
+      "age": 24,
+      "state": "Georgia",
+      "contractType": "DTC",
+      "plan": "ShieldGold"
+    },
+    "createdAt": 1771527948,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": [],
+    "timing": 0.0002281665802001953
+  }
+]

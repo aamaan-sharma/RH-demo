@@ -1,0 +1,468 @@
+[
+  {
+    "sessionId": "9876500002",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential"
+    },
+    "createdAt": 1771527764,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": [],
+    "timing": 0.9451055526733398
+  },
+  {
+    "sessionId": "9876500002",
+    "intent": "PROBLEM",
+    "confidence": 0.85,
+    "customer": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential",
+      "verified": false,
+      "sessionId": "9876500002"
+    },
+    "cards": [
+      {
+        "title": "Coverage Confirmation",
+        "csrScript": "Thank you for reaching out, Sarah. Could you please provide your account number or address so I can verify your coverage details?",
+        "evidence": "customer: hi, this is sarah. i need to request a claim for a couple of leakages at my house.",
+        "priority": "high"
+      }
+    ],
+    "createdAt": "1771527772",
+    "userDetails": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential"
+    },
+    "timing": 7.785635232925415
+  },
+  {
+    "sessionId": "9876500002",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential"
+    },
+    "createdAt": 1771527772,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": [],
+    "timing": 0.000370025634765625
+  },
+  {
+    "sessionId": "9876500002",
+    "intent": "PROBLEM",
+    "confidence": 0.95,
+    "customer": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential",
+      "verified": false,
+      "sessionId": "9876500002"
+    },
+    "cards": [
+      {
+        "title": "Coverage Confirmation",
+        "csrScript": "Unfortunately, I don't have the specific coverage details for the ShieldPlus plan in California at the moment. Let me verify the exact coverage for leakages under your plan.",
+        "evidence": "customer: that's right.",
+        "priority": "high"
+      }
+    ],
+    "createdAt": "1771527782",
+    "userDetails": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential"
+    },
+    "timing": 10.362295389175415
+  },
+  {
+    "sessionId": "9876500002",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential"
+    },
+    "createdAt": 1771527782,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": [],
+    "timing": 0.0002570152282714844
+  },
+  {
+    "sessionId": "9876500002",
+    "intent": "INQUIRY",
+    "confidence": 0.85,
+    "customer": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential",
+      "verified": false,
+      "sessionId": "9876500002"
+    },
+    "cards": [
+      {
+        "title": "Coverage Confirmation",
+        "csrScript": "The leak by the foundation outside, specifically the backflow preventer for the irrigation system, is likely not covered under your current plan due to location and specific exclusions.",
+        "evidence": "customer: the first is a leak by the foundation outside. it’s the backflow preventer for the irrigation system. i need to check the issue and if that’s covered.",
+        "priority": "high"
+      }
+    ],
+    "createdAt": "1771527804",
+    "userDetails": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential"
+    },
+    "timing": 21.551480054855347
+  },
+  {
+    "sessionId": "9876500002",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential"
+    },
+    "createdAt": 1771527804,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": [],
+    "timing": 0.00041604042053222656
+  },
+  {
+    "sessionId": "9876500002",
+    "intent": "INQUIRY",
+    "confidence": 0.95,
+    "customer": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential",
+      "verified": false,
+      "sessionId": "9876500002"
+    },
+    "cards": [
+      {
+        "title": "Coverage Confirmation",
+        "csrScript": "The ShieldEssential plan does not cover leaks by the foundation outside the main structure of the home, including the backflow preventer for the irrigation system.",
+        "evidence": "customer: the first is a leak by the foundation outside. it’s the backflow preventer for the irrigation system. i need to check the issue and if that’s covered.",
+        "priority": "high"
+      }
+    ],
+    "createdAt": "1771527818",
+    "userDetails": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential"
+    },
+    "timing": 13.581109523773193
+  },
+  {
+    "sessionId": "9876500002",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential"
+    },
+    "createdAt": 1771527818,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": [],
+    "timing": 0.0004439353942871094
+  },
+  {
+    "sessionId": "9876500002",
+    "intent": "PROBLEM",
+    "confidence": 0.85,
+    "customer": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential",
+      "verified": false,
+      "sessionId": "9876500002"
+    },
+    "cards": [
+      {
+        "title": "Coverage Confirmation",
+        "csrScript": "Unfortunately, leaks in supply lines under the kitchen and bar sinks due to age and corrosion are not covered under your ShieldEssential plan.",
+        "evidence": "customer: two supply lines—one under the kitchen sink and one under the bar sink. they are probably lines leaking due to age and corrosion.",
+        "priority": "high"
+      },
+      {
+        "title": "Requesting a Technician",
+        "csrScript": "To request a technician for a leak issue, please contact AHS and provide details about the leak. A non-refundable service fee is required before scheduling an appointment.",
+        "evidence": "pendingQuestions: what are the steps to request a technician for a leak issue?",
+        "priority": "medium"
+      }
+    ],
+    "createdAt": "1771527837",
+    "userDetails": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential"
+    },
+    "timing": 19.329561710357666
+  },
+  {
+    "sessionId": "9876500002",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential"
+    },
+    "createdAt": 1771527837,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": [],
+    "timing": 0.0004696846008300781
+  },
+  {
+    "sessionId": "9876500002",
+    "intent": "PROBLEM",
+    "confidence": 0.85,
+    "customer": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential",
+      "verified": false,
+      "sessionId": "9876500002"
+    },
+    "cards": [
+      {
+        "title": "Coverage Confirmation for Supply Lines",
+        "csrScript": "Based on your ShieldEssential plan, leaks due to normal wear and tear in supply lines under the kitchen and bar sinks are covered. We can proceed with arranging a technician for you.",
+        "evidence": "two supply lines—one under the kitchen sink and one under the bar sink. they are probably lines leaking due to age and corrosion.",
+        "priority": "high"
+      }
+    ],
+    "createdAt": "1771527845",
+    "userDetails": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential"
+    },
+    "timing": 8.362482786178589
+  },
+  {
+    "sessionId": "9876500002",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential"
+    },
+    "createdAt": 1771527845,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": [],
+    "timing": 0.0004177093505859375
+  },
+  {
+    "sessionId": "9876500002",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential"
+    },
+    "createdAt": 1771527845,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": [],
+    "timing": 0.0005936622619628906
+  },
+  {
+    "sessionId": "9876500002",
+    "intent": "PROBLEM",
+    "confidence": 0.95,
+    "customer": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential",
+      "verified": false,
+      "sessionId": "9876500002"
+    },
+    "cards": [
+      {
+        "title": "Coverage Confirmation",
+        "csrScript": "The leak by the foundation outside, specifically the backflow preventer for the irrigation system, is not covered under your plan. However, the supply line leaks under the kitchen and bar sinks are covered due to normal wear and tear.",
+        "evidence": "customer: the first is a leak by the foundation outside. it’s the backflow preventer for the irrigation system. i need to check the issue and if that’s covered.",
+        "priority": "high"
+      }
+    ],
+    "createdAt": "1771527854",
+    "userDetails": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential"
+    },
+    "timing": 9.09588098526001
+  },
+  {
+    "sessionId": "9876500002",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential"
+    },
+    "createdAt": 1771527854,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": [],
+    "timing": 0.0004622936248779297
+  },
+  {
+    "sessionId": "9876500002",
+    "intent": "OTHER",
+    "confidence": 0.2,
+    "customer": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential",
+      "verified": false,
+      "sessionId": "9876500002"
+    },
+    "cards": [
+      {
+        "title": "Coverage Confirmation",
+        "csrScript": "The leak by the foundation outside, specifically the backflow preventer for the irrigation system, is not covered under your plan. However, the supply line leaks under the kitchen and bar sinks are covered due to normal wear and tear.",
+        "evidence": "customer: the first is a leak by the foundation outside. it’s the backflow preventer for the irrigation system. i need to check the issue and if that’s covered.",
+        "priority": "high"
+      }
+    ],
+    "createdAt": "1771527861",
+    "userDetails": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential"
+    },
+    "timing": 6.92890739440918
+  },
+  {
+    "sessionId": "9876500002",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Michael Andrew Johnson",
+      "email": "user2@test.com",
+      "mobile": "9876500002",
+      "age": 25,
+      "state": "Minnesota",
+      "contractType": "RE",
+      "plan": "ShieldEssential"
+    },
+    "createdAt": 1771527861,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": [],
+    "timing": 0.0004315376281738281
+  }
+]

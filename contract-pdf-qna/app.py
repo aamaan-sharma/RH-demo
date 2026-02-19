@@ -39,12 +39,8 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 from utils.milvus_utils import get_milvus_collection_name
 # Live Copilot for real-time AI suggestions during calls
-try:
-    from live_copilot import handle_transcript_event, handle_copilot_enable_event
-    LIVE_COPILOT_AVAILABLE = True
-except ImportError:
-    LIVE_COPILOT_AVAILABLE = False
-    print("Warning: live_copilot module not available - Live Copilot disabled")
+from live_copilot import handle_transcript_event, handle_copilot_enable_event
+LIVE_COPILOT_AVAILABLE = True
 
 # GCP Storage imports using fsspec (unified filesystem interface)
 try:

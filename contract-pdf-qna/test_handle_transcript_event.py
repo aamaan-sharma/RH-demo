@@ -6,50 +6,55 @@ import live_copilot as lc
 
 @dataclass
 class Payload:
-    sessionId: str = "12345678"
+    sessionId: str = ""
     speaker: str = "agent"
     text: str = ""
-    phoneNumber: str = "9876500001"
-    contractType: str = "DTC"
-    plan: str = "ShieldGold"
-    state: str = "Georgia"
+    phoneNumber: str = ""
+    contractType: str = ""
+    plan: str = ""
+    state: str = ""
     isPartial: bool = False
 
 
 conversation = None
-with open("tests/converse.json") as file:
-    conversation = json.load(file)
+from glob import glob
+import os
 
 @dataclass
 class Conversation:
     speaker: str
     text: str
 
-results = []
 import time
 
 
 print("Started the Test")
 
-for i, conv in enumerate(conversation):
-    speaker = Conversation(**conv).speaker.lower()
-    text = Conversation(**conv).text.lower()
-    s = time.time()
-    result = lc.handle_transcript_event(Payload(text=text, speaker=speaker).__dict__)
-    end = time.time() - s
-    if result == None:
-        continue
-    result["timing"] = end
-    results += [ result ]
-with open("results.json", "w") as file:
-    json.dump(results, file)
+def processFile(phoneNumber, conversation):
+    results = []
+    for i, conv in enumerate(conversation):
+        speaker = Conversation(**conv).speaker.lower()
+        text = Conversation(**conv).text.lower()
+        s = time.time()
+        result = lc.handle_transcript_event(Payload(text=text, speaker=speaker, phoneNumber=phoneNumber, sessionId=phoneNumber).__dict__)
+        end = time.time() - s
+        print(f"{result=}")
+        if result == None:
+            continue
+        result["timing"] = end
+        results += [ result ]
+    with open(f"results_{phoneNumber}.json", "w") as file:
+        json.dump(results, file)
+    print(results, f"results_{phoneNumber}.json")
 
 
     
 
 
-
-
-    
-
-
+files = glob("tests/converse/*.json")
+for name in files:
+    print(f'Processing file {name=}')
+    phoneNumber = os.path.basename(name).split(".")[0]
+    with open(name) as file:
+        conversation = json.load(file)
+        processFile(phoneNumber, conversation)
