@@ -29,6 +29,7 @@ from flask_cors import CORS
 from oauth2client import client
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.messages import HumanMessage, AIMessage
+from langchain_community.memory.motorhead_memory import MotorheadMemory
 from langchain_core.output_parsers import StrOutputParser
 from langchain.prompts import ChatPromptTemplate
 # LangChain v0.3+ expects AgentExecutor.memory to be a BaseMemory implementation.
@@ -609,17 +610,17 @@ def get_agent_instance(policyId, sessionId=None):
     )
     
     # User lookup tool
-    user_lookup_tool = Tool(
-        name="User Lookup",
-        func=fetch_user_by_mobile,
-        description=(
-            "Useful for fetching user details from the database based on mobile number. "
-            "Use this tool when you need to retrieve customer information, user profile, or any user-related data. "
-            "Input should be the mobile number as a string. Returns user details in JSON format if found, or an error message if not found."
-        ),
-    )
+    #user_lookup_tool = Tool(
+    #    name="User Lookup",
+    #    func=fetch_user_by_mobile,
+    #    description=(
+    #        "Useful for fetching user details from the database based on mobile number. "
+    #        "Use this tool when you need to retrieve customer information, user profile, or any user-related data. "
+    #        "Input should be the mobile number as a string. Returns user details in JSON format if found, or an error message if not found."
+    #    ),
+    #)
 
-    tools = [knowledge_base_tool, user_lookup_tool]
+    tools = [knowledge_base_tool]
 
     if sessionId is None:
         current_time = str(time())
@@ -639,7 +640,7 @@ def get_agent_instance(policyId, sessionId=None):
         handle_parsing_errors=True,
     )
 
-    new_prompt = agent.agent.create_prompt(system_message=sys_msg, tools=tools)
+    new_prompt = agent.agent.create_prompt(system_message=_agent_system_message, tools=tools)
     agent.agent.llm_chain.prompt = new_prompt
 
     return agent

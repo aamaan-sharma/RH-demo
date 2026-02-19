@@ -1,6 +1,7 @@
 # Custom Files
 results.json
 converse.json
+tests*.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
