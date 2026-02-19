@@ -1,6 +1,8 @@
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
+from core.db import User
+from pydantic import BaseModel, Field
 from functools import lru_cache
 import os
 import re
@@ -18,6 +20,8 @@ from pymongo.collection import Collection
 
 from core.transcript_process import process_live_copilot_question, InferenceMode
 from utils import kb
+from core import db
+from core.schemas import Response, Transcript, SessionState, Question
 
 try:
     # openai>=1.x
@@ -232,8 +236,7 @@ def _now_epoch() -> int:
 def _s(s: Any) -> str:
     return str(s or "").strip()
 
-def _norm_text(s: str) -> str:
-    return re.sub(r"\s+", " ", _s(s).lower()).strip()
+def _norm_text(s: str) -> str: return re.sub(r"\s+", " ", _s(s).lower()).strip()
 
 def _fingerprint(obj: Any) -> str:
     try:
@@ -248,100 +251,40 @@ def _fingerprint(obj: Any) -> str:
 # -----------------------
 
 
-@dataclass
-class _SessionState:
-    session_id: str
-    last_suggested_at: float = 0.0
-    last_intent: str = ""
-    verification_asks: int = 0
-    buffer: List[Dict[str, Any]] = field(default_factory=list)  # [{speaker,text,ts}]
-    customer: Optional[Dict[str, Any]] = None  # verified customer context
 
-    # Persisted plan context (sent from Analyze Live UI via copilot_enable and attached to webhook payloads)
-    contract_type: str = ""
-    selected_plan: str = ""
-    selected_state: str = ""
-
-    # Question state: queue questions even before verification so they don't get skipped
-    pending_questions: List[Dict[str, Any]] = field(default_factory=list)  # [{k,q,ts}]
-    answered: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # k -> {"answer":..., "citedChunks":[...], "ts":...}
-
-    # Emission stability / dedupe
-    last_emit_fingerprint: str = ""
-    
-    # MongoDB user details for display in UI header
-    mongo_user_details: Optional[Dict[str, Any]] = None
+_sessions: Dict[str, SessionState] = {}
 
 
-_sessions: Dict[str, _SessionState] = {}
-
-
-def _get_state(session_id: str) -> _SessionState:
+def _get_state(session_id: str) -> SessionState:
     st = _sessions.get(session_id)
     if st is None:
-        st = _SessionState(session_id=session_id)
+        st = SessionState(session_id=session_id)
         _sessions[session_id] = st
     return st
 
 
-def _cooldown_ok(st: _SessionState) -> bool:
+def _cooldown_ok(st: SessionState) -> bool:
     return (time() - float(st.last_suggested_at or 0.0)) >= float(COPILOT_COOLDOWN_SECONDS or 0)
 
 
-def _append_buffer(st: _SessionState, speaker: str, text: str):
-    st.buffer.append({"speaker": speaker, "text": text, "ts": time()})
+def _append_buffer(st: SessionState, speaker: str, text: str):
+    st.buffer.append(Transcript(speaker=speaker, text=text))
     if len(st.buffer) > 30:
         st.buffer = st.buffer[-30:]
 
 
-def _buffer_text(st: _SessionState) -> str:
+def _buffer_text(st: SessionState) -> str:
     lines = []
     for item in st.buffer[-20:]:
-        sp = _s(item.get("speaker")).lower() or "unknown"
-        tx = _s(item.get("text"))
+        sp = _s(item.speaker).lower() or "unknown"
+        tx = _s(item.text)
         if not tx:
             continue
         lines.append(f"{sp}: {tx}")
     return "\n".join(lines).strip()
 
 
-def _update_session_context_from_payload(st: _SessionState, payload: Dict[str, Any]):
-    """
-    Update session context from transcript payload.
-    
-    Payload may contain these fields, but we now fetch contractType, plan, and state
-    from MongoDB instead of using payload values:
-    - phoneNumber / phone: Customer phone number (used for MongoDB lookup)
-    - contractType, plan, state: Ignored - will be fetched from MongoDB
-    
-    All customer details (contractType, plan, state) are now fetched from MongoDB
-    when phoneNumber is present in the payload.
-    """
-    # Extract phone (check both 'phoneNumber' and 'phone' keys)
-    # We only use phone for MongoDB lookup, not for setting customer context
-    phone = _s(payload.get("phoneNumber")) or _s(payload.get("phone"))
-    
-    # Extract payload values for logging/debugging only (not used for setting session state)
-    ct = _s(payload.get("contractType"))
-    pl = _s(payload.get("plan")) or _s(payload.get("selectedPlan"))
-    stt = _s(payload.get("state")) or _s(payload.get("selectedState"))
-    
-    # Logging discipline: never print raw phone/state/plan/contract type unless payload tracing is enabled.
-    if _trace_include_payloads():
-        # Still keep it bounded
-        try:
-            print(
-                "[LIVE_COPILOT_DEBUG] payload context: "
-                f"phone={_preview(phone)}, contractType={_preview(ct)}, plan={_preview(pl)}, state={_preview(stt)}"
-            )
-        except Exception:
-            pass
-    
-    # NOTE: We no longer set contractType, plan, or state from payload.
-    # These will be fetched from MongoDB in handle_transcript_event when phoneNumber is present.
-
-
-def _effective_customer_context(st: _SessionState) -> Dict[str, Any]:
+def _effective_customer_context(st: SessionState) -> Dict[str, Any]:
     """
     Prefer verified customer profile when present, but always keep plan context available
     (either from verified user doc or from UI-provided session context).
@@ -636,35 +579,21 @@ def _extract_questions_llm(*, transcript: str, handler: CallbackHandler, span, c
     return final_qs
 
 
-def _queue_questions(st: _SessionState, questions: List[str]) -> bool:
+def _queue_questions(st: SessionState, questions: List[str]) -> bool:
     """Return True if queue changed."""
     changed = False
     for q in questions:
         qn = _s(q)
         # Strip context for key generation (deduplication)
         clean_q = re.sub(r"\[CALL_CONTEXT:.*?\]\s*", "", qn).strip()
-        k = _norm_text(clean_q)
-        if not k:
-            continue
-        if k in st.answered:
-            continue
-        if any(item.get("k") == k for item in st.pending_questions):
-            continue
-        st.pending_questions.append({"k": k, "q": qn, "ts": time()})
+        q = _norm_text(clean_q)
+        if st.questions_queue.get(q, None) is None:
+            st.questions_queue[q] = Question(question=q)
+            if len(st.questions_queue) > 12:
+                st.questions_queue.popitem(last=False)
         changed = True
-    # cap
-    if len(st.pending_questions) > 12:
-        st.pending_questions = st.pending_questions[-12:]
     return changed
 
-
-# -----------------------
-# Phone extraction + Mongo lookup (AHS.Users)
-# -----------------------
-
-
-# _PHONE_RE is now imported from utils.constants
-_mongo_client: Optional[MongoClient] = None
 
 
 def _extract_phone_candidates(text: str) -> List[str]:
@@ -695,41 +624,25 @@ def _extract_phone_candidates(text: str) -> List[str]:
     return deduped[:4]
 
 
-def _get_mongo_client() -> MongoClient:
-    global _mongo_client
-    if _mongo_client is None:
-        _mongo_client = MongoClient(MONGO_URI, unicode_decode_error_handler="ignore")
-    return _mongo_client
 
 
-
-@lru_cache(maxsize=30)
-def cache_fetch_user_by_phone(phone: str, users: Collection):
-    doc = None
+@lru_cache(maxsize=20)
+def fetch_user_by_phone(phone: str):
+    user = None
     with tracer.start_as_current_span("db.mongo.find_one") as sp:
         _set_session_attr(sp)
         sp.set_attribute("db.system", "mongodb")
         sp.set_attribute("db.operation", "find_one")
         sp.set_attribute("db.collection", "Users")
         sp.set_attribute("db.query.mobile", str(phone))
-        doc = users.find_one({"mobile": phone})
-    if doc:
-        try:
-            name = doc.get('name') or doc.get('fullName') or doc.get('firstName') or ''
-            plan = doc.get('plan') or doc.get('selectedPlan') or doc.get('planName') or ''
-            state = doc.get('state') or doc.get('selectedState') or doc.get('stateName') or ''
-            phone_masked = f"***{str(phone)[-4:]}" if len(str(phone)) >= 4 else "***"
+        user = db.get_user_details_from_mobile(phone)
+        if user :
             print(
                 f"[LIVE_COPILOT] ✅ Mongo user match found!",
-                f"phone={phone_masked}",
-                f"name={name}",
-                f"plan={plan}",
-                f"state={state}",
+                f"{user=}",
                 flush=True
             )
-        except Exception as e:
-            print(f"[LIVE_COPILOT] User found but error logging details: {e}", flush=True)
-    return doc
+    return user
 
 
 @lru_cache(maxsize=30)
@@ -759,10 +672,12 @@ def cache_fetch_user_by_phones(phone_candidates: tuple, users: Collection):
             )
         except Exception as e:
             print(f"[LIVE_COPILOT] User found but error logging details: {e}", flush=True)
+    if doc :
+        doc = User(**doc) 
     return doc
 
 
-def _lookup_user_by_phone(phone_candidates: tuple) -> Optional[Dict[str, Any]]:
+def _lookup_user_by_phone(phone_candidates: tuple) -> Optional[User]:
     print("[LIVE_COPILOT DEBUG]: ", phone_candidates)
     if not MONGO_URI:
         print("[LIVE_COPILOT] ERROR: MONGO_URI not configured, cannot lookup user", flush=True)
@@ -772,21 +687,24 @@ def _lookup_user_by_phone(phone_candidates: tuple) -> Optional[Dict[str, Any]]:
         return None
     
     print(f"[LIVE_COPILOT] Attempting MongoDB lookup with {len(phone_candidates)} phone candidates", flush=True)
-    users = _get_mongo_client()["AHS"]["Users"]
+    users = db.get_db_collection("Users")
     
     # Try individual lookups first
     for p in phone_candidates:
         try:
-            doc = cache_fetch_user_by_phone(p, users)
-            print("Find Candidates!!!")
-            return doc
+            doc = fetch_user_by_phone(p)
+            if doc: 
+                print("Found Candidates!!!", doc)
+                return doc
         except Exception as e:
             print(f"[LIVE_COPILOT] Error querying MongoDB with phone {p}: {e}", flush=True)
     
     # Fallback: try $in query
     try:
         doc = cache_fetch_user_by_phones(phone_candidates, users)
-        return doc
+        if doc :
+            print("Found Candidates!!!", doc)
+            return doc
     except Exception as e:
         print(f"[LIVE_COPILOT] Error with $in query: {e}", flush=True)
     
@@ -794,138 +712,9 @@ def _lookup_user_by_phone(phone_candidates: tuple) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _normalize_customer_doc(doc: Dict[str, Any], phone: str) -> Dict[str, Any]:
-    name = doc.get("name") or doc.get("fullName") or doc.get("firstName") or ""
-    if doc.get("lastName", "") not in str(name):
-        name = f"{name} {doc.get('lastName')}"
-    plan = doc.get("plan") or doc.get("selectedPlan") or doc.get("planName") or ""
-    contract_type = doc.get("contractType") or doc.get("contract_type") or ""
-    state = doc.get("state") or doc.get("selectedState") or doc.get("stateName") or ""
-    return {
-        "verified": True,
-        "name": _s(name) or "Customer",
-        "phone": phone,
-        "plan": _s(plan),
-        "contractType": _s(contract_type),
-        "state": _s(state),
-    }
 
 
-def _build_mongo_user_details(doc: Dict[str, Any], phone: str) -> Dict[str, Any]:
-    """
-    Build UI-ready user details dict from MongoDB doc for the Customer Details card.
-    Frontend expects: name, phone, email, plan, state, contractType, address.
-    """
-    name = doc.get("name") or doc.get("fullName") or doc.get("firstName") or ""
-    if doc.get("lastName") and name and doc.get("lastName") not in str(name):
-        name = f"{name} {doc.get('lastName')}"
-    plan = doc.get("plan") or doc.get("selectedPlan") or doc.get("planName") or ""
-    contract_type = doc.get("contractType") or doc.get("contract_type") or ""
-    state = doc.get("state") or doc.get("selectedState") or doc.get("stateName") or ""
-    email = doc.get("email") or doc.get("emailAddress") or ""
-    address = doc.get("address") or doc.get("addressLine1") or ""
-    return {
-        "name": _s(name) or "Customer",
-        "phone": _s(phone),
-        "email": _s(email),
-        "plan": _s(plan),
-        "state": _s(state),
-        "contractType": _s(contract_type),
-        "address": _s(address),
-    }
 
-
-# -----------------------
-# Milvus selection (same naming logic as app.py)
-# -----------------------
-
-
-# CLEAR_STATE_ALIASES is now imported from utils.constants
-
-
-def _normalize_contract_type(contract_type: str) -> str:
-    return _s(contract_type).upper()
-
-
-def _normalize_state_for_milvus(selected_state: str) -> str:
-    raw = _s(selected_state)
-    if not raw:
-        return ""
-    key = raw.upper()
-    if key in CLEAR_STATE_ALIASES:
-        return CLEAR_STATE_ALIASES[key]
-    lower = raw.lower()
-    for v in CLEAR_STATE_ALIASES.values():
-        if lower == v.lower():
-            return v
-    return raw
-
-
-def _normalize_plan_for_milvus(contract_type: str, selected_plan: str) -> str:
-    raw = _s(selected_plan)
-    if not raw:
-        return ""
-    compact = re.sub(r"[^a-z0-9]+", "", raw.lower())
-    ct = _normalize_contract_type(contract_type)
-    if ct == "RE":
-        if compact in ("shieldessential", "essential"):
-            return "ShieldEssential"
-        if compact in ("shieldplus", "plus"):
-            return "ShieldPlus"
-        if compact in ("shieldcomplete", "complete"):
-            return "default"
-    if ct == "DTC":
-        if compact in ("shieldsilver", "silver"):
-            return "ShieldSilver"
-        if compact in ("shieldgold", "gold"):
-            return "ShieldGold"
-        if compact in ("shieldplatinum", "platinum"):
-            return "default"
-    return raw
-
-
-def _milvus_collection(contract_type: str, selected_plan: str, selected_state: str) -> Optional[str]:
-    ct = _normalize_contract_type(contract_type)
-    st = _normalize_state_for_milvus(selected_state)
-    pl = _normalize_plan_for_milvus(ct, selected_plan)
-    if not ct or not st:
-        return None
-    mapping = {
-        "RE": {
-            "ShieldEssential": f"{st}_RE_ShieldEssential",
-            "ShieldPlus": f"{st}_RE_ShieldPlus",
-            "default": f"{st}_RE_ShieldComplete",
-        },
-        "DTC": {
-            "ShieldSilver": f"{st}_DTC_ShieldSilver",
-            "ShieldGold": f"{st}_DTC_ShieldGold",
-            "default": f"{st}_DTC_ShieldPlatinum",
-        },
-    }
-    return mapping.get(ct, {}).get(pl, mapping.get(ct, {}).get("default"))
-
-
-_embed: Optional[OpenAIEmbeddings] = None
-_milvus_cache: Dict[str, Milvus] = {}
-
-
-def _get_embed() -> OpenAIEmbeddings:
-    global _embed
-    if _embed is None:
-        _embed = OpenAIEmbeddings(model="text-embedding-ada-002", openai_api_key=OPENAI_API_KEY)
-    return _embed
-
-
-def _get_vector_db(collection_name: str) -> Milvus:
-    if collection_name in _milvus_cache:
-        return _milvus_cache[collection_name]
-    vector_db: Milvus = Milvus(
-        _get_embed(),
-        collection_name=collection_name,
-        connection_args={"host": MILVUS_HOST, "port": "19530"},
-    )
-    _milvus_cache[collection_name] = vector_db
-    return vector_db
 
 
 
@@ -965,43 +754,6 @@ def _call_intent_llm(*, transcript: str, handler: CallbackHandler, span) -> Dict
 
 
 
-def _simple_rag_answer(*, question: str, customer: Dict[str, Any], handler: CallbackHandler, span) -> Dict[str, Any]:
-    """
-    Simple RAG implementation - fallback when INFER wrapper is not available.
-    Uses direct Milvus similarity search + LLM summarization.
-    """
-    if not MILVUS_HOST:
-        return {"error": "MILVUS_HOST not configured"}
-    collection = _milvus_collection(customer.get("contractType"), customer.get("plan"), customer.get("state"))
-    if not collection:
-        return {"error": "Missing plan context for Milvus collection"}
-    vector_db = _get_vector_db(collection)
-    # Similarity search then summarize with LLM
-    docs = vector_db.similarity_search(question, k=6)
-    chunks = []
-    for d in docs:
-        content = getattr(d, "page_content", "") or ""
-        if content.strip():
-            chunks.append(content.strip())
-    if not chunks:
-        return {"answer": "I couldn't find relevant policy language for that question.", "citedChunks": []}
-    llm = _get_suggest_llm()  # Use cached instance
-    chain = _rag_prompt | llm | StrOutputParser()
-    payload = {"question": question, "chunks": "\n\n".join(chunks)}
-    raw = (chain.invoke(payload, config={"callbacks": [handler]}) or "").strip()
-    if _trace_include_payloads():
-        span.set_attribute("llm.prompt.preview", _preview(payload))
-        span.set_attribute("llm.response.preview", _preview(raw))
-    try:
-        obj = json.loads(raw)
-        if isinstance(obj, dict) and obj.get("answer") is not None:
-            cited = obj.get("citedChunks") or []
-            if not isinstance(cited, list):
-                cited = []
-            return {"answer": str(obj.get("answer")), "citedChunks": cited[:2]}
-    except Exception:
-        pass
-    return {"answer": raw[:1200], "citedChunks": chunks[:1]}
 
 
 def _rag_answer(*, question: str, customer: Dict[str, Any], handler: CallbackHandler, span) -> Dict[str, Any]:
@@ -1038,10 +790,7 @@ def _rag_answer(*, question: str, customer: Dict[str, Any], handler: CallbackHan
             answer = (result or {}).get("answer", "")
             chunks = (result or {}).get("relevantChunks", [])
             
-            if (result or {}).get("error"):
-                # Fall through to simple RAG
-                pass
-            elif answer:
+            if answer:
                 if _trace_include_payloads():
                     span.set_attribute("rag.question.preview", _preview(question))
                     span.set_attribute("rag.answer.preview", _preview(answer))
@@ -1055,12 +804,9 @@ def _rag_answer(*, question: str, customer: Dict[str, Any], handler: CallbackHan
         except Exception as e:
             import traceback
             traceback.print_exc()
-            # Fall through to simple RAG
     
     # Fallback: use simple RAG implementation
-    result = _simple_rag_answer(question=question, customer=customer, handler=handler, span=span)
-    result["source"] = "simple_rag"
-    return result
+    return {}
 
 
 def _diagnostics_steps(*, transcript: str, handler: CallbackHandler, span) -> Dict[str, Any]:
@@ -1078,17 +824,6 @@ def _diagnostics_steps(*, transcript: str, handler: CallbackHandler, span) -> Di
 
 
 
-
-def _call_suggest_llm(
-    *,
-    intent: str,
-    customer_verified: bool,
-    customer_context: Dict[str, Any],
-    tool_result: Dict[str, Any],
-    transcript: str,
-    evidence: str,
-) -> List[Dict[str, Any]]:
-    raise RuntimeError("_call_suggest_llm should be called via _call_suggest_llm_traced")
 
 
 def _call_suggest_llm_traced(
@@ -1110,7 +845,7 @@ def _call_suggest_llm_traced(
 
     # Use temperature=0.0 for deterministic, consistent outputs
     llm = _get_suggest_llm()  # Use cached instance
-    chain = _suggest_prompt #| llm | StrOutputParser()
+    chain = _suggest_prompt | llm | StrOutputParser()
     prompt_payload = {
         "intent": intent,
         "customer_verified": bool(customer_verified),
@@ -1167,7 +902,7 @@ def _call_suggest_llm_traced(
         cleaned = re.sub(r"```json\n?", "", cleaned)
     if "```" in cleaned:
         cleaned = re.sub(r"```\n?", "", cleaned)
-    #cleaned = cleaned.strip()
+    cleaned = cleaned.strip()
 
     try:
         obj = json.loads(cleaned)
@@ -1197,7 +932,13 @@ def _call_suggest_llm_traced(
 # -----------------------
 
 
-def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Optional[Dict[str, Any]]:
+handler = CallbackHandler()
+
+
+
+
+
+def handle_transcript_event(payload: Dict[str, Any], parent_context=None) :
     session_id = _s(payload.get("sessionId"))
     speaker = _s(payload.get("speaker")).lower()
     text = _s(payload.get("text"))
@@ -1214,7 +955,6 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
 
     # Update buffer and session context (always needed for conversation history)
     st = _get_state(session_id)
-    _update_session_context_from_payload(st, payload)
     _append_buffer(st, speaker=speaker, text=text)
 
 
@@ -1239,108 +979,17 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
         '''
         # Normalize phone number - remove non-digits and handle +1 prefix
         phone_clean = re.sub(r"\D+", "", payload_phone)
-        #print(f"[LIVE_COPILOT] Normalized phone number: {phone_clean}", flush=True)
-        if len(phone_clean) == 10:
-            phone_candidates = (phone_clean, "+1" + phone_clean)
-        elif len(phone_clean) == 11 and phone_clean.startswith("1"):
-            phone_candidates = (phone_clean[1:], "+1" + phone_clean[1:], phone_clean)
-        else:
-            phone_candidates = (phone_clean)
-        
+        phone_candidates = (phone_clean, "+1" + phone_clean, phone_clean[1:], "+1" + phone_clean[1:])
         print(f"[LIVE_COPILOT] Searching MongoDB with phone candidates: {phone_candidates}", flush=True)
-        doc = _lookup_user_by_phone(phone_candidates)
-        if doc:
+        user_data = _lookup_user_by_phone(phone_candidates)
+        if user_data:
             # Normalize MongoDB document
-            st.customer = _normalize_customer_doc(doc, phone_candidates[0])
-            
-            # Extract MongoDB user details
-            mongo_name = st.customer.get("name") or st.customer.get("fullName") or st.customer.get("firstName") or ""
-            mongo_contract_type = _s(st.customer.get("contractType"))
-            mongo_plan = _s(st.customer.get("plan")) or _s(st.customer.get("selectedPlan")) or _s(st.customer.get("planName"))
-            mongo_state = _s(st.customer.get("state")) or _s(st.customer.get("selectedState")) or _s(st.customer.get("stateName"))
-            mongo_email = _s(st.customer.get("email"))
-            mongo_address = _s(st.customer.get("address"))
-            
-            # Log MongoDB user details
-            print("=" * 80, flush=True)
-            print(f"[LIVE_COPILOT] ✅ MONGODB USER DETAILS:", flush=True)
-            print(f"  Phone: ***{phone_clean[-4:]}", flush=True)
-            print(f"  Name: {mongo_name}", flush=True)
-            print(f"  Contract Type: {mongo_contract_type}", flush=True)
-            print(f"  Plan: {mongo_plan}", flush=True)
-            print(f"  State: {mongo_state}", flush=True)
-            if mongo_email:
-                print(f"  Email: {mongo_email}", flush=True)
-            if mongo_address:
-                print(f"  Address: {mongo_address}", flush=True)
+            st.customer = user_data
+            print(f"[LIVE COPILOT]: {st.customer=}") 
             
             # Cross-verification: Compare payload data with MongoDB data (for debugging only)
             # NOTE: MongoDB values are the source of truth and will be used for inference
-            '''
-            if payload_contract_type or payload_plan or payload_state:
-                print("-" * 80, flush=True)
-                print(f"[LIVE_COPILOT] 🔍 CROSS-VERIFICATION (Payload vs MongoDB - MongoDB is source of truth):", flush=True)
-                
-                # Compare contractType
-                if payload_contract_type and mongo_contract_type:
-                    if payload_contract_type.lower() == mongo_contract_type.lower():
-                        print(f"  ✅ Contract Type MATCH: {payload_contract_type}", flush=True)
-                    else:
-                        print(
-                            f"  ⚠️  Contract Type MISMATCH: Payload={payload_contract_type}, "
-                            f"MongoDB={mongo_contract_type}",
-                            flush=True
-                        )
-                elif payload_contract_type:
-                    print(f"  ⚠️  Contract Type: Payload={payload_contract_type}, MongoDB=Not found", flush=True)
-                elif mongo_contract_type:
-                    print(f"  ℹ️  Contract Type: Payload=Not provided, MongoDB={mongo_contract_type}", flush=True)
-                
-                # Compare plan
-                if payload_plan and mongo_plan:
-                    if payload_plan.lower() == mongo_plan.lower():
-                        print(f"  ✅ Plan MATCH: {payload_plan}", flush=True)
-                    else:
-                        print(
-                            f"  ⚠️  Plan MISMATCH: Payload={payload_plan}, MongoDB={mongo_plan}",
-                            flush=True
-                        )
-                elif payload_plan:
-                    print(f"  ⚠️  Plan: Payload={payload_plan}, MongoDB=Not found", flush=True)
-                elif mongo_plan:
-                    print(f"  ℹ️  Plan: Payload=Not provided, MongoDB={mongo_plan}", flush=True)
-                
-                # Compare state
-                if payload_state and mongo_state:
-                    if payload_state.lower() == mongo_state.lower():
-                        print(f"  ✅ State MATCH: {payload_state}", flush=True)
-                    else:
-                        print(
-                            f"  ⚠️  State MISMATCH: Payload={payload_state}, MongoDB={mongo_state}",
-                            flush=True
-                        )
-                elif payload_state:
-                    print(f"  ⚠️  State: Payload={payload_state}, MongoDB=Not found", flush=True)
-                elif mongo_state:
-                    print(f"  ℹ️  State: Payload=Not provided, MongoDB={mongo_state}", flush=True)
-            
-            print("=" * 80, flush=True)
-            '''
-            # Update session state - ONLY use MongoDB data (no payload fallback)
-            try:
-                if mongo_contract_type:
-                    st.contract_type = mongo_contract_type
-                    print(f"[LIVE_COPILOT] ✅ Set contract_type from MongoDB: {mongo_contract_type}", flush=True)
-                if mongo_plan:
-                    st.selected_plan = mongo_plan
-                    print(f"[LIVE_COPILOT] ✅ Set selected_plan from MongoDB: {mongo_plan}", flush=True)
-                if mongo_state:
-                    st.selected_state = mongo_state
-                    print(f"[LIVE_COPILOT] ✅ Set selected_state from MongoDB: {mongo_state}", flush=True)
-            except Exception as e:
-                print(f"[LIVE_COPILOT] Error updating session state: {e}", flush=True)
             # Set UI-ready user details so frontend Customer Details card receives userDetails
-            st.mongo_user_details = _build_mongo_user_details(doc, phone_candidates[0])
         else:
             print(f"[LIVE_COPILOT] ❌ No user found in MongoDB for phone candidates: {phone_candidates}", flush=True)
             print(f"[LIVE_COPILOT] ⚠️  contractType, plan, and state will NOT be set (MongoDB lookup failed)", flush=True)
@@ -1348,17 +997,11 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
     if speaker == "agent":
         # No AI suggestions needed for CSR text
         # But if user details were just fetched, send them for display
-        if st.mongo_user_details:
-            return {
-                "sessionId": session_id,
-                "intent": "OTHER",
-                "userDetails": st.mongo_user_details,
-                "createdAt": str(_now_epoch()),
-            }
+        if st.customer:
+            return Response(sessionId=session_id, userDetails=st.customer).dict()
         return None
     
 
-    handler = CallbackHandler()
     output: Optional[Dict[str, Any]] = None
     tok = _live_session_id_var.set(session_id)
     try:
@@ -1376,15 +1019,6 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                 _set_session_attr(sp_intent)
                 
                 # Prioritize phoneNumber from payload, fallback to regex extraction from text
-                phone_candidates = None
-                if payload_phone:
-                    phone_clean = re.sub(r"\D+", "", payload_phone)
-                    if len(phone_clean) == 10:
-                        phone_candidates = (phone_clean, "+1" + phone_clean)
-                    elif len(phone_clean) == 11 and phone_clean.startswith("1"):
-                        phone_candidates = (phone_clean[1:], "+1" + phone_clean[1:], phone_clean)
-                    else:
-                        phone_candidates = (phone_clean)
                 
                 if not phone_candidates:
                     phone_candidates = _extract_phone_candidates(text)
@@ -1432,26 +1066,10 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
 
                 if (phone_candidates or phone_entity) and not customer:
                     candidates = phone_candidates or [phone_entity]
-                    doc = _lookup_user_by_phone([c for c in candidates if c])
-                    if doc:
-                        st.customer = _normalize_customer_doc(doc, candidates[0])
+                    user_data = _lookup_user_by_phone(tuple([c for c in candidates if c]))
+                    if user_data:
+                        st.customer = user_data
                         customer = st.customer
-                        try:
-
-                            st.contract_type = st.contract_type or _s(customer.get("contractType"))
-                            st.selected_plan = st.selected_plan or _s(customer.get("plan"))
-                            st.selected_state = st.selected_state or _s(customer.get("state"))
-                            mongo_ct = _s(customer.get("contractType"))
-                            mongo_pl = _s(customer.get("plan")) or _s(customer.get("selectedPlan")) or _s(customer.get("planName"))
-                            mongo_st = _s(customer.get("state")) or _s(customer.get("selectedState")) or _s(customer.get("stateName"))
-                            if mongo_ct:
-                                st.contract_type = mongo_ct
-                            if mongo_pl:
-                                st.selected_plan = mongo_pl
-                            if mongo_st:
-                                st.selected_state = mongo_st
-                        except Exception:
-                            pass
                         important_change = True
 
                 customer_ctx = _effective_customer_context(st)
@@ -1475,15 +1093,7 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
 
                 # Build tool_result snapshot (always present so the prompt has state + conversation context)
                 # Include previousAnswers so LLM doesn't contradict itself
-                previous_answers = [
-                    {
-                        "question": k,
-                        "answer": v.get("answer", ""),
-                        "citedChunks": v.get("citedChunks", []),
-                    }
-                    for k, v in st.answered.items()
-                    if v.get("answer")
-                ]
+                previous_answers = [ q.__dict__ for _, q in st.answered.items() ]
 
                 # Helper to strip context for display
                 def _strip_ctx(s: str) -> str:
@@ -1496,7 +1106,7 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                         "plan": customer_ctx.get("plan"),
                         "state": customer_ctx.get("state"),
                     },
-                    "pendingQuestions": [_strip_ctx(x.get("q")) for x in st.pending_questions if _s(x.get("q"))],
+                    "pendingQuestions": [_strip_ctx(x.question) for _,x in st.questions_queue.items() if _s(x.question)],
                     "answeredCount": len(st.answered),
                     "previousAnswers": previous_answers,  # Include all previously answered questions for consistency
                     "newAnswers": [],
@@ -1507,7 +1117,7 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                 }
 
                 requires_verification = bool(intent_obj.get("requiresVerification"))
-                if (requires_verification or st.pending_questions) and not verified:
+                if (requires_verification or st.questions_queue) and not verified:
                     tool_result["verification"]["needsPhone"] = True
                     if st.verification_asks < COPILOT_MAX_VERIFICATION_ASKS:
                         st.verification_asks += 1
@@ -1518,56 +1128,21 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                 )
 
             # ---------------- phase: rag_answer (where applicable) ----------------
-            if can_rag and st.pending_questions:
+            if can_rag and st.questions_queue:
                 with tracer.start_as_current_span("live_copilot.rag_answer") as sp_rag:
                     _set_session_attr(sp_rag)
                     
                     answered_now = []
-                    for item in list(st.pending_questions)[:2]:
-                        k = _s(item.get("k"))
-                        q = _s(item.get("q"))
-                        if not k or not q:
-                            continue
-                        if k in st.answered:
-                            continue
-                        res = _rag_answer(question=q, customer=customer_ctx, handler=handler, span=sp_rag)
-                        st.answered[k] = {"ts": time(), **(res or {})}
-                        answered_now.append({"question": _strip_ctx(q), "result": res})
+                    question_str, question = st.questions_queue.popitem(last=False)
+                    res = _rag_answer(question=question_str, customer=customer_ctx, handler=handler, span=sp_rag)
+                    question.answer = res.get("answer", "")
+                    question.citedChunks = res.get("chunks", "")
+                    question.ts = _now_epoch()
+                    st.answered[question_str] = question
+                    answered_now.append({"question": _strip_ctx(question_str), "result": res})
                     if answered_now:
-                        st.pending_questions = [
-                            x for x in st.pending_questions if _s(x.get("k")) not in st.answered
-                        ]
                         tool_result["newAnswers"] = answered_now
                         important_change = True
-
-                        # Score insert with answer-quality metrics (relevance_score, resolution_score).
-                        for item in answered_now:
-                            _question = item.get("question") or ""
-                            _result = item.get("result") or {}
-                            if not _question:
-                                continue
-                            '''
-                            def _run_monitor_live(span, question, result, _session_id, _user_email):
-                                dicts = security_scores(span, question)
-                                if not dicts:
-                                    return
-                                answer = (result.get("answer") or "").strip()
-                                cited_chunks = result.get("citedChunks") or []
-                                is_fallback = _is_answer_fallback(answer)
-                                resolution_score = 1 if (answer and not is_fallback) else 0
-                                has_relevant = len(cited_chunks) > 0
-                                relevance_score = 1 if (resolution_score == 1 and has_relevant and not is_fallback) else 0
-                                dicts["relevance_score"] = relevance_score
-                                dicts["resolution_score"] = resolution_score
-                                # Feature Usage: webhook/live → Live Copilot, flow_type=live; forward session_id, user_email.
-                                func_Binsert(span, dicts, question, session_id=_session_id, user_email=_user_email, answer_text=answer if answer else None, feature_name="Live Copilot", flow_type="live")
-                            _user_email = (getattr(st, "customer", None) or {}).get("email") or None
-                            threading.Thread(
-                                target=_run_monitor_live,
-                                args=(sp_rag, _question, _result, session_id, _user_email),
-                                daemon=True,
-                            ).start()
-                            '''
 
             if intent == "PROBLEM":
                 cards = None
@@ -1600,11 +1175,11 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
             # In-memory deduplication and token aggregation - no span needed
             if cards is None:
                 # Even if no cards, send user details if available (for sticky header)
-                if st.mongo_user_details:
+                if st.customer:
                     output = {
                         "sessionId": session_id,
                         "intent": intent or "OTHER",
-                        "userDetails": st.mongo_user_details,
+                        "userDetails": st.customer.dict(),
                         "createdAt": str(_now_epoch()),
                     }
                 else:
@@ -1613,11 +1188,11 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                 fp = _fingerprint({"intent": intent, "customer": customer_ctx, "cards": cards})
                 if fp == st.last_emit_fingerprint and not important_change:
                     # Even if deduplicated, send user details if available (for sticky header)
-                    if st.mongo_user_details:
+                    if st.customer:
                         output = {
                             "sessionId": session_id,
                             "intent": intent,
-                            "userDetails": st.mongo_user_details,
+                            "userDetails": st.customer.dict(),
                             "createdAt": str(_now_epoch()),
                         }
                     else:
@@ -1636,7 +1211,7 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                     }
                     # Add MongoDB user details as sticky header for UI display
                     if st.mongo_user_details:
-                        output["userDetails"] = st.mongo_user_details
+                        output["userDetails"] = st.customer.dict()
                     if _trace_include_payloads():
                         root.set_attribute("live.response.preview", _preview(output))
 
@@ -1711,7 +1286,7 @@ def handle_copilot_enable_event(session_id: str, phone_number: str = None) -> Op
             return {
                 "sessionId": session_id,
                 "intent": "OTHER",
-                "userDetails": st.mongo_user_details,
+                "userDetails": st.customer.dict(),
                 "createdAt": str(_now_epoch()),
             }
             

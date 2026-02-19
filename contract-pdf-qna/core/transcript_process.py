@@ -27,7 +27,7 @@ from langchain.agents import initialize_agent, Tool, AgentType, create_tool_call
 from langchain.prompts import SystemMessagePromptTemplate, ChatPromptTemplate
 from utils.kb import get_vector_db, getPolicyid, getRetriver
 
-from core.db import get_user_details_from_mobile, Users
+from core.db import get_user_details_from_mobile, User
 from core.llms import TRANSCRIPT_QA_AGENT, SEARCH_LLM
 from enum import Enum
 from typing import Optional, List
