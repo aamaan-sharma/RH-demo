@@ -8,6 +8,7 @@ _async_mode = "threading"
 #     eventlet.monkey_patch()
 # except Exception:
 #     _async_mode = os.getenv("SOCKETIO_ASYNC_MODE", "threading")
+
 import os
 import asyncio
 from dotenv import load_dotenv

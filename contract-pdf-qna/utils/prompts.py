@@ -237,7 +237,6 @@ Conversation context (most recent last):
 )
 
 
-
 _diagnostics_prompt = ChatPromptTemplate.from_template(
         """
 You are a troubleshooting assistant for home appliance/system issues.\n
