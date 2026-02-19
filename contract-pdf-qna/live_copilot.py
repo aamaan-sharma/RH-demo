@@ -1,5 +1,6 @@
 from dotenv import load_dotenv
 load_dotenv(override=True)
+
 from functools import lru_cache
 import os
 import re
@@ -14,6 +15,9 @@ from dataclasses import dataclass, field
 from time import time
 from typing import Any, Dict, List, Optional
 from pymongo.collection import Collection
+
+from core.transcript_process import process_live_copilot_question, InferenceMode
+from utils import kb
 
 try:
     # openai>=1.x
@@ -76,31 +80,8 @@ def _env_int(name: str, default: int) -> int:
 # INFER Integration: Import the wrapper from app.py
 # Uses lazy import to avoid circular dependency issues
 # -------------------------------------------------------------------
-_INFER_WRAPPER_AVAILABLE = False
-_process_live_copilot_question = None
 
 
-def _get_infer_wrapper():
-    """
-    Lazy import of process_live_copilot_question from app.py.
-    This avoids circular import issues since app.py imports live_copilot.
-    """
-    global _INFER_WRAPPER_AVAILABLE, _process_live_copilot_question
-    
-    if _process_live_copilot_question is not None:
-        return _process_live_copilot_question
-    
-    try:
-        from app import process_live_copilot_question
-        _process_live_copilot_question = process_live_copilot_question
-        _INFER_WRAPPER_AVAILABLE = True
-        return _process_live_copilot_question
-    except ImportError as e:
-        _INFER_WRAPPER_AVAILABLE = False
-        return None
-
-
-_get_infer_wrapper()
 
 def _trace_include_payloads() -> bool:
     raw = (os.getenv("OTEL_TRACE_INCLUDE_PAYLOADS", "0") or "").strip().lower()
@@ -161,35 +142,6 @@ def _set_session_attr(span) -> None:
     except Exception:
         pass
 
-
-
-
-@contextmanager
-def _infer_handler_context(handler: CallbackHandler):
-    """
-    Temporarily bind app.handler = handler so that Infer's LLM calls share the
-    same request-scoped CallbackHandler.
-    """
-    # Thread-safety: Infer may run concurrently across sessions.
-    with _infer_handler_lock:
-        old = None
-        bound = False
-        try:
-            try:
-                import app as _app  # lazy import; avoids circular dependency issues
-                old = getattr(_app, "handler", None)
-                setattr(_app, "handler", handler)
-                bound = True
-            except Exception:
-                bound = False
-            yield
-        finally:
-            if bound:
-                try:
-                    import app as _app
-                    setattr(_app, "handler", old)
-                except Exception:
-                    pass
 
 
 
@@ -1073,18 +1025,14 @@ def _rag_answer(*, question: str, customer: Dict[str, Any], handler: CallbackHan
     state = customer.get("state", "")
     
     # Try to use INFER wrapper first (full LangChain Agent)
-    infer_wrapper = _get_infer_wrapper()
     
-    if infer_wrapper is not None:
+    if True:
         try:
-            with _infer_handler_context(handler):
-                result = infer_wrapper(
-                    question=question,
-                    contract_type=contract_type,
-                    selected_plan=plan,
-                    selected_state=state,
-                    transcript_context="",  # Could add more context here if needed
-                )
+            result = process_live_copilot_question(
+                question=question,
+                policyId=kb.getPolicyid(contract_type=contract_type, selected_plan=plan, selected_state=state),
+                transcript_context="",  # Could add more context here if needed
+            )
             
             # Transform result to match expected format
             answer = (result or {}).get("answer", "")
@@ -1171,7 +1119,7 @@ def _call_suggest_llm_traced(
         "transcript": transcript,
     }
     try:
-        raw = (chain.invoke(prompt_payload, config={"callbacks": [handler]}) or "").strip()
+        raw = (chain.invoke(prompt_payload, config={"callbacks": [handler]}) or "")
     except (APITimeoutError, httpx.TimeoutException) as e:
         _log("warn", "⏱️", f"Suggestion LLM timeout: {type(e).__name__}")
         try:
@@ -1219,7 +1167,7 @@ def _call_suggest_llm_traced(
         cleaned = re.sub(r"```json\n?", "", cleaned)
     if "```" in cleaned:
         cleaned = re.sub(r"```\n?", "", cleaned)
-    cleaned = cleaned.strip()
+    #cleaned = cleaned.strip()
 
     try:
         obj = json.loads(cleaned)
@@ -1507,7 +1455,7 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                         important_change = True
 
                 customer_ctx = _effective_customer_context(st)
-                customer_ctx["sessionId"] = session
+                customer_ctx["sessionId"] = session_id
                 verified = bool(customer_ctx.get("verified"))
 
                 should_extract = (

@@ -52,7 +52,7 @@ def getPolicyid(*,
     contract_type: str,
     selected_plan: str,
     selected_state: str
-) -> Optional[str]:
+) -> str:
     """
     Get the Milvus collection name based on contract type, plan, and state.
     
@@ -69,7 +69,7 @@ def getPolicyid(*,
     selected_plan_norm = normalize_plan_for_milvus(contract_type_norm, selected_plan)
     
     if not contract_type_norm or not milvus_state:
-        return None
+        raise Exception(f"[KNOWLEDGE BASE]: invalid policyId for {selected_state=}, {contract_type=}, {selected_plan=}")
     
     # Build collection mapping
     collection_mapping = {
@@ -87,9 +87,9 @@ def getPolicyid(*,
     
     selected_collection_name = collection_mapping.get(contract_type_norm, {}).get(
         selected_plan_norm, collection_mapping.get(contract_type_norm, {}).get("default")
-    )
+    ) or ""
     
-    return selected_collection_name
+    return selected_collection_name.lower()
 
 
 @cache

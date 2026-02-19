@@ -1,11 +1,14 @@
-
+import json
 import traceback
 from time import time
 
 from utils.prompts import ANSWERING_PROMPT_SEARCH, _agent_system_message
 from config import MOTORHEAD_CLIENT_ID, MOTORHEAD_API_KEY
 from utils.constants import MILVUS_FALLBACK_K, MILVUS_MAX_RETURN_CHUNKS, MILVUS_RETRIEVER_K
+
 from pymilvus import Milvus
+
+
 from typing import Dict
 from functools import cache
 
@@ -14,27 +17,30 @@ from langchain.tools import tool
 import asyncio
 
 from langchain_community.memory.motorhead_memory import MotorheadMemory
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from langchain.callbacks.base import BaseCallbackHandler
 
 from langchain.chains import RetrievalQA
 
-from langchain.agents import initialize_agent, Tool, AgentType
+from langchain.agents import initialize_agent, Tool, AgentType, create_tool_calling_agent, AgentExecutor
+from langchain.prompts import SystemMessagePromptTemplate, ChatPromptTemplate
 from utils.kb import get_vector_db, getPolicyid, getRetriver
 
-from llms import TRANSCRIPT_QA_AGENT
+from core.db import get_user_details_from_mobile, Users
+from core.llms import TRANSCRIPT_QA_AGENT, SEARCH_LLM
 from enum import Enum
-from typing import Optional
+from typing import Optional, List
 
+from monitoring_module import q_monitor, tracer, llm_trace_to_jaeger, func_Binsert, security_scores, _is_answer_fallback
 @dataclass
 class Response:
     error: Optional[str] = None
     answer: str =  ""
-    relevantChunks: list[str] = []
     confidence: float = 0.0
     latency: float =  0.0
-    relevantChunksDetails: list[str] = []
+    relevantChunksDetails: list[str] = field(default_factory=list)
+    relevantChunks: list[str] = field(default_factory=list)
 
 
 @cache
@@ -52,43 +58,7 @@ async def get_memory_instance(*, session_id):
     await memory.init()
     return memory
 
-from pymongo import MongoClient
 
-mongo_client = MongoClient(unicode_decode_error_handler='ignore')
-
-@cache
-def get_db_collection(collection_name, db_name="AHS")
-    return mongo_client[db_name][collection_name]
-
-@tool
-def fetch_user_by_mobile(mobile_number: str) -> str:
-    """
-    Fetch user details from the database based on mobile number.
-    
-    Args:
-        mobile_number: The mobile number to search for
-        
-    Returns:
-        A string containing user details in JSON format, or an error message
-    """
-    try:
-        # Access the 'ahs' database and 'Users' collection
-        ahs_db = mongo_client["AHS"]
-        users_collection = ahs_db["Users"]
-        
-        # Search for user by mobile number
-        user = users_collection.find_one({"mobile": mobile_number})
-        
-        if user:
-            # Convert ObjectId to string for JSON serialization
-            if "_id" in user:
-                user["_id"] = str(user["_id"])
-            # Return user details as JSON string
-            return json.dumps(user, indent=2, default=str)
-        else:
-            return f"No user found with mobile number: {mobile_number}"
-    except Exception as e:
-        return f"Error fetching user details: {str(e)}"
 
 class InferenceMode(Enum):
     SEARCH = "Search"
@@ -104,76 +74,106 @@ class DocCaptureHandler(BaseCallbackHandler):
         self.docs.extend(documents)
 
 
-PROMPT = _retrieval_qa_prompt
-sys_msg = _agent_system_message
 
 
+
+
+
+@tool
+def fetch_user_by_mobile(mobile_number: str) -> str:
+    """
+    Fetch user details from the database based on mobile number.
+
+
+    Useful for fetching user details from the database based on mobile
+    number. Use this tool when you need to retrieve customer
+    information, user profile, or any user-related data. Input should
+    be the mobile number as a string. Returns user details in JSON
+    format if found, or an error message if not found.
+    
+    Args:
+        mobile_number: The mobile number to search for
+        
+    Returns:
+        A string containing user details in JSON format, or an error message
+    """
+    print(f"[TOOL CALL][FETCH USER TOOL]: {mobile_number=}")
+    try:
+        user = get_user_details_from_mobile(mobile_number) 
+        if user :
+            return json.dumps(user.__dict__, indent=2, default=str)
+        else:
+            return f"No user found with mobile number: {mobile_number}"
+    except Exception as e:
+        return f"Error fetching user details: {str(e)}"
+
+
+@tool
+def knowledge_base_tool(query: str, policyId: str) -> str:
+    '''
+    tool for extracting relvant document given the query and policyId
+
+    Useful for answering questions related to insurance coverage of
+    home appliances, home fixtures, their repairs/replacement, service
+    requests, about the renewal, cancellation or refund policies,
+    whether a certain service is covered under the contract, permit
+    limit, code violation limit, modification limit, limitations and
+    exclusions.
+
+    args:
+        query: str 
+        policyId: str
+    
+    return:
+        Relevant Document Lists
+
+    '''
+
+    print(f"[TOOL CALL][KNOWLEDGE TOOL]: {query=}, {policyId=}")
+    docs = getRetriver(policyId.strip()).invoke(query)
+    print(f"[TOOL CALL RESULT][KNOWLEDGE TOOL] {len(docs)=}")
+    return "\n\n".join([doc.page_content for doc in docs])
+    
 
 
 
 @cache
 def get_agent_instance(policyId):
     retriever = getRetriver(policyId)
-    qa = RetrievalQA.from_chain_type(llm=TRANSCRIPT_QA_AGENT, retriever=retriever, verbose=True)
-
-    knowledge_base_tool = Tool(
-        name="Knowledge Base",
-        func=qa.run,
-        description=(
-            '''Useful for answering questions related to insurance coverage of
-            home appliances, home fixtures, their repairs/replacement, service
-            requests, about the renewal, cancellation or refund policies,
-            whether a certain service is covered under the contract, permit
-            limit, code violation limit, modification limit, limitations and
-            exclusions.'''
-        ),
-    )
-    
-    # User lookup tool
-    user_lookup_tool = Tool(
-        name="User Lookup",
-        func=fetch_user_by_mobile,
-        description=(
-            '''Useful for fetching user details from the database based on mobile
-            number. Use this tool when you need to retrieve customer
-            information, user profile, or any user-related data. Input should
-            be the mobile number as a string. Returns user details in JSON
-            format if found, or an error message if not found.'''
-        ),
-    )
-
-    tools = [knowledge_base_tool, user_lookup_tool]
+    tools = [knowledge_base_tool, fetch_user_by_mobile]
 
     #memory = asyncio.run(get_memory_instance(session_id=current_time))
+    sys_prompt = ChatPromptTemplate.from_messages([
+        ("system", _agent_system_message),
+        ("human", "{input}"),
+        ("user", "use this policyId: {policyId}"),
+        ("placeholder", "{agent_scratchpad}")
+    ])
+    agent = create_tool_calling_agent(TRANSCRIPT_QA_AGENT, tools, sys_prompt)
+    agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=False)
 
-    agent = initialize_agent(
-        agent=AgentType.CHAT_CONVERSATIONAL_REACT_DESCRIPTION,
-        tools=tools,
-        llm=TRANSCRIPT_QA_AGENT,
-        verbose=True,
-        early_stopping_method="generate",
-        handle_parsing_errors=True,
-    )
 
-
-    new_prompt = agent.agent.create_prompt(system_message=_agent_system_message, tools=tools)
-    agent.agent.llm_chain.prompt = new_prompt
-
-    return agent
+    return agent_executor
 
 
 
 
-def input_prompt(entered_query, policyId, sessionId):
+def input_prompt(entered_query, policyId):
     # Retriever chain as Tool for agent
     docHandler = DocCaptureHandler()
-    agent = get_agent_instance(policyId, sessionId)
-    response = agent({"input": entered_query},callbacks=[docHandler])
+    agent_executor = get_agent_instance(policyId)
+    response = agent_executor({"input": entered_query, "policyId": policyId},callbacks=[docHandler])
     docs = docHandler.docs
     return response, docs
 
 
-def handle_request_search(query, transcript, policyId: str) -> tuple:
+def handle_request_search(question, transcript_context, policyId: str) -> tuple:
+
+    enriched_query = (
+        f"{question}\n\nTranscript situation/evidence:\n{transcript_context}".strip()
+        if (transcript_context or "").strip()
+        else question
+    )
     qa_search = RetrievalQA.from_chain_type(
         llm=SEARCH_LLM,
         retriever=getRetriver(policyId),
@@ -185,7 +185,7 @@ def handle_request_search(query, transcript, policyId: str) -> tuple:
     # print("[CHUNKS] process_single_transcript_question: calling QA chain (Search)")
     qa_search_response = qa_search.invoke(
         {"query": enriched_query},
-        config={"callbacks": [handler]},
+        #config={"callbacks": [handler]},
     )
     answer_search = qa_search_response["result"] if isinstance(qa_search_response, dict) else qa_search_response
     print(
@@ -195,7 +195,7 @@ def handle_request_search(query, transcript, policyId: str) -> tuple:
 
     relevant_documents = str(qa_search_response["source_documents"])
 
-    return answer, docs
+    return answer_search, relevant_documents
 
 
 def handle_request_infer(question: str = "", transcript_context: str = "", policyId: str = "", sessionId: str="") -> tuple:
@@ -206,7 +206,7 @@ def handle_request_infer(question: str = "", transcript_context: str = "", polic
         else question
     )
 
-    agent_response, docs = input_prompt(enriched_query, policyId, sessionId)
+    agent_response, docs = input_prompt(enriched_query, policyId)
     answer = agent_response["output"]
     print(
         "[CHUNKS] process_single_transcript_question: agent_response received "
@@ -238,9 +238,9 @@ def process_single_transcript_question(
 
         match inferenceMode:
             case InferenceMode.SEARCH: 
-                answer, docs = handle_request_search()
+                answer, docs = handle_request_search(question, transcript_context, policyId)
             case InferenceMode.INFER : 
-                answer, docs = handle_request_infer()
+                answer, docs = handle_request_infer(question, transcript_context, policyId)
 
         
         q_latency = time() - q_start_time
@@ -251,9 +251,9 @@ def process_single_transcript_question(
         chunk_details = []
         try:
 
-            docs_iter = docs_for_chunks
+            docs_iter = docs
             if MILVUS_MAX_RETURN_CHUNKS is not None:
-                docs_iter = docs_for_chunks[:MILVUS_MAX_RETURN_CHUNKS]
+                docs_iter = docs[:MILVUS_MAX_RETURN_CHUNKS]
 
             for doc in docs_iter:
                 content = (getattr(doc, "page_content", "") or "").strip()
@@ -275,7 +275,7 @@ def process_single_transcript_question(
 
         
         relvant_chunk_details = chunk_details[:MILVUS_MAX_RETURN_CHUNKS] if MILVUS_MAX_RETURN_CHUNKS is not None else chunk_details
-        return Response(answer=anwser, relevantChunks=returned_chunks, relevantChunksDetails=relvant_chunk_details, confidence=0.90,latency=q_latency)
+        return Response(answer=answer, relevantChunks=returned_chunks, relevantChunksDetails=relvant_chunk_details, confidence=0.90,latency=q_latency)
     except Exception as e:
         print(f"Error processing transcript question: {e}")
         traceback.print_exc()
@@ -317,9 +317,9 @@ def process_live_copilot_question(
             
             if not policyId:
                 # Get normalized values for error logging
-                print(f"[LIVE_COPILOT_INFER] Could not determine policy Id name for={policyId=}");
+                print(f"[LIVE_COPILOT_INFER] Could not determine policy Id name for={policyId=}")
                 span.set_attribute("live_copilot.error", "policyId_not_found")
-                return Response(answer="Unable to determine the appropriate knowledge base for your query.")
+                return Response(answer="Unable to determine the appropriate knowledge base for your query.").__dict__
             
             
             
@@ -327,19 +327,18 @@ def process_live_copilot_question(
                 question=question,
                 policyId=policyId,
                 inferenceMode=InferenceMode.INFER,
-                retriever=retriever,
-                handler=handler,
                 transcript_context=transcript_context,
             )
             
-            print(f"[LIVE_COPILOT_INFER] Result: answer_len={len(result.get('answer', ''))}, chunks={len(result.get('relevantChunks', []))}")
+            print(f"[LIVE_COPILOT_INFER] Result: answer_len={len(result.answer)}, chunks={len(result.relevantChunks)}")
+            print(f"{result.answer=}")
             
             if result:
-                span.set_attribute("live_copilot.answer_length", len(result.get("answer", "")))
-                span.set_attribute("live_copilot.chunks_count", len(result.get("relevantChunks", [])))
-                span.set_attribute("live_copilot.confidence", result.get("confidence", 0.0))
+                span.set_attribute("live_copilot.answer_length", len(result.answer))
+                span.set_attribute("live_copilot.chunks_count", len(result.relevantChunks))
+                span.set_attribute("live_copilot.confidence", result.confidence)
             
-            return result
+            return result.__dict__
             
         except Exception as e:
             print(f"[LIVE_COPILOT_INFER] Error: {e}")
