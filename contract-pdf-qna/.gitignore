@@ -1,3 +1,7 @@
+# Custom Files
+results.json
+converse.json
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

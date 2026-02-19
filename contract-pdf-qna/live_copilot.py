@@ -811,6 +811,7 @@ def cache_fetch_user_by_phones(phone_candidates: tuple, users: Collection):
 
 
 def _lookup_user_by_phone(phone_candidates: tuple) -> Optional[Dict[str, Any]]:
+    print("[LIVE_COPILOT DEBUG]: ", phone_candidates)
     if not MONGO_URI:
         print("[LIVE_COPILOT] ERROR: MONGO_URI not configured, cannot lookup user", flush=True)
         return None
@@ -825,13 +826,14 @@ def _lookup_user_by_phone(phone_candidates: tuple) -> Optional[Dict[str, Any]]:
     for p in phone_candidates:
         try:
             doc = cache_fetch_user_by_phone(p, users)
+            print("Find Candidates!!!")
             return doc
         except Exception as e:
             print(f"[LIVE_COPILOT] Error querying MongoDB with phone {p}: {e}", flush=True)
     
     # Fallback: try $in query
     try:
-        doc = cache_fetch_user_by_phones(tuple(phone_candidates), users)
+        doc = cache_fetch_user_by_phones(phone_candidates, users)
         return doc
     except Exception as e:
         print(f"[LIVE_COPILOT] Error with $in query: {e}", flush=True)
@@ -1160,7 +1162,7 @@ def _call_suggest_llm_traced(
 
     # Use temperature=0.0 for deterministic, consistent outputs
     llm = _get_suggest_llm()  # Use cached instance
-    chain = _suggest_prompt | llm | StrOutputParser()
+    chain = _suggest_prompt #| llm | StrOutputParser()
     prompt_payload = {
         "intent": intent,
         "customer_verified": bool(customer_verified),
@@ -1505,6 +1507,7 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                         important_change = True
 
                 customer_ctx = _effective_customer_context(st)
+                customer_ctx["sessionId"] = session
                 verified = bool(customer_ctx.get("verified"))
 
                 should_extract = (
