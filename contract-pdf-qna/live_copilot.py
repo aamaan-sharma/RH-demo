@@ -745,72 +745,7 @@ def _get_mongo_client() -> MongoClient:
     return _mongo_client
 
 
-<<<<<<< Updated upstream
-
-@lru_cache(maxsize=30)
-def cache_fetch_user_by_phone(phone: str, users: Collection):
-    doc = None
-    with tracer.start_as_current_span("db.mongo.find_one") as sp:
-        _set_session_attr(sp)
-        sp.set_attribute("db.system", "mongodb")
-        sp.set_attribute("db.operation", "find_one")
-        sp.set_attribute("db.collection", "Users")
-        sp.set_attribute("db.query.mobile", str(phone))
-        doc = users.find_one({"mobile": phone})
-    if doc:
-        try:
-            name = doc.get('name') or doc.get('fullName') or doc.get('firstName') or ''
-            plan = doc.get('plan') or doc.get('selectedPlan') or doc.get('planName') or ''
-            state = doc.get('state') or doc.get('selectedState') or doc.get('stateName') or ''
-            phone_masked = f"***{str(phone)[-4:]}" if len(str(phone)) >= 4 else "***"
-            print(
-                f"[LIVE_COPILOT] ✅ Mongo user match found!",
-                f"phone={phone_masked}",
-                f"name={name}",
-                f"plan={plan}",
-                f"state={state}",
-                flush=True
-            )
-        except Exception as e:
-            print(f"[LIVE_COPILOT] User found but error logging details: {e}", flush=True)
-    return doc
-
-
-@lru_cache(maxsize=30)
-def cache_fetch_user_by_phones(phone_candidates: tuple, users: Collection):
-    doc = None
-    with tracer.start_as_current_span("db.mongo.find_one") as sp:
-        _set_session_attr(sp)
-        sp.set_attribute("db.system", "mongodb")
-        sp.set_attribute("db.operation", "find_one")
-        sp.set_attribute("db.collection", "Users")
-        sp.set_attribute("db.query.mobile.$in", str(phone_candidates))
-        doc = users.find_one({"mobile": {"$in": phone_candidates}})
-    if doc:
-        try:
-            phone_val = doc.get("mobile") or ""
-            name = doc.get('name') or doc.get('fullName') or doc.get('firstName') or ''
-            plan = doc.get('plan') or doc.get('selectedPlan') or doc.get('planName') or ''
-            state = doc.get('state') or doc.get('selectedState') or doc.get('stateName') or ''
-            phone_masked = f"***{str(phone_val)[-4:]}" if len(str(phone_val)) >= 4 else "***"
-            print(
-                f"[LIVE_COPILOT] ✅ Mongo user match found (via $in query)!",
-                f"phone={phone_masked}",
-                f"name={name}",
-                f"plan={plan}",
-                f"state={state}",
-                flush=True
-            )
-        except Exception as e:
-            print(f"[LIVE_COPILOT] User found but error logging details: {e}", flush=True)
-    return doc
-
-
-def _lookup_user_by_phone(phone_candidates: tuple) -> Optional[Dict[str, Any]]:
-    print("[LIVE_COPILOT DEBUG]: ", phone_candidates)
-=======
 def _lookup_user_by_phone(phone_candidates: List[str]) -> Optional[Dict[str, Any]]:
->>>>>>> Stashed changes
     if not MONGO_URI:
         print("[LIVE_COPILOT] ERROR: MONGO_URI not configured, cannot lookup user", flush=True)
         return None
@@ -824,11 +759,6 @@ def _lookup_user_by_phone(phone_candidates: List[str]) -> Optional[Dict[str, Any
     # Try individual lookups first
     for p in phone_candidates:
         try:
-<<<<<<< Updated upstream
-            doc = cache_fetch_user_by_phone(p, users)
-            print("Find Candidates!!!")
-            return doc
-=======
             with tracer.start_as_current_span("db.mongo.find_one") as sp:
                 _set_session_attr(sp)
                 sp.set_attribute("db.system", "mongodb")
@@ -853,23 +783,14 @@ def _lookup_user_by_phone(phone_candidates: List[str]) -> Optional[Dict[str, Any
                 except Exception as e:
                     print(f"[LIVE_COPILOT] User found but error logging details: {e}", flush=True)
                 return doc
->>>>>>> Stashed changes
         except Exception as e:
             print(f"[LIVE_COPILOT] Error querying MongoDB with phone {p}: {e}", flush=True)
             continue
     
     # Fallback: try $in query
     try:
-<<<<<<< Updated upstream
-        doc = cache_fetch_user_by_phones(phone_candidates, users)
-        return doc
-=======
         with tracer.start_as_current_span("db.mongo.find_one") as sp:
             _set_session_attr(sp)
-            sp.set_attribute("db.system", "mongodb")
-            sp.set_attribute("db.operation", "find_one")
-            sp.set_attribute("db.collection", "Users")
-            sp.set_attribute("db.query.mobile.$in", str(phone_candidates))
             doc = users.find_one({"mobile": {"$in": phone_candidates}})
         if doc:
             try:
@@ -889,13 +810,11 @@ def _lookup_user_by_phone(phone_candidates: List[str]) -> Optional[Dict[str, Any
             except Exception as e:
                 print(f"[LIVE_COPILOT] User found but error logging details: {e}", flush=True)
             return doc
->>>>>>> Stashed changes
     except Exception as e:
         print(f"[LIVE_COPILOT] Error with $in query: {e}", flush=True)
     
     print(f"[LIVE_COPILOT] ❌ No user found in MongoDB for any phone candidate", flush=True)
     return None
-
 
 def _normalize_customer_doc(doc: Dict[str, Any], phone: str) -> Dict[str, Any]:
     name = doc.get("name") or doc.get("fullName") or doc.get("firstName") or ""
@@ -1560,11 +1479,7 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) -> Opt
                         important_change = True
 
                 customer_ctx = _effective_customer_context(st)
-<<<<<<< Updated upstream
-                customer_ctx["sessionId"] = session
-=======
                 customer_ctx["sessions"] = session_id
->>>>>>> Stashed changes
                 verified = bool(customer_ctx.get("verified"))
 
                 should_extract = (

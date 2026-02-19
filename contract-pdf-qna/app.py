@@ -571,8 +571,6 @@ def run_coro_in_thread(coro):
         asyncio.set_event_loop(None)
 
 
-<<<<<<< Updated upstream
-=======
 from functools import cache
 import asyncio
 
@@ -664,7 +662,6 @@ def input_prompt(entered_query, policyId, sessionId = None):
     docs = docHandler.docs
     return response, docs
 
->>>>>>> Stashed changes
 
 # Function to get relevant documents
 def relevant_docs(entered_query, retriever):
@@ -1916,8 +1913,6 @@ def heuristic_extract_claim_questions(transcript_text: str, max_items: int = 100
     return questions
 
 
-<<<<<<< Updated upstream
-=======
 def process_single_transcript_question(
     question: str,
     contract_type: str,
@@ -2085,7 +2080,6 @@ def process_single_transcript_question(
             "latency": 0.0
         }
 
->>>>>>> Stashed changes
 
 def _process_question_with_index(
     idx: int,
@@ -2368,8 +2362,6 @@ llm_infer2 = ChatOpenAI(temperature=0.0, model="gpt-4o")
 # -------------------------------------------------------------------
 # process_live_copilot_question: Wrapper for Live Copilot INFER
 # -------------------------------------------------------------------
-<<<<<<< Updated upstream
-=======
 def process_live_copilot_question(
     question: str,
     contract_type: str,
@@ -2471,7 +2463,6 @@ def process_live_copilot_question(
                 "latency": 0.0,
             }
 
->>>>>>> Stashed changes
 
 # Feedback CRUD Operations
 
