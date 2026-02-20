@@ -40,6 +40,8 @@ from pathlib import Path
 from utils.milvus_utils import get_milvus_collection_name
 # Live Copilot for real-time AI suggestions during calls
 from live_copilot import handle_transcript_event, handle_copilot_enable_event
+from core.transcript_process import input_prompt, process_single_transcript_question, InferenceMode
+from utils.kb import getPolicyid
 LIVE_COPILOT_AVAILABLE = True
 
 # GCP Storage imports using fsspec (unified filesystem interface)
@@ -2273,36 +2275,19 @@ def start():
                         a.start()
 
                     with tracer.start_as_current_span('llm-RetrievalQA-chain') as q:
-                        qa = RetrievalQA.from_chain_type(llm=llm2, retriever=retriever, verbose=True)
-                        agent_response = input_prompt(standalone_result, qa, llm)
+                        agent_response, docs = input_prompt(standalone_result, selected_collection_name.lower(), handler, sessionId=None)
                         agent_resp = agent_response["output"]
                         res2, tok2 = handler.infi()
                         llm_trace_to_jaeger(res2, tok2)
-                        b = threading.Thread(target=token_calculator, args=(tok2,), kwargs={"session_id": conversation_id})
-                        b.start()
+                        #b = threading.Thread(target=token_calculator, args=(tok2,), kwargs={"session_id": conversation_id})
+                        #b.start()
                     
                     with tracer.start_as_current_span('relevant_documents'):
-                        knowledge_base_thoughts = [
-                            item[0].tool_input
-                            for item in agent_response["intermediate_steps"]
-                            if item[0].tool == 'Knowledge Base'
-                        ]
                         print(
                             "[CHUNKS] /start(Infer): knowledge_base_thoughts_count="
-                            f"{len(knowledge_base_thoughts)}"
+                            f"{len(docs)}"
                         )
-                        relevant_documents = ""
-                        for idx, action_input in enumerate(knowledge_base_thoughts):
-                            print(
-                                "[CHUNKS] /start(Infer): calling relevant_docs for KB thought "
-                                f"index={idx}, input_preview='{str(action_input)[:200]}'"
-                            )
-                            rd = relevant_docs(action_input, retriever)
-                            print(
-                                "[CHUNKS] /start(Infer): returned from relevant_docs "
-                                f"index={idx}, len={len(rd)}"
-                            )
-                            relevant_documents += rd
+                        relevant_documents = str(docs)
             else:
                 return jsonify({"error": f"Invalid gpt_model: {gpt_model}. Must be 'Search' or 'Infer'"}), 400
 
@@ -2333,7 +2318,6 @@ def start():
                     print(
                         "[CHUNKS] /start: creating NEW conversation document with "
                         f"relevant_docs_len={len(relevant_documents)}"
-                        f"R_D:  {relevant_documents}"
                     )
                     qna_json = {
                         "conversation_name": entered_query,

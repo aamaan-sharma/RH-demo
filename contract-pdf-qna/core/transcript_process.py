@@ -160,7 +160,7 @@ def input_prompt(entered_query, policyId, handler, sessionId):
     # Retriever chain as Tool for agent
     docHandler = DocCaptureHandler()
     agent_executor = get_agent_instance(policyId, sessionId)
-    response = agent_executor({"input": entered_query, "policyId": policyId},callbacks=[handler, docHandler])
+    response = agent_executor.invoke({"input": entered_query, "policyId": policyId},callbacks=[handler, docHandler])
     docs = docHandler.docs
     return response, docs
 
