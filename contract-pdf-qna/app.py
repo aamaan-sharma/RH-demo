@@ -2279,8 +2279,8 @@ def start():
                         agent_resp = agent_response["output"]
                         res2, tok2 = handler.infi()
                         llm_trace_to_jaeger(res2, tok2)
-                        #b = threading.Thread(target=token_calculator, args=(tok2,), kwargs={"session_id": conversation_id})
-                        #b.start()
+                        b = threading.Thread(target=token_calculator, args=(tok2,), kwargs={"session_id": conversation_id})
+                        b.start()
                     
                     with tracer.start_as_current_span('relevant_documents'):
                         print(
