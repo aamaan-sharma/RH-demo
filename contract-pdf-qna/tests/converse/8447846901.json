@@ -1,0 +1,82 @@
+[
+  {
+    "speaker": "AGENT",
+    "text": "Thank you for calling American Home Shield. How can I help you today?"
+  },
+  {
+    "speaker": "CUSTOMER",
+    "text": "Hi, this is Sarah. I need to request a claim for a couple of leakages at my house."
+  },
+  {
+    "speaker": "AGENT",
+    "text": "Understood. Just to confirm, you are based in California and on the ShieldPlus plan. Is that correct?"
+  },
+  {
+    "speaker": "CUSTOMER",
+    "text": "That's right."
+  },
+  {
+    "speaker": "AGENT",
+    "text": "Great, can you help me with details about the leakages, please?"
+  },
+  {
+    "speaker": "CUSTOMER",
+    "text": "The first is a leak by the foundation outside. It’s the backflow preventer for the irrigation system. I need to check the issue and if that’s covered."
+  },
+  {
+    "speaker": "AGENT",
+    "text": "Irrigation and backflow preventers located outside the main foundation are not covered under this plan. Did you find a cause for that leak?"
+  },
+  {
+    "speaker": "CUSTOMER",
+    "text": "No idea. The technician mentioned that they do not handle this. I just wanted to check coverage before moving on to requesting another technician."
+  },
+  {
+    "speaker": "AGENT",
+    "text": "Understood. I will document the denial for the irrigation line. What is the second issue?"
+  },
+  {
+    "speaker": "CUSTOMER",
+    "text": "Two supply lines—one under the kitchen sink and one under the bar sink. They are probably lines leaking due to age and corrosion."
+  },
+  {
+    "speaker": "AGENT",
+    "text": "Was the failure caused by normal wear and tear?"
+  },
+  {
+    "speaker": "CUSTOMER",
+    "text": "Yes, normal wear and tear as mentioned by the technician."
+  },
+  {
+    "speaker": "AGENT",
+    "text": "And is the total for that repair quoted by the technician is?"
+  },
+  {
+    "speaker": "CUSTOMER",
+    "text": "Its $120."
+  },
+  {
+    "speaker": "AGENT",
+    "text": "Great, this is covered under your plan. I can authorize the $120 for the supply line repairs but will have to deny the exterior irrigation leak. Your authorization code is 120-RBDI."
+  },
+  {
+    "speaker": "CUSTOMER",
+    "text": "Got it. Thank you."
+  },
+  {
+    "speaker": "AGENT",
+    "text": "You're welcome. Is there anything else?"
+  },
+  {
+    "speaker": "CUSTOMER",
+    "text": "No, that’s it."
+  },
+  {
+    "speaker": "AGENT",
+    "text": "Thank you for calling American Home Shield. Have a safe and great day!"
+  },
+  {
+    "speaker": "CUSTOMER",
+    "text": "Thanks"
+  }
+]

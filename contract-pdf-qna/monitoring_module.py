@@ -432,8 +432,8 @@ def q_monitor(parent1, question, session_id=None, user_email=None, answer_text=N
     # Guard against empty / bad input
     if not question or not isinstance(question, str):
         return
-    dicts = security_scores(parent1,question)
-    func_Binsert(parent1,dicts,question, session_id=session_id, user_email=user_email, answer_text=answer_text, feature_name=feature_name, agent_name=agent_name, flow_type=flow_type)
+    #dicts = security_scores(parent1,question)
+    #func_Binsert(parent1,dicts,question, session_id=session_id, user_email=user_email, answer_text=answer_text, feature_name=feature_name, agent_name=agent_name, flow_type=flow_type)
 
 
 def llm_trace_to_jaeger(data, token_usage=None):

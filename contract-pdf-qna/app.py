@@ -18,7 +18,6 @@ from pymongo import MongoClient, ReturnDocument
 from datetime import datetime
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_community.vectorstores import Milvus
-from langchain_community.memory.motorhead_memory import MotorheadMemory
 from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA, ConversationalRetrievalChain
 from langchain.agents import Tool, initialize_agent, AgentType
@@ -38,13 +37,12 @@ import json
 import re
 from typing import List, Dict, Any, Optional
 from pathlib import Path
+from utils.milvus_utils import get_milvus_collection_name
 # Live Copilot for real-time AI suggestions during calls
-try:
-    from live_copilot import handle_transcript_event
-    LIVE_COPILOT_AVAILABLE = True
-except ImportError:
-    LIVE_COPILOT_AVAILABLE = False
-    print("Warning: live_copilot module not available - Live Copilot disabled")
+from live_copilot import handle_transcript_event, handle_copilot_enable_event
+from core.transcript_process import input_prompt, process_single_transcript_question, InferenceMode
+from utils.kb import getPolicyid
+LIVE_COPILOT_AVAILABLE = True
 
 # GCP Storage imports using fsspec (unified filesystem interface)
 try:
@@ -362,39 +360,6 @@ if GCP_STORAGE_AVAILABLE:
 
 
 # Using prompts from utils.prompts
-PROMPT = _retrieval_qa_prompt
-sys_msg = _agent_system_message
-
-
-def fetch_user_by_mobile(mobile_number: str) -> str:
-    """
-    Fetch user details from the database based on mobile number.
-    
-    Args:
-        mobile_number: The mobile number to search for
-        
-    Returns:
-        A string containing user details in JSON format, or an error message
-    """
-    try:
-        # Access the 'ahs' database and 'Users' collection
-        ahs_db = mongo_client["AHS"]
-        users_collection = ahs_db["Users"]
-        
-        # Search for user by mobile number
-        user = users_collection.find_one({"mobile": mobile_number})
-        
-        if user:
-            # Convert ObjectId to string for JSON serialization
-            if "_id" in user:
-                user["_id"] = str(user["_id"])
-            # Return user details as JSON string
-            return json.dumps(user, indent=2, default=str)
-        else:
-            return f"No user found with mobile number: {mobile_number}"
-    except Exception as e:
-        return f"Error fetching user details: {str(e)}"
-
 def run_coro_in_thread(coro):
     import asyncio
     loop = asyncio.new_event_loop()
@@ -405,83 +370,6 @@ def run_coro_in_thread(coro):
         loop.close()
         asyncio.set_event_loop(None)
 
-
-def input_prompt(entered_query, qa, llm):
-    # Retriever chain as Tool for agent
-    knowledge_base_tool = Tool(
-        name="Knowledge Base",
-        func=qa.run,
-        description=(
-            "Useful for answering questions related to insurance coverage of home appliances, home fixtures, their repairs/replacement, service requests, about the renewal, cancellation or refund policies, whether a certain service is covered under the contract, permit limit, code violation limit, modification limit, limitations and exclusions."
-        ),
-    )
-    
-    # User lookup tool
-    user_lookup_tool = Tool(
-        name="User Lookup",
-        func=fetch_user_by_mobile,
-        description=(
-            "Useful for fetching user details from the database based on mobile number. "
-            "Use this tool when you need to retrieve customer information, user profile, or any user-related data. "
-            "Input should be the mobile number as a string. Returns user details in JSON format if found, or an error message if not found."
-        ),
-    )
-
-    tools = [knowledge_base_tool, user_lookup_tool]
-
-    current_time = time()
-
-    MOTORHEAD_SESSION_ID = str(current_time)
-    MOTORHEAD_MEMORY_KEY = "chat_history"
-
-    # Long Term chat memory
-    memory = MotorheadMemory(
-        api_key=MOTORHEAD_API_KEY,
-        client_id=MOTORHEAD_CLIENT_ID,
-        session_id=MOTORHEAD_SESSION_ID,
-        memory_key=MOTORHEAD_MEMORY_KEY,
-        return_messages=True,
-        input_key="input",
-        output_key="output",
-    )
-
-    #
-    # async def memory_initialize():
-        # await memory.init()
-
-    # # Simplified version for threading mode
-    # try:
-    #     loop = asyncio.get_event_loop()
-    #     if not loop.is_running():
-    #         loop.run_until_complete(memory_initialize())
-    #     else:
-    #         # Only needed if somehow loop is running
-    #         import concurrent.futures
-    #         with concurrent.futures.ThreadPoolExecutor() as executor:
-    #             future = executor.submit(asyncio.run, memory_initialize())
-    #             future.result()
-    # except RuntimeError:
-    #     asyncio.run(memory_initialize())
-    run_coro_in_thread(memory.init())
-
-    # Initializing agent
-    agent = initialize_agent(
-        agent=AgentType.CHAT_CONVERSATIONAL_REACT_DESCRIPTION,
-        tools=tools,
-        llm=llm,
-        verbose=True,
-        memory=memory,
-        early_stopping_method="generate",
-        handle_parsing_errors=True,
-        return_intermediate_steps=True,
-    )
-
-    new_prompt = agent.agent.create_prompt(system_message=sys_msg, tools=tools)
-
-    agent.agent.llm_chain.prompt = new_prompt
-
-    response = agent({"input": entered_query},callbacks=[handler])
-    return response
 
 
 # Function to get relevant documents
@@ -1734,194 +1622,6 @@ def heuristic_extract_claim_questions(transcript_text: str, max_items: int = 100
     return questions
 
 
-def process_single_transcript_question(
-    question: str,
-    contract_type: str,
-    selected_plan: str,
-    selected_state: str,
-    gpt_model: str,
-    vector_db: Milvus,
-    llm,
-    llm2,
-    retriever,
-    handler,
-    transcript_context: str = "",
-) -> Dict:
-    """
-    Process a single question from transcript and return answer with chunks
-    Reuses logic from /start endpoint but without conversation context
-    """
-    try:
-        q_start_time = time()
-        # No conversation context for transcript questions, but we CAN pass the transcript-derived
-        # situation/evidence as part of the query to improve retrieval + answer relevance.
-        # Keep the user-visible question unchanged elsewhere; only enrich the internal query.
-        standalone_result = question
-        enriched_query = (
-            f"{question}\n\nTranscript situation/evidence:\n{transcript_context}".strip()
-            if (transcript_context or "").strip()
-            else question
-        )
-        
-        print(
-            "[CHUNKS] process_single_transcript_question: START "
-            f"question='{str(question)[:200]}', "
-            f"contract_type={contract_type}, selected_plan={selected_plan}, "
-            f"selected_state={selected_state}, gpt_model={gpt_model}"
-        )
-
-        if gpt_model == "Search":
-            # Using search mode prompt from utils.prompts
-            PROMPT = ANSWERING_PROMPT_SEARCH
-            chain_type_kwargs = {"prompt": PROMPT}
-            qa = RetrievalQA.from_chain_type(
-                llm=llm,
-                retriever=retriever,
-                verbose=True,
-                chain_type_kwargs=chain_type_kwargs
-            )
-            
-            # print("[CHUNKS] process_single_transcript_question: calling QA chain (Search)")
-            qa_response = qa.invoke(
-                {"query": enriched_query},
-                config={"callbacks": [handler]},
-            )
-            answer = qa_response["result"] if isinstance(qa_response, dict) else qa_response
-            print(
-                "[CHUNKS] process_single_transcript_question: QA chain completed "
-                f"answer_len={len(str(answer))}"
-            )
-
-            # print("[CHUNKS] process_single_transcript_question: calling relevant_docs (Search)")
-            relevant_documents = relevant_docs(enriched_query, retriever=retriever)
-            # print(
-            #     "[CHUNKS] process_single_transcript_question: relevant_documents string length "
-            #     f"len={len(relevant_documents)}"
-            # )
-            
-        elif gpt_model == "Infer":
-            # print("[CHUNKS] process_single_transcript_question: building QA chain (Infer)")
-            qa = RetrievalQA.from_chain_type(llm=llm, retriever=retriever, verbose=True)
-            agent_response = input_prompt(enriched_query, qa, llm)
-            answer = agent_response["output"]
-            print(
-                "[CHUNKS] process_single_transcript_question: agent_response received "
-                f"answer_len={len(str(answer))}"
-            )
-            knowledge_base_thoughts = [
-                item[0].tool_input for item in agent_response["intermediate_steps"] 
-                if item[0].tool == 'Knowledge Base'
-            ]
-            relevant_documents = ""
-            for action_input in knowledge_base_thoughts:
-                print(
-                    "[CHUNKS] process_single_transcript_question: calling relevant_docs (Infer) "
-                    f"for tool_input='{str(action_input)[:200]}'"
-                )
-                rd = relevant_docs(action_input, retriever)
-                print(
-                    "[CHUNKS] process_single_transcript_question: returned from relevant_docs (Infer) "
-                    f"len={len(rd)}"
-                )
-                relevant_documents += rd
-        else:
-            return {
-                "error": f"Invalid gpt_model: {gpt_model}",
-                "answer": "",
-                "relevantChunks": [],
-                "confidence": 0.0,
-                "latency": 0.0
-            }
-        
-        q_latency = time() - q_start_time
-        
-        # Build relevantChunks from Milvus docs (always list[str] in the API response)
-        # This ensures frontend receives text chunks (not placeholder "[]" / not dict objects).
-        chunk_texts = []
-        chunk_details = []
-        try:
-            # First attempt: retriever (normal path)
-            docs_for_chunks = retriever.get_relevant_documents(enriched_query)
-            if not docs_for_chunks:
-                # Fallbacks to ensure we still fetch something from Milvus
-                fallback_queries = [
-                    f"{enriched_query} {contract_type} {selected_plan} {selected_state}",
-                    f"{contract_type} {selected_plan} contract coverage",
-                    "contract coverage",
-                ]
-                for fq in fallback_queries:
-                    try:
-                        docs_for_chunks = vector_db.similarity_search(fq, k=MILVUS_FALLBACK_K)
-                        if docs_for_chunks:
-                            break
-                    except Exception as e:
-                        print(f"[CHUNKS] process_single_transcript_question: fallback similarity_search failed: {e}")
-                        continue
-
-            docs_for_chunks = docs_for_chunks or []
-            print(
-                "[CHUNKS] process_single_transcript_question: docs_for_chunks_count="
-                f"{len(docs_for_chunks)}"
-            )
-
-            docs_iter = docs_for_chunks
-            if MILVUS_MAX_RETURN_CHUNKS is not None:
-                docs_iter = docs_for_chunks[:MILVUS_MAX_RETURN_CHUNKS]
-
-            for doc in docs_iter:
-                content = (getattr(doc, "page_content", "") or "").strip()
-                metadata = getattr(doc, "metadata", {}) or {}
-                if not content:
-                    continue
-                chunk_texts.append(content)
-                chunk_details.append({"content": content, "metadata": metadata})
-        except Exception as e:
-            print(f"[CHUNKS] process_single_transcript_question: ERROR building chunks: {e}")
-
-        if not chunk_texts:
-            # As a last resort, still return a non-empty list (but keep it explicit for debugging).
-            # This should be rare; most Milvus collections should return at least some results.
-            chunk_texts = ["(No supporting excerpts found)"]
-        
-        # print(
-        #     "[CHUNKS] process_single_transcript_question: FINAL "
-        #     f"chunks_count={len(chunk_texts)}, latency={q_latency}"
-        # )
-
-        # Log the exact chunks that will be returned with this question
-        returned_chunks = chunk_texts
-        if MILVUS_MAX_RETURN_CHUNKS is not None:
-            returned_chunks = chunk_texts[:MILVUS_MAX_RETURN_CHUNKS]
-        # print(
-        #     "[CHUNKS] process_single_transcript_question: returning relevantChunks="
-        #     f"{[c[:200].replace(chr(10), ' ') for c in returned_chunks]}"
-        # )
-
-        return {
-            "answer": answer,
-            # API contract: array of strings
-            "relevantChunks": returned_chunks,
-            # Keep details for optional persistence/debugging
-            "relevantChunksDetail": (
-                chunk_details[:MILVUS_MAX_RETURN_CHUNKS]
-                if MILVUS_MAX_RETURN_CHUNKS is not None
-                else chunk_details
-            ),
-            "confidence": 0.90,  # Default confidence, can be calculated from LLM
-            "latency": q_latency
-        }
-    except Exception as e:
-        print(f"Error processing transcript question: {e}")
-        import traceback
-        traceback.print_exc()
-        return {
-            "error": str(e),
-            "answer": "Error processing question",
-            "relevantChunks": [],
-            "confidence": 0.0,
-            "latency": 0.0
-        }
-
 
 def _process_question_with_index(
     idx: int,
@@ -1943,17 +1643,12 @@ def _process_question_with_index(
     question_text = question_obj.get("question", "")
     question_id = question_obj.get("questionId", f"q{idx + 1}")
     
+    policyId = getPolicyid(contract_type=contract_type,selected_plan=selected_plan,selected_state=selected_state)
     result = process_single_transcript_question(
-        question_text,
-        contract_type,
-        selected_plan,
-        selected_state,
-        gpt_model,
-        vector_db,
-        llm,
-        llm2,
-        retriever,
-        handler,
+        question=question_text,
+        policyId=policyId,
+        inferenceMode=InferenceMode(gpt_model),
+        handler=handler,
         transcript_context=question_obj.get("context", ""),
     )
     
@@ -2197,115 +1892,9 @@ def process_questions_parallel_stream(
     # Return results in original order (for metrics calculation)
     return [results_dict[i] for i in range(len(questions))]
 
-
-# -------------------------------------------------------------------
-# process_live_copilot_question: Wrapper for Live Copilot INFER
-# -------------------------------------------------------------------
-def process_live_copilot_question(
-    question: str,
-    contract_type: str,
-    selected_plan: str,
-    selected_state: str,
-    transcript_context: str = "",
-) -> Dict:
-    """
-    Wrapper for Live Copilot to use the existing INFER implementation.
-    
-    This function initializes Milvus, LLMs, and retriever, then calls
-    process_single_transcript_question with gpt_model="Infer" to leverage
-    the full LangChain Agent with Knowledge Base and User Lookup tools.
-    
-    Args:
-        question: The customer question to answer
-        contract_type: Contract type (RE or DTC)
-        selected_plan: Plan name (ShieldPlus, ShieldGold, etc.)
-        selected_state: State name (California, Texas, etc.)
-        transcript_context: Optional transcript context for enrichment
-        
-    Returns:
-        Dict with keys: answer, relevantChunks, confidence, latency
-    """
-    with tracer.start_as_current_span("live_copilot.process_question") as span:
-        try:
-            span.set_attribute("live_copilot.question.preview", question[:200] if question else "")
-            span.set_attribute("live_copilot.contract_type", contract_type or "")
-            span.set_attribute("live_copilot.plan", selected_plan or "")
-            span.set_attribute("live_copilot.state", selected_state or "")
-            
-            print(
-                f"[LIVE_COPILOT_INFER] Processing question='{question[:100]}...', "
-                f"contract_type={contract_type}, plan={selected_plan}, state={selected_state}"
-            )
-            
-            # Get collection name using utility function
-            selected_collection_name = get_milvus_collection_name(
-                contract_type=contract_type,
-                selected_plan=selected_plan,
-                selected_state=selected_state
-            )
-            
-            if not selected_collection_name:
-                # Get normalized values for error logging
-                contract_type_norm = normalize_contract_type(contract_type)
-                selected_plan_norm = normalize_plan_for_milvus(contract_type_norm, selected_plan)
-                print(f"[LIVE_COPILOT_INFER] Could not determine collection name for contract_type={contract_type_norm}, plan={selected_plan_norm}")
-                span.set_attribute("live_copilot.error", "collection_not_found")
-                return {
-                    "answer": "Unable to determine the appropriate knowledge base for your query.",
-                    "relevantChunks": [],
-                    "confidence": 0.0,
-                    "latency": 0.0,
-                }
-            
-            span.set_attribute("live_copilot.collection_name", selected_collection_name)
-            print(f"[LIVE_COPILOT_INFER] Using Milvus collection: {selected_collection_name}")
-            
-            # Initialize Milvus vector DB
-            vector_db1 = get_vector_db(selected_collection_name)
-            
-            # Initialize retriever
-            retriever = vector_db1.as_retriever(search_kwargs={"k": MILVUS_RETRIEVER_K, "expr": f"policyId == '{selected_collection_name.lower()}'"})
-            
-            # Initialize LLMs for Infer mode
-            llm = ChatOpenAI(temperature=0.0, model="gpt-4o")
-            llm2 = ChatOpenAI(temperature=0.0, model="gpt-4o")
-            
-            # Call the existing INFER implementation
-            result = process_single_transcript_question(
-                question=question,
-                contract_type=contract_type,
-                selected_plan=selected_plan,
-                selected_state=selected_state,
-                gpt_model="Infer",  # Use INFER mode with LangChain Agent
-                vector_db=vector_db1,
-                llm=llm,
-                llm2=llm2,
-                retriever=retriever,
-                handler=handler,
-                transcript_context=transcript_context,
-            )
-            
-            print(f"[LIVE_COPILOT_INFER] Result: answer_len={len(result.get('answer', ''))}, chunks={len(result.get('relevantChunks', []))}")
-            
-            if result:
-                span.set_attribute("live_copilot.answer_length", len(result.get("answer", "")))
-                span.set_attribute("live_copilot.chunks_count", len(result.get("relevantChunks", [])))
-                span.set_attribute("live_copilot.confidence", result.get("confidence", 0.0))
-            
-            return result
-            
-        except Exception as e:
-            print(f"[LIVE_COPILOT_INFER] Error: {e}")
-            import traceback
-            traceback.print_exc()
-            span.set_attribute("live_copilot.error", str(e)[:200])
-            return {
-                "answer": f"Error processing question: {str(e)}",
-                "relevantChunks": [],
-                "confidence": 0.0,
-                "latency": 0.0,
-            }
-
+# Initialize LLMs for Infer mode
+llm_infer = ChatOpenAI(temperature=0.0, model="gpt-4o")
+llm_infer2 = ChatOpenAI(temperature=0.0, model="gpt-4o")
 
 # Feedback CRUD Operations
 
@@ -2686,8 +2275,7 @@ def start():
                         a.start()
 
                     with tracer.start_as_current_span('llm-RetrievalQA-chain') as q:
-                        qa = RetrievalQA.from_chain_type(llm=llm2, retriever=retriever, verbose=True)
-                        agent_response = input_prompt(standalone_result, qa, llm)
+                        agent_response, docs = input_prompt(standalone_result, selected_collection_name.lower(), handler, sessionId=None)
                         agent_resp = agent_response["output"]
                         res2, tok2 = handler.infi()
                         llm_trace_to_jaeger(res2, tok2)
@@ -2695,27 +2283,11 @@ def start():
                         b.start()
                     
                     with tracer.start_as_current_span('relevant_documents'):
-                        knowledge_base_thoughts = [
-                            item[0].tool_input
-                            for item in agent_response["intermediate_steps"]
-                            if item[0].tool == 'Knowledge Base'
-                        ]
                         print(
                             "[CHUNKS] /start(Infer): knowledge_base_thoughts_count="
-                            f"{len(knowledge_base_thoughts)}"
+                            f"{len(docs)}"
                         )
-                        relevant_documents = ""
-                        for idx, action_input in enumerate(knowledge_base_thoughts):
-                            print(
-                                "[CHUNKS] /start(Infer): calling relevant_docs for KB thought "
-                                f"index={idx}, input_preview='{str(action_input)[:200]}'"
-                            )
-                            rd = relevant_docs(action_input, retriever)
-                            print(
-                                "[CHUNKS] /start(Infer): returned from relevant_docs "
-                                f"index={idx}, len={len(rd)}"
-                            )
-                            relevant_documents += rd
+                        relevant_documents = str(docs)
             else:
                 return jsonify({"error": f"Invalid gpt_model: {gpt_model}. Must be 'Search' or 'Infer'"}), 400
 
@@ -2746,7 +2318,6 @@ def start():
                     print(
                         "[CHUNKS] /start: creating NEW conversation document with "
                         f"relevant_docs_len={len(relevant_documents)}"
-                        f"R_D:  {relevant_documents}"
                     )
                     qna_json = {
                         "conversation_name": entered_query,
@@ -4876,6 +4447,7 @@ def _claims_background_process_transcript(
         total_latency = 0.0
         now_ts = datetime.utcnow()
 
+        policyId = getPolicyid(contract_type=contract_type,selected_plan=selected_plan,selected_state=selected_state)
         for idx, question_obj in enumerate(questions):
             question_text = str((question_obj or {}).get("question") or "")
             question_id = str((question_obj or {}).get("questionId") or f"q{idx + 1}")
@@ -4887,17 +4459,11 @@ def _claims_background_process_transcript(
             )
 
             result = process_single_transcript_question(
-                question_text,
-                contract_type,
-                selected_plan,
-                selected_state,
-                gpt_model,
-                vector_db1,
-                llm,
-                llm2,
-                retriever,
-                handler,
-                transcript_context=(question_obj or {}).get("context", ""),
+                question=question_text,
+                policyId=policyId,
+                inferenceMode=InferenceMode(gpt_model),
+                handler=handler,
+                transcript_context=question_obj.get("context", ""),
             )
 
             display_question_text = re.sub(r"\[CALL_CONTEXT:.*?\]\s*", "", question_text).strip()
@@ -6748,6 +6314,7 @@ def _process_transcript_core(data, yield_sse_fn=None):
                 confidences = []
                 total_latency = 0.0
 
+                policyId = getPolicyid(contract_type=contract_type,selected_plan=selected_plan,selected_state=selected_state)
                 # Process each question and stream immediately
                 for idx, question_obj in enumerate(questions):
                     question_text = question_obj.get("question", "")
@@ -6759,16 +6326,10 @@ def _process_transcript_core(data, yield_sse_fn=None):
                     )
 
                     result = process_single_transcript_question(
-                        question_text,
-                        contract_type,
-                        selected_plan,
-                        selected_state,
-                        gpt_model,
-                        vector_db1,
-                        llm,
-                        llm2,
-                        retriever,
-                        handler,
+                        question=question_text,
+                        policyId=policyId,
+                        inferenceMode=InferenceMode(gpt_model),
+                        handler=handler,
                         transcript_context=question_obj.get("context", ""),
                     )
 
@@ -7091,7 +6652,7 @@ def transcript_event():
             except Exception:
                 pass
         try:
-            socketio.emit("transcript_update", data, room=data["sessionId"])
+            socketio.emit("transcript_update", data, room=session_id)
         except Exception as e:
             print(f"⚠️ Transcript emission error (non-blocking): {e}")
 
@@ -7253,15 +6814,29 @@ def on_join_conversation(data):
 def on_copilot_enable(data):
     """Enable Live Copilot for a session when call connects."""
     session_id = data.get("sessionId")
+    phone_number = data.get("phoneNumber") # Pass phone number from CCP
+    
     if session_id:
         with _copilot_sessions_lock:
             _copilot_enabled_sessions[session_id] = time() + _copilot_session_ttl_seconds()
             _copilot_session_context[session_id] = {
+                "phoneNumber": phone_number,
                 "contractType": data.get("contractType", ""),
                 "selectedPlan": data.get("selectedPlan", ""),
                 "selectedState": data.get("selectedState", ""),
             }
-        print(f"🟢 COPILOT ENABLED for session: {session_id}")
+        print(f"🟢 COPILOT ENABLED for session: {session_id} (Phone: {phone_number})")
+        
+        # Proactive lookup for user details if phone is provided
+        if LIVE_COPILOT_AVAILABLE and phone_number:
+            try:
+                res = handle_copilot_enable_event(session_id, phone_number)
+                if res and res.get("userDetails"):
+                    print(f"💡 Emitting proactive userDetails for {session_id}")
+                    socketio.emit("suggestion_update", res, room=session_id)
+            except Exception as e:
+                print(f"Error in proactive lookup: {e}")
+
         # Emit status back to UI
         socketio.emit("copilot_status", {
             "sessionId": session_id,

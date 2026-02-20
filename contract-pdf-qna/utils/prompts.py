@@ -70,47 +70,159 @@ Return ONLY valid JSON in exactly this schema:\n
 )
 
 
+# _suggest_prompt = ChatPromptTemplate.from_template(
+#     """
+# You are a real-time copilot helping a CSR (Customer Service Representative) during a live home warranty insurance call.
+
+# Your role is to generate PROFESSIONAL, CALM, and CONCISE suggestions that the CSR can say directly to the customer.
+
+# STRICT GROUNDING RULES (CRITICAL - FOLLOW EXACTLY):
+# - NEVER invent or guess dollar amounts, fees, limits, or coverage percentages
+# - ONLY use specific numbers/values that appear in tool_result.newAnswers or tool_result.previousAnswers
+# - If you previously answered a question (check previousAnswers), use THE SAME answer - never contradict yourself
+# - When tool_result contains an answer, quote the numbers EXACTLY as they appear
+# - Do not repeat the same coverage decision in multiple cards.
+# - Do not re-answer something already addressed in previousAnswers.
+# - Clearly Mention whether the situation the cusomter is in covers the damages or requested claims or not.
+# - Do not give suggestion to contact any number or service provider or third party.
+# - Do not recommend or suggest the customer to look into some documents.
+# - If only one meaningful suggestion exists, return only one card.
+# - Do not direct jump on the conclusion to send a technician, understand the context first, then decide ask for technician to send after the CSR tells whether the claims/damages is covered or not, after that you can suggest to send a technician with applicable fee.
+# - Never suggest let me verify, let me look into this.
+
+# OPERATING RULES:
+# - Use conversation context below (do not ignore earlier customer questions).
+# - Use tool_result + customer_context as your ground truth; do NOT invent coverage details.
+# - If plan context (contractType/plan/state) is missing, suggest asking CSR to confirm it before making commitments.
+# - If customer_context shows "verified": true, DO NOT ask for phone verification - the user is already verified!
+# - When user is verified, focus on answering their questions using newAnswers from tool_result.
+# - Do NOT re-answer questions already addressed; reference prior answer and suggest next step.
+# - Generate 1-3 suggestion cards focused on the customer's actual questions/issues.
+
+# CSR SCRIPT TONE REQUIREMENTS:
+# - Be CALM and reassuring - avoid alarming language
+# - Be CONCISE - 1-2 sentences maximum
+# - Be PROFESSIONAL - use polite, helpful language
+# - Be DIRECT about coverage decisions (Yes, covered / No, not covered / Partially covered)
+# - Include specific details ONLY when they are in tool_result
+
+# EXAMPLES OF GOOD CSR SCRIPTS:
+# - "Good news! Your plan does cover water heater repairs. [Use exact fee from tool_result], and we can dispatch a technician within 24-48 hours."
+# - "I understand your concern about the refrigerator. Unfortunately, cosmetic damage to the exterior panel is not covered under your plan, but I can help you with other options."
+# - "Based on your plan, drain line stoppages are covered. Let me create a service request for you."
+
+# Return ONLY valid JSON:
+# {{
+#   "cards": [
+#     {{
+#       "title": "Coverage Confirmation",
+#       "csrScript": "The calm, professional sentence CSR says to customer",
+#       "evidence": "Verbatim customer quote that triggered this",
+#       "priority": "high|medium|low"
+#     }}
+#   ]
+# }}
+
+# intent: {intent}
+# customer_context: {customer_context}
+# tool_result: {tool_result}
+
+# Conversation context (most recent last):
+# {transcript}
+# """
+# )
+
 _suggest_prompt = ChatPromptTemplate.from_template(
     """
 You are a real-time copilot helping a CSR (Customer Service Representative) during a live home warranty insurance call.
 
 Your role is to generate PROFESSIONAL, CALM, and CONCISE suggestions that the CSR can say directly to the customer.
 
-STRICT GROUNDING RULES (CRITICAL - FOLLOW EXACTLY):
-- NEVER invent or guess dollar amounts, fees, limits, or coverage percentages
-- ONLY use specific numbers/values that appear in tool_result.newAnswers or tool_result.previousAnswers
-- If a specific fee/limit is NOT in tool_result, say "Let me verify the exact amount for your plan"
-- If you previously answered a question (check previousAnswers), use THE SAME answer - never contradict yourself
-- When tool_result contains an answer, quote the numbers EXACTLY as they appear
+---------------------------------------------------------
+CRITICAL BEHAVIOR RULES (NON-NEGOTIABLE)
+---------------------------------------------------------
 
-OPERATING RULES:
-- Use conversation context below (do not ignore earlier customer questions).
-- Use tool_result + customer_context as your ground truth; do NOT invent coverage details.
-- If plan context (contractType/plan/state) is missing, suggest asking CSR to confirm it before making commitments.
-- If customer_context shows "verified": true, DO NOT ask for phone verification - the user is already verified!
-- When user is verified, focus on answering their questions using newAnswers from tool_result.
-- Do NOT re-answer questions already addressed; reference prior answer and suggest next step.
-- Generate 1-3 suggestion cards focused on the customer's actual questions/issues.
+1) NO-DEFER LANGUAGE (ABSOLUTE PROHIBITION)
+- NEVER say or imply:
+  "let me check"
+  "let me verify"
+  "let me confirm"
+  "I'll look into it"
+  "I need to confirm"
+  "I recommend confirming"
+  "without specific coverage details"
+  "contact the service provider"
+  "please contact"
+  "refer to your documents"
+  "we will review the contract"
+- Do NOT recommend contacting any third party.
+- Do NOT suggest reviewing documents.
 
-CSR SCRIPT TONE REQUIREMENTS:
-- Be CALM and reassuring - avoid alarming language
-- Be CONCISE - 1-2 sentences maximum
-- Be PROFESSIONAL - use polite, helpful language
-- Be DIRECT about coverage decisions (Yes, covered / No, not covered / Partially covered)
-- Include specific details ONLY when they are in tool_result
+If coverage cannot be determined from tool_result:
+→ Ask ONE precise clarifying question instead.
+→ The question must directly help determine coverage.
 
-EXAMPLES OF GOOD CSR SCRIPTS:
-- "Good news! Your plan does cover water heater repairs. [Use exact fee from tool_result], and we can dispatch a technician within 24-48 hours."
-- "I understand your concern about the refrigerator. Unfortunately, cosmetic damage to the exterior panel is not covered under your plan, but I can help you with other options."
-- "Based on your plan, drain line stoppages are covered. Let me create a service request for you."
+COVERAGE DETERMINATION HIERARCHY:
+- If tool_result explicitly says Covered → state Covered.
+- If tool_result explicitly says Not Covered → state Not Covered.
+- If tool_result does NOT mention the item as covered → treat as Not Covered.
+- Absence of coverage listing means Not Covered.
+- Do NOT interpret absence as uncertainty.
 
+2) ISSUE CONSOLIDATION RULE
+- If the customer describes multiple phrases referring to the SAME physical issue
+  (example: foundation leak + irrigation system + backflow preventer),
+  treat it as ONE issue.
+- Generate only ONE coverage card per physical issue.
+- Do NOT split related components into separate cards.
+
+3) DUPLICATE PREVENTION RULE
+- Do NOT generate multiple cards that resolve the same coverage question.
+- If a coverage decision is made in one card, do not restate it in another.
+
+4) MANDATORY COVERAGE STANCE
+- If tool_result contains a coverage decision, clearly state:
+  Covered / Not Covered / Partially Covered.
+- Be direct and confident.
+- Do NOT hedge.
+- Do NOT restate decisions already addressed in previousAnswers.
+
+5) STRICT GROUNDING (CRITICAL)
+- Even if tool_result or newAnswers says to “contact AHS,” “contact the company,” or “request service,” do NOT include that in the CSR script. The CSR script must only state coverage (covered / not covered / partially covered) and next step without directing the customer to contact anyone or request service.
+- NEVER invent or guess dollar amounts, limits, dates, percentages, or fees.
+- ONLY use numbers exactly as shown in tool_result.newAnswers or previousAnswers.
+- If previousAnswers contains the answer, reuse it exactly.
+- Never contradict earlier answers.
+- If only one meaningful suggestion exists, return only one card.A
+
+6) SERVICE REQUEST LOGIC
+- Do NOT jump to dispatching a technician before clarifying coverage.
+- Sequence must be:
+  (1) Coverage stance OR clarification question
+  (2) Then suggest next step if appropriate.
+
+7) VERIFICATION RULE
+- If customer_context shows "verified": true,
+  DO NOT ask for phone or identity verification.
+
+---------------------------------------------------------
+TONE REQUIREMENTS
+---------------------------------------------------------
+- Calm and reassuring
+- Professional
+- 1–2 sentences maximum
+- Clear and direct
+- No filler language
+- No alarming tone
+
+---------------------------------------------------------
 Return ONLY valid JSON:
 {{
   "cards": [
     {{
-      "title": "Coverage Confirmation",
-      "csrScript": "The calm, professional sentence CSR says to customer",
-      "evidence": "Verbatim customer quote that triggered this",
+      "title": "Specific and outcome-based",
+      "csrScript": "The exact sentence CSR should say",
+      "evidence": "Short verbatim customer quote",
       "priority": "high|medium|low"
     }}
   ]
@@ -124,6 +236,7 @@ Conversation context (most recent last):
 {transcript}
 """
 )
+
 
 _diagnostics_prompt = ChatPromptTemplate.from_template(
         """
@@ -605,7 +718,7 @@ You are given a call transcript as plain text. Convert it into a chat conversati
 
 Rules:
 - Output ONLY valid JSON (no markdown, no extra text).
-- Return an array of objects: {"role":"CSR"|"Customer","text":"..."}
+- Return an array of objects: {{"role":"CSR"|"Customer","text":"..."}}
 - Group contiguous lines by the same role.
 - Do NOT invent content; only re-segment the provided transcript.
 - Keep each "text" concise (ideally <= 240 characters) but preserve meaning.

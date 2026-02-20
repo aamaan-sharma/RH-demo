@@ -108,7 +108,7 @@ const LiveTranscript = () => {
   const initCcp = () => {
     if (!ccpContainerRef.current || !window.connect) {
       setCcpInitError(
-        "Amazon Connect Streams not loaded (window.connect missing)."
+        "Amazon Connect Streams not loaded (window.connect missing).",
       );
       setCcpInitInProgress(false);
       return;
@@ -174,6 +174,7 @@ const LiveTranscript = () => {
           setCopilotUser(null);
           setCopilotCards([]);
           setCopilotStatus(null);
+          setUserDetails(null); // Clear user details for new call
         }
 
         if (contact.onConnecting) {
@@ -185,9 +186,26 @@ const LiveTranscript = () => {
             // Enable copilot ONLY when call is connected (Analyze Live tab requirement)
             try {
               const sid = contact.getContactId ? contact.getContactId() : id;
-              if (sid) socket.emit("copilot_enable", { sessionId: sid });
-            } catch {
-              // ignore
+              
+              // Extract phone number from initial connection endpoint
+              let phoneNumber = null;
+              try {
+                const conn = contact.getInitialConnection ? contact.getInitialConnection() : null;
+                const endpoint = conn && conn.getEndpoint ? conn.getEndpoint() : null;
+                phoneNumber = endpoint ? endpoint.phoneNumber : null;
+                console.log("[CCP] Call connected, extracted phoneNumber:", phoneNumber);
+              } catch (err) {
+                console.warn("[CCP] Could not extract phoneNumber from contact:", err);
+              }
+
+              if (sid) {
+                socket.emit("copilot_enable", { 
+                  sessionId: sid,
+                  phoneNumber: phoneNumber
+                });
+              }
+            } catch (err) {
+              console.error("[CCP] Failed to enable copilot:", err);
             }
           });
         }
@@ -288,15 +306,16 @@ const LiveTranscript = () => {
       const newCards = Array.isArray(msg?.cards)
         ? msg.cards
         : Array.isArray(msg?.suggestions)
-        ? msg.suggestions
-        : [];
+          ? msg.suggestions
+          : [];
       const userDetailsData = msg?.userDetails || null;
 
       setCopilotUser(customer);
-      
+
       // Update user details if present (for sticky header display)
+      // Only set if not already filled to avoid overriding the initial matched user
       if (userDetailsData) {
-        setUserDetails(userDetailsData);
+        setUserDetails((prev) => prev || userDetailsData);
       }
 
       // ACCUMULATE suggestions - keep history of suggestions during the call
@@ -400,7 +419,7 @@ const LiveTranscript = () => {
   };
 
   const transcriptPanel = (
-    <main className="lt_center">
+    <main className="lt_right">
       <div className="live_transcript_center_body">
         <div className="live_transcript_card lt_transcript_card">
           {/* Streaming indicator - shows when call is active */}
@@ -456,9 +475,7 @@ const LiveTranscript = () => {
                     </div>
                     <div className="lt_step_item">
                       <span className="lt_step_number">3</span>
-                      <span className="lt_step_text">
-                        Accept incoming call
-                      </span>
+                      <span className="lt_step_text">Accept incoming call</span>
                     </div>
                   </div>
                 </div>
@@ -514,8 +531,8 @@ const LiveTranscript = () => {
                     role === "agent"
                       ? "lt_bubble lt_bubble--agent"
                       : role === "customer"
-                      ? "lt_bubble lt_bubble--customer"
-                      : "lt_bubble lt_bubble--unknown";
+                        ? "lt_bubble lt_bubble--customer"
+                        : "lt_bubble lt_bubble--unknown";
 
                   return (
                     <div key={idx} className={rowClass}>
@@ -627,7 +644,7 @@ const LiveTranscript = () => {
       </aside>
 
       {/* CENTER: AI Suggestions Panel */}
-      <aside className="lt_right lt_ai_panel">
+      <aside className="lt_center lt_ai_panel">
         {/* USER DETAILS - Commented out per request
         <div className="live_transcript_card lt_right_section">
           <div className="label">USER DETAILS</div>
@@ -694,8 +711,12 @@ const LiveTranscript = () => {
               className="lt_ai_transcript_button"
               onClick={() => setIsTranscriptOpen((prev) => !prev)}
               aria-pressed={isTranscriptOpen}
-              aria-label={isTranscriptOpen ? "Collapse transcript" : "Expand transcript"}
-              title={isTranscriptOpen ? "Collapse transcript" : "Expand transcript"}
+              aria-label={
+                isTranscriptOpen ? "Collapse transcript" : "Expand transcript"
+              }
+              title={
+                isTranscriptOpen ? "Collapse transcript" : "Expand transcript"
+              }
             >
               {isTranscriptOpen ? "<" : ">"}
             </button>
@@ -730,43 +751,59 @@ const LiveTranscript = () => {
                   {userDetails.name && (
                     <div className="lt_user_detail_item">
                       <span className="lt_user_detail_label">Name:</span>
-                      <span className="lt_user_detail_value">{userDetails.name}</span>
+                      <span className="lt_user_detail_value">
+                        {userDetails.name}
+                      </span>
                     </div>
                   )}
                   {userDetails.phone && (
                     <div className="lt_user_detail_item">
                       <span className="lt_user_detail_label">Phone:</span>
-                      <span className="lt_user_detail_value">{userDetails.phone}</span>
+                      <span className="lt_user_detail_value">
+                        {userDetails.phone}
+                      </span>
                     </div>
                   )}
                   {userDetails.email && (
                     <div className="lt_user_detail_item">
                       <span className="lt_user_detail_label">Email:</span>
-                      <span className="lt_user_detail_value">{userDetails.email}</span>
+                      <span className="lt_user_detail_value">
+                        {userDetails.email}
+                      </span>
                     </div>
                   )}
                   {userDetails.plan && (
                     <div className="lt_user_detail_item">
                       <span className="lt_user_detail_label">Plan:</span>
-                      <span className="lt_user_detail_value">{userDetails.plan}</span>
+                      <span className="lt_user_detail_value">
+                        {userDetails.plan}
+                      </span>
                     </div>
                   )}
                   {userDetails.state && (
                     <div className="lt_user_detail_item">
                       <span className="lt_user_detail_label">State:</span>
-                      <span className="lt_user_detail_value">{userDetails.state}</span>
+                      <span className="lt_user_detail_value">
+                        {userDetails.state}
+                      </span>
                     </div>
                   )}
                   {userDetails.contractType && (
                     <div className="lt_user_detail_item">
-                      <span className="lt_user_detail_label">Contract Type:</span>
-                      <span className="lt_user_detail_value">{userDetails.contractType}</span>
+                      <span className="lt_user_detail_label">
+                        Contract Type:
+                      </span>
+                      <span className="lt_user_detail_value">
+                        {userDetails.contractType}
+                      </span>
                     </div>
                   )}
                   {userDetails.address && (
                     <div className="lt_user_detail_item">
                       <span className="lt_user_detail_label">Address:</span>
-                      <span className="lt_user_detail_value">{userDetails.address}</span>
+                      <span className="lt_user_detail_value">
+                        {userDetails.address}
+                      </span>
                     </div>
                   )}
                 </div>
@@ -789,8 +826,8 @@ const LiveTranscript = () => {
                           {priority === "high"
                             ? "🔴"
                             : priority === "low"
-                            ? "🟢"
-                            : "🟡"}
+                              ? "🟢"
+                              : "🟡"}
                         </span>
                         <span className="lt_suggestion_title">
                           {c?.title || c?.heading || "Suggestion"}
