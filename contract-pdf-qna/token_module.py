@@ -125,7 +125,9 @@ def token_insert_to_bigquery(dic, session_id=None):
         # Add more dictionaries for additional rows
     ]
     if session_id is not None:
-        data_to_insert[0]['session_id'] = session_id
+        #data_to_insert[0]['session_id'] = session_id
+        #[TODO]: Fix bigquery schema to add 'session_id'
+        pass
     # Insert the data into the table
     errors = client_t.insert_rows(table, data_to_insert)
     if not errors:
