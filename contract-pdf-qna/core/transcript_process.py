@@ -1,5 +1,6 @@
 import json
 import traceback
+from contextvars import ContextVar
 from time import time
 
 from utils.prompts import ANSWERING_PROMPT_SEARCH, _agent_system_message
@@ -62,6 +63,10 @@ class InferenceMode(Enum):
     SEARCH = "Search"
     INFER = "Infer"
 
+
+
+# Context var so knowledge_base_tool can push retrieved docs to the handler (agent tool invoke doesn't pass callbacks to retriever)
+_doc_capture_handler_var: ContextVar["DocCaptureHandler"] = ContextVar("doc_capture_handler", default=None)
 
 
 class DocCaptureHandler(BaseCallbackHandler):
@@ -130,6 +135,10 @@ def knowledge_base_tool(query: str, policyId: str) -> str:
     print(f"[TOOL CALL][KNOWLEDGE TOOL]: {query=}, {policyId=}")
     docs = getRetriver(policyId.strip()).invoke(query)
     print(f"[TOOL CALL RESULT][KNOWLEDGE TOOL] {len(docs)=}")
+    # Push docs to DocCaptureHandler so process_single_transcript_question gets real chunks (agent tool invoke doesn't pass callbacks to retriever)
+    handler = _doc_capture_handler_var.get()
+    if handler is not None:
+        handler.docs.extend(docs)
     return "\n\n".join([doc.page_content for doc in docs])
     
 
@@ -157,12 +166,15 @@ def get_agent_instance(policyId, sessionId):
 
 
 def input_prompt(entered_query, policyId, handler, sessionId):
-    # Retriever chain as Tool for agent
     docHandler = DocCaptureHandler()
-    agent_executor = get_agent_instance(policyId, sessionId)
-    response = agent_executor.invoke({"input": entered_query, "policyId": policyId},callbacks=[handler, docHandler])
-    docs = docHandler.docs
-    return response, docs
+    token = _doc_capture_handler_var.set(docHandler)
+    try:
+        agent_executor = get_agent_instance(policyId, sessionId)
+        response = agent_executor.invoke({"input": entered_query, "policyId": policyId}, callbacks=[handler, docHandler])
+        docs = docHandler.docs
+        return response, docs
+    finally:
+        _doc_capture_handler_var.reset(token)
 
 
 def handle_request_search(question, transcript_context, policyId: str, sessionId: Optional[str] = None, *, handler: CallbackHandler) -> tuple:
@@ -191,7 +203,8 @@ def handle_request_search(question, transcript_context, policyId: str, sessionId
         f"answer_len={len(str(answer_search))}"
     )
 
-    relevant_documents = str(qa_search_response["source_documents"])
+    # Return actual Document list so process_single_transcript_question can build chunk_texts/chunk_details
+    relevant_documents = qa_search_response.get("source_documents") or []
 
     return answer_search, relevant_documents
 

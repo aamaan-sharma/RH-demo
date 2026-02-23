@@ -35,19 +35,23 @@ def _is_truthy_env(name: str) -> bool:
     return val in {"1", "true", "yes", "y", "on"}
 
 
-def _can_resolve_export_host(endpoint: str) -> bool:
+def _can_reach_export_endpoint(endpoint: str) -> bool:
     """
     Best-effort guard so local runs don't spam exporter errors when `jaeger`
-    (docker-compose hostname) isn't resolvable.
+    isn't running. Checks both DNS resolution and TCP connect to the OTLP port.
     """
     try:
         parsed = urlparse(endpoint)
         host = (parsed.hostname or "").strip()
+        port = parsed.port or 4318
         if not host:
             return False
-        socket.getaddrinfo(host, parsed.port or 80, proto=socket.IPPROTO_TCP)
+        socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+        # Actually try to connect; ConnectionRefused is common when Jaeger isn't running.
+        with socket.create_connection((host, port), timeout=1.0):
+            pass
         return True
-    except Exception:
+    except (socket.gaierror, socket.timeout, OSError, TypeError):
         return False
 
 
@@ -74,9 +78,9 @@ def _init_tracer_provider() -> None:
         return
 
     endpoint = _otlp_http_endpoint()
-    if not _can_resolve_export_host(endpoint):
-        # Keep tracing API working, but skip exporter to avoid background errors.
-        # (Common when running app locally without docker-compose `jaeger` service.)
+    if not _can_reach_export_endpoint(endpoint):
+        # Keep tracing API working, but skip exporter to avoid "Connection refused" spam.
+        # (Common when running app locally without Jaeger listening on 4318.)
         trace.set_tracer_provider(provider)
         return
 
