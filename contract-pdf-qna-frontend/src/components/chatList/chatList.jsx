@@ -13,6 +13,13 @@ const isFinalAnswerChat = (chat) => {
   return id === "final_answer" || chat?.entered_query === "Final Answer for transcript";
 };
 
+// Use first non-empty chunk array so placeholder or detail chunks show when the other is empty
+const getRelevantChunks = (chat) => {
+  const detail = chat?.relevantChunksDetail || chat?.relevant_chunks_detail || [];
+  const textOnly = chat?.relevantChunks || chat?.relevant_chunks || [];
+  return Array.isArray(detail) && detail.length > 0 ? detail : textOnly;
+};
+
 const ChatList = ({ chats, setChats, conversationId, isCallsMode = false, serverError = null, onRetryChat = null }) => {
   const lastChatRef = useRef(null);
 
@@ -78,13 +85,7 @@ const ChatList = ({ chats, setChats, conversationId, isCallsMode = false, server
                         chats={chats}
                         setChats={setChats}
                         showReferenceIcon={false}
-                        relevantChunks={
-                          chat.relevantChunksDetail ||
-                          chat.relevant_chunks_detail ||
-                          chat.relevantChunks ||
-                          chat.relevant_chunks ||
-                          []
-                        }
+                        relevantChunks={getRelevantChunks(chat)}
                         headerLabel="AI Draft Answer"
                         tone="blue"
                         isError={chat.isError}
@@ -118,13 +119,7 @@ const ChatList = ({ chats, setChats, conversationId, isCallsMode = false, server
                     chats={chats}
                     setChats={setChats}
                     showReferenceIcon={false}
-                    relevantChunks={
-                      chat.relevantChunksDetail ||
-                      chat.relevant_chunks_detail ||
-                      chat.relevantChunks ||
-                      chat.relevant_chunks ||
-                      []
-                    }
+                    relevantChunks={getRelevantChunks(chat)}
                     headerLabel="Assistant"
                     isError={chat.isError}
                     onRetry={chat.isError && onRetryChat ? onRetryChat : null}
@@ -145,13 +140,7 @@ const ChatList = ({ chats, setChats, conversationId, isCallsMode = false, server
               chats={chats}
               setChats={setChats}
               showReferenceIcon={false}
-            relevantChunks={
-              finalAnswer.relevantChunksDetail ||
-              finalAnswer.relevant_chunks_detail ||
-              finalAnswer.relevantChunks ||
-              finalAnswer.relevant_chunks ||
-              []
-            }
+            relevantChunks={getRelevantChunks(finalAnswer)}
               variant="finalAnswer"
               headerLabel="Final Analyzed Answer"
               tone="blue"
@@ -189,13 +178,7 @@ const ChatList = ({ chats, setChats, conversationId, isCallsMode = false, server
               chats={chats}
               setChats={setChats}
               showReferenceIcon={true}
-              relevantChunks={
-                chat.relevantChunksDetail ||
-                chat.relevant_chunks_detail ||
-                chat.relevantChunks ||
-                chat.relevant_chunks ||
-                []
-              }
+              relevantChunks={getRelevantChunks(chat)}
               variant={isCallsMode && isFinalAnswerChat(chat) ? "finalAnswer" : "default"}
               isError={chat.isError}
               onRetry={chat.isError && onRetryChat ? onRetryChat : null}

@@ -35,6 +35,7 @@ from langchain.memory import ConversationBufferMemory
 # Add imports for transcript processing
 import json
 import re
+from dataclasses import asdict
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 from utils.milvus_utils import get_milvus_collection_name
@@ -1651,7 +1652,9 @@ def _process_question_with_index(
         handler=handler,
         transcript_context=question_obj.get("context", ""),
     )
-    
+    if hasattr(result, "__dataclass_fields__"):
+        result = asdict(result)
+        result["relevantChunksDetail"] = result.get("relevantChunksDetails", [])
     result["questionId"] = question_id
     result["question"] = question_text
     result["context"] = question_obj.get("context", "")
@@ -3625,77 +3628,90 @@ def list_transcripts():
         return jsonify({"error": "An error occurred while fetching transcripts", "details": str(e)}), 500
 
 
+def _transcript_content_response(transcript_content, file_metadata=None):
+    """Build the same JSON shape for GET /transcripts/<filename> from content and optional metadata."""
+    try:
+        transcript_data = json.loads(transcript_content)
+        is_json = True
+    except json.JSONDecodeError:
+        transcript_data = None
+        is_json = False
+    meta = file_metadata or {}
+    response = {
+        "fileName": meta.get("fileName", ""),
+        "fileSize": meta.get("fileSize", 0),
+        "uploadDate": meta.get("uploadDate"),
+        "content": transcript_content,
+        "isJson": is_json,
+    }
+    if is_json and isinstance(transcript_data, dict):
+        response["parsedData"] = transcript_data
+        text_content = (
+            transcript_data.get("text")
+            or transcript_data.get("transcript")
+            or transcript_data.get("content")
+        )
+        if text_content:
+            response["textContent"] = text_content
+    return response
+
+
 @app.route("/transcripts/<filename>", methods=["GET"])
 def get_transcript_content(filename):
-    """Fetch transcript file content from GCS bucket"""
+    """Fetch transcript content from GCS bucket, or from MongoDB if GCS fails/unavailable."""
     try:
         with tracer.start_as_current_span('api/transcripts/content'):
-            # Authorization
             authorization_header = request.headers.get("Authorization")
-            
             if authorization_header is None:
                 return jsonify({"message": "Token is missing"}), 401
-            
             if authorization_header:
                 token_data = token_process(authorization_header)
                 if token_data[1] == 401 or token_data[1] == 403:
                     return (token_data[0].get_json()), token_data[1]
-            
-            # Validate filename
+
             if not filename:
                 return jsonify({"error": "Filename is required"}), 400
-            
-            # Check if GCS is available
-            if not gcs_fs:
-                return jsonify({"error": "GCP Storage not configured or unavailable"}), 500
-            
-            # Read transcript file from GCP
-            try:
-                transcript_content, file_metadata = read_transcript_file_gcp(filename)
-                
-                # Try to parse as JSON to provide structured response
+
+            user_email = (token_data[0] or {}).get("email") or ""
+
+            # Try GCS first when available
+            if gcs_fs:
                 try:
-                    transcript_data = json.loads(transcript_content)
-                    is_json = True
-                except json.JSONDecodeError:
-                    transcript_data = None
-                    is_json = False
-                
-                # Build response
-                response = {
-                    "fileName": file_metadata["fileName"],
-                    "fileSize": file_metadata["fileSize"],
-                    "uploadDate": file_metadata["uploadDate"],
-                    "content": transcript_content,
-                    "isJson": is_json
-                }
-                
-                # If JSON, also include parsed data
-                if is_json:
-                    response["parsedData"] = transcript_data
-                    # Try to extract text content if available
-                    if isinstance(transcript_data, dict):
-                        text_content = (
-                            transcript_data.get("text") or
-                            transcript_data.get("transcript") or
-                            transcript_data.get("content")
-                        )
-                        if text_content:
-                            response["textContent"] = text_content
-                
-                return jsonify(response), 200
-                
-            except FileNotFoundError as e:
-                return jsonify({
-                    "error": f"Transcript file not found: {filename}",
-                    "fileName": filename
-                }), 404
+                    transcript_content, file_metadata = read_transcript_file_gcp(filename)
+                    response = _transcript_content_response(transcript_content, file_metadata)
+                    return jsonify(response), 200
+                except FileNotFoundError:
+                    pass
+                except Exception as e:
+                    print(f"GCS read failed for transcript {filename}: {e}")
+
+            # Fallback: load from MongoDB (conversation stored transcript after processing)
+            try:
+                qna_collection = db[f"chats_{user_email}"]
+                filename_no_ext = (filename or "").replace(".json", "").replace(".txt", "")
+                doc = qna_collection.find_one(
+                    {
+                        "doc_type": "transcript_conversation",
+                        "$or": [
+                            {"transcript_id": filename},
+                            {"transcript_metadata.fileName": filename},
+                            {"transcript_id": filename_no_ext},
+                        ],
+                    },
+                    {"stored_transcript_content": 1, "transcript_metadata": 1},
+                )
+                if doc and doc.get("stored_transcript_content"):
+                    content = doc["stored_transcript_content"]
+                    meta = doc.get("transcript_metadata") or {}
+                    response = _transcript_content_response(content, meta)
+                    return jsonify(response), 200
             except Exception as e:
-                return jsonify({
-                    "error": f"Error reading transcript file: {str(e)}",
-                    "fileName": filename
-                }), 500
-            
+                print(f"MongoDB fallback for transcript {filename}: {e}")
+
+            if gcs_fs:
+                return jsonify({"error": f"Transcript file not found: {filename}", "fileName": filename}), 404
+            return jsonify({"error": "GCP Storage not configured or unavailable", "fileName": filename}), 500
+
     except Exception as e:
         import traceback
         error_trace = traceback.format_exc()
@@ -4465,7 +4481,9 @@ def _claims_background_process_transcript(
                 handler=handler,
                 transcript_context=question_obj.get("context", ""),
             )
-
+            if hasattr(result, "__dataclass_fields__"):
+                result = asdict(result)
+                result["relevantChunksDetail"] = result.get("relevantChunksDetails", [])
             display_question_text = re.sub(r"\[CALL_CONTEXT:.*?\]\s*", "", question_text).strip()
             result["questionId"] = question_id
             result["question"] = display_question_text
@@ -4655,6 +4673,7 @@ def _claims_background_process_transcript(
                             "uploadDate": (file_metadata or {}).get("uploadDate"),
                             "fileSize": (file_metadata or {}).get("fileSize"),
                         },
+                        "stored_transcript_content": transcript_content,
                     },
                 },
             )
@@ -5770,6 +5789,7 @@ def process_transcript():
                 "conversation_name": conv_name or transcript_file_name,
                 "transcript_id": transcript_id,
                 "transcript_metadata": response["transcriptMetadata"],
+                "stored_transcript_content": transcript_content,
                 "contract_type": contract_type,
                 "selected_plan": selected_plan,
                 "selected_state": selected_state,
@@ -6332,7 +6352,10 @@ def _process_transcript_core(data, yield_sse_fn=None):
                         handler=handler,
                         transcript_context=question_obj.get("context", ""),
                     )
-
+                    # Response is a dataclass; convert to dict so we can assign questionId, etc.
+                    if hasattr(result, "__dataclass_fields__"):
+                        result = asdict(result)
+                        result["relevantChunksDetail"] = result.get("relevantChunksDetails", [])
                     result["questionId"] = question_id
                     # Keep UI question clean (match normal Claims flow)
                     display_question_text = re.sub(r"\[CALL_CONTEXT:.*?\]\s*", "", str(question_text or "")).strip()
@@ -6517,6 +6540,7 @@ def _process_transcript_core(data, yield_sse_fn=None):
                                     "uploadDate": file_metadata.get("uploadDate"),
                                     "fileSize": file_metadata.get("fileSize"),
                                 },
+                                "stored_transcript_content": transcript_content,
                             },
                         },
                     )
