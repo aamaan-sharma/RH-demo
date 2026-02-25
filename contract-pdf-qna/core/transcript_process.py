@@ -1,6 +1,5 @@
 import json
 import traceback
-from contextvars import ContextVar
 from time import time
 
 from utils.prompts import ANSWERING_PROMPT_SEARCH, _agent_system_message
@@ -65,16 +64,14 @@ class InferenceMode(Enum):
 
 
 
-# Context var so knowledge_base_tool can push retrieved docs to the handler (agent tool invoke doesn't pass callbacks to retriever)
-_doc_capture_handler_var: ContextVar["DocCaptureHandler"] = ContextVar("doc_capture_handler", default=None)
-
-
 class DocCaptureHandler(BaseCallbackHandler):
     def __init__(self):
         self.docs = []
 
     def on_retriever_end(self, documents, **kwargs):
         self.docs.extend(documents)
+        num = len(documents) if documents else 0
+        print(f"[CHUNKS] step=retriever_end (DocCaptureHandler) num_chunks_received={num} total_captured={len(self.docs)}")
 
 
 
@@ -134,11 +131,9 @@ def knowledge_base_tool(query: str, policyId: str) -> str:
 
     print(f"[TOOL CALL][KNOWLEDGE TOOL]: {query=}, {policyId=}")
     docs = getRetriver(policyId.strip()).invoke(query)
+    num_chunks = len(docs) if docs else 0
+    print(f"[CHUNKS] step=knowledge_base_tool num_chunks_received={num_chunks}")
     print(f"[TOOL CALL RESULT][KNOWLEDGE TOOL] {len(docs)=}")
-    # Push docs to DocCaptureHandler so process_single_transcript_question gets real chunks (agent tool invoke doesn't pass callbacks to retriever)
-    handler = _doc_capture_handler_var.get()
-    if handler is not None:
-        handler.docs.extend(docs)
     return "\n\n".join([doc.page_content for doc in docs])
     
 
@@ -166,15 +161,12 @@ def get_agent_instance(policyId, sessionId):
 
 
 def input_prompt(entered_query, policyId, handler, sessionId):
+    # Retriever chain as Tool for agent
     docHandler = DocCaptureHandler()
-    token = _doc_capture_handler_var.set(docHandler)
-    try:
-        agent_executor = get_agent_instance(policyId, sessionId)
-        response = agent_executor.invoke({"input": entered_query, "policyId": policyId}, callbacks=[handler, docHandler])
-        docs = docHandler.docs
-        return response, docs
-    finally:
-        _doc_capture_handler_var.reset(token)
+    agent_executor = get_agent_instance(policyId, sessionId)
+    response = agent_executor.invoke({"input": entered_query, "policyId": policyId},callbacks=[handler, docHandler])
+    docs = docHandler.docs
+    return response, docs
 
 
 def handle_request_search(question, transcript_context, policyId: str, sessionId: Optional[str] = None, *, handler: CallbackHandler) -> tuple:
@@ -198,15 +190,12 @@ def handle_request_search(question, transcript_context, policyId: str, sessionId
         config={"callbacks": [handler]},
     )
     answer_search = qa_search_response["result"] if isinstance(qa_search_response, dict) else qa_search_response
-    print(
-        "[CHUNKS] process_single_transcript_question: QA chain completed "
-        f"answer_len={len(str(answer_search))}"
-    )
-
-    # Return actual Document list so process_single_transcript_question can build chunk_texts/chunk_details
-    relevant_documents = qa_search_response.get("source_documents") or []
-
-    return answer_search, relevant_documents
+    source_docs = qa_search_response.get("source_documents") if isinstance(qa_search_response, dict) else []
+    source_docs = source_docs or []
+    num_chunks = len(source_docs)
+    print(f"[CHUNKS] step=handle_request_search (QA chain) num_chunks_received={num_chunks} answer_len={len(str(answer_search))}")
+    # Return the list of Document objects so process_single_transcript_question can build relevantChunks for frontend/MongoDB
+    return answer_search, source_docs
 
 
 def handle_request_infer(question: str = "", transcript_context: str = "", policyId: str = "",sessionId: Optional[str]=None, *, handler: CallbackHandler) -> tuple:
@@ -217,12 +206,10 @@ def handle_request_infer(question: str = "", transcript_context: str = "", polic
         else question
     )
 
-    agent_response, docs = input_prompt(enriched_query, policyId,handler, sessionId)
+    agent_response, docs = input_prompt(enriched_query, policyId, handler, sessionId)
     answer = agent_response["output"]
-    print(
-        "[CHUNKS] process_single_transcript_question: agent_response received "
-        f"answer_len={len(str(answer))}"
-    )
+    num_chunks = len(docs) if isinstance(docs, list) else 0
+    print(f"[CHUNKS] step=handle_request_infer (agent_response) num_chunks_passed={num_chunks} answer_len={len(str(answer))}")
     return answer, docs 
 
 def process_single_transcript_question(
@@ -249,23 +236,24 @@ def process_single_transcript_question(
         )
 
         match inferenceMode:
-            case InferenceMode.SEARCH: 
+            case InferenceMode.SEARCH:
                 answer, docs = handle_request_search(question, transcript_context, policyId, sessionId, handler=handler)
-            case InferenceMode.INFER : 
+            case InferenceMode.INFER:
                 answer, docs = handle_request_infer(question, transcript_context, policyId, sessionId, handler=handler)
 
-        
         q_latency = time() - q_start_time
-        
+        docs_count = len(docs) if (isinstance(docs, list) and docs) else 0
+        print(f"[CHUNKS] step=process_single_transcript_question_received num_chunks_from_handler={docs_count}")
+
         # Build relevantChunks from Milvus docs (always list[str] in the API response)
         # This ensures frontend receives text chunks (not placeholder "[]" / not dict objects).
         chunk_texts = []
         chunk_details = []
         try:
 
-            docs_iter = docs
-            if MILVUS_MAX_RETURN_CHUNKS is not None:
-                docs_iter = docs[:MILVUS_MAX_RETURN_CHUNKS]
+            docs_iter = docs if isinstance(docs, list) else []
+            if docs_iter and MILVUS_MAX_RETURN_CHUNKS is not None:
+                docs_iter = docs_iter[:MILVUS_MAX_RETURN_CHUNKS]
 
             for doc in docs_iter:
                 content = (getattr(doc, "page_content", "") or "").strip()
@@ -281,13 +269,13 @@ def process_single_transcript_question(
             # As a last resort, still return a non-empty list (but keep it explicit for debugging).
             # This should be rare; most Milvus collections should return at least some results.
             chunk_texts = ["(No supporting excerpts found)"]
-        
 
-        returned_chunks =  chunk_texts[:MILVUS_MAX_RETURN_CHUNKS] if MILVUS_MAX_RETURN_CHUNKS else chunk_texts
+        print(f"[CHUNKS] step=process_single_transcript_question_built num_chunk_texts={len(chunk_texts)}")
 
-        
+        returned_chunks = chunk_texts[:MILVUS_MAX_RETURN_CHUNKS] if MILVUS_MAX_RETURN_CHUNKS else chunk_texts
         relvant_chunk_details = chunk_details[:MILVUS_MAX_RETURN_CHUNKS] if MILVUS_MAX_RETURN_CHUNKS is not None else chunk_details
-        return Response(answer=answer, relevantChunks=returned_chunks, relevantChunksDetails=relvant_chunk_details, confidence=0.90,latency=q_latency)
+        print(f"[CHUNKS] step=process_single_transcript_question_return num_chunks_returned={len(returned_chunks)}")
+        return Response(answer=answer, relevantChunks=returned_chunks, relevantChunksDetails=relvant_chunk_details, confidence=0.90, latency=q_latency)
     except Exception as e:
         print(f"Error processing transcript question: {e}")
         traceback.print_exc()
