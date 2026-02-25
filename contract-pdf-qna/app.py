@@ -388,7 +388,8 @@ def relevant_docs(entered_query, retriever):
 
         # Get chunks from the vector store
         docs = retriever.get_relevant_documents(entered_query)
-        # print(f"[CHUNKS] relevant_docs: got {len(docs)} docs from retriever")
+        num_chunks = len(docs) if docs else 0
+        print(f"[CHUNKS] step=relevant_docs_tool (retriever.get_relevant_documents) num_chunks_received={num_chunks}")
 
         if docs:
             # Log every chunk we received for this query
@@ -3102,6 +3103,7 @@ def _get_or_build_plan_overview_for_claims(docs: dict) -> str:
         "exclusions, and service fees. Keep it structured and concise."
     )
     chunks, _ = _retrieve_policy_chunks_for_claims(docs, overview_query, k=12)
+    print(f"[CHUNKS] step=overview_retrieval (plan coverage summary) num_chunks_received={len(chunks) if chunks else 0}")
     if not chunks:
         return ""
 
@@ -3215,6 +3217,7 @@ def claims_followup_chat():
 
             # Hybrid: retrieve policy clauses from Milvus using the case's stored contract/plan/state
             policy_chunks, referred_docs_text = _retrieve_policy_chunks_for_claims(docs, entered_query, k=6)
+            print(f"[CHUNKS] step=claims_followup_retrieval num_chunks_received={len(policy_chunks) if policy_chunks else 0}")
             policy_section = ""
             if policy_chunks:
                 lines = ["RETRIEVED POLICY CLAUSES (Vector DB)"]
@@ -3259,6 +3262,7 @@ def claims_followup_chat():
                             policy_chunk_texts.append(ch.strip())
                 except Exception:
                     policy_chunk_texts = []
+                print(f"[CHUNKS] step=claims_followup_persist_chat num_chunks_passed_to_mongo={len(policy_chunk_texts)}")
                 qna_collection.update_one(
                     {"_id": ObjectId(conversation_id)},
                     {
@@ -5803,6 +5807,8 @@ def process_transcript():
                 "chats": transcript_chats,
             }
 
+            print(f"[CHUNKS] step=transcript_process_store_final num_chats={len(transcript_chats)} total_chunks_across_qa={total_chunks}")
+
             # Update the conversation document created earlier (so sidebar shows it during processing).
             if conv_doc_id is None:
                 inserted = qna_collection.insert_one(transcript_doc)
@@ -6411,6 +6417,7 @@ def _process_transcript_core(data, yield_sse_fn=None):
                         try:
                             mc = getattr(upd_res, "matched_count", None)
                             modc = getattr(upd_res, "modified_count", None)
+                            print(f"[CHUNKS] step=transcript_stream_persist_chat num_chunks_passed_to_mongo={len(chunks)}")
                             print(
                                 f"{_logpfx} persisted chat: conv_doc_id={str(conv_doc_id)!r}, "
                                 f"chat_id={question_id!r}, chunks={len(chunks)}, "

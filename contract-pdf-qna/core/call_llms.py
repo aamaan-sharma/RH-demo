@@ -339,14 +339,17 @@ def _rag_answer(*, question: str, customer: Dict[str, Any], handler: CallbackHan
             # Transform result to match expected format
             answer = (result or {}).get("answer", "")
             chunks = (result or {}).get("relevantChunks", [])
-            
+            num_chunks = len(chunks) if chunks else 0
+            cited = chunks[:3] if chunks else []
+
             if answer:
                 if _trace_include_payloads():
                     span.set_attribute("rag.question.preview", _preview(question))
                     span.set_attribute("rag.answer.preview", _preview(answer))
+                print(f"[CHUNKS] step=rag_answer_return num_chunks_received={num_chunks} num_cited_passed={len(cited)}")
                 return {
                     "answer": answer,
-                    "citedChunks": chunks[:3] if chunks else [],
+                    "citedChunks": cited,
                     "confidence": result.get("confidence", 0.9),
                     "latency": result.get("latency", 0.0),
                     "source": "INFER",  # Track which method was used

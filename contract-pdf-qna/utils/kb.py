@@ -113,6 +113,8 @@ def cache_fetch_chunks(selected_collection_name, query, k):
     vector_db1 = get_vector_db("policies")
     retriever = vector_db1.as_retriever(search_kwargs={"k": max(1, min(int(k), 12)), "expr": f"policyId == '{selected_collection_name.lower()}'"})
     raw_docs = retriever.invoke(query)
+    num_chunks = len(raw_docs) if raw_docs else 0
+    print(f"[CHUNKS] step=vector_store_fetch collection={selected_collection_name!r} num_chunks_received={num_chunks}")
     return raw_docs
 
 def _retrieve_policy_chunks_for_claims(docs: dict, query: str, k: int = 6):
@@ -166,6 +168,7 @@ def _retrieve_policy_chunks_for_claims(docs: dict, query: str, k: int = 6):
         raw_docs = cache_fetch_chunks(selected_collection_name, query, k)
         print('[CLAIM_FOLLOWUP][TIME DURATION] Chunk Extracted', time.time() - s, len(raw_docs))
         try:
+            print(f"[CHUNKS] step=retrieve_policy_chunks_for_claims num_chunks_received={len(raw_docs or [])}")
             print(f"[CLAIMS_FOLLOWUP] Milvus returned {len(raw_docs or [])} docs")
         except Exception:
             pass
@@ -190,6 +193,7 @@ def _retrieve_policy_chunks_for_claims(docs: dict, query: str, k: int = 6):
             text_lines.append("")
 
         referred_docs_text = "\n".join(text_lines).strip()
+        print(f"[CHUNKS] step=retrieve_policy_chunks_for_claims_return num_chunks_passed={len(chunks_for_ui)}")
         return chunks_for_ui, referred_docs_text
     except Exception as e:
         print(f"Warning: policy retrieval failed for claims followup: {e}")
