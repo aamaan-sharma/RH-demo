@@ -430,7 +430,6 @@ const CaseReviewApprovePopup = ({
             ) : null}
             <div className="comments_header">
               <div className="label">Comments</div>
-              {userName ? <div className="author">{userName}</div> : null}
             </div>
             <textarea
               className="authorized_textarea"

@@ -454,11 +454,13 @@ const LiveTranscript = () => {
                       />
                     </svg>
                   </div>
-                  <div className="lt_transcript_empty_title">
-                    Waiting for Connection
-                  </div>
-                  <div className="lt_transcript_empty_subtitle">
-                    Please login to Amazon Connect to start receiving calls
+                  <div className="lt_transcript_empty_text">
+                    <div className="lt_transcript_empty_title">
+                      Waiting for Connection
+                    </div>
+                    <div className="lt_transcript_empty_subtitle">
+                      Please login to Amazon Connect to start receiving calls
+                    </div>
                   </div>
                   <div className="lt_transcript_empty_steps">
                     <div className="lt_step_item">
@@ -893,9 +895,11 @@ const LiveTranscript = () => {
                     />
                   </svg>
                 </div>
-                <div className="lt_empty_title">Ready to Assist</div>
-                <div className="lt_empty_subtitle">
-                  AI suggestions will appear here during an active call
+                <div className="lt_empty_text">
+                  <div className="lt_empty_title">Ready to Assist</div>
+                  <div className="lt_empty_subtitle">
+                    AI suggestions will appear here during an active call
+                  </div>
                 </div>
               </div>
             )}

@@ -281,6 +281,10 @@
   gap: 8px;
   padding: 16px;
   scroll-behavior: smooth;
+  position: relative;
+  --empty-inset: -16px;
+  --empty-icon-offset: 68px;
+  --empty-steps-offset: 70px;
 
   &::-webkit-scrollbar {
     width: 6px;
@@ -317,30 +321,41 @@
 }
 
 .lt_transcript_empty_state {
-  height: 100%;
+  position: absolute;
+  inset: var(--empty-inset);
+  text-align: center;
+  pointer-events: none;
+}
+
+.lt_transcript_empty_text {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
   text-align: center;
-  padding: 24px 16px;
 }
 
 .lt_transcript_empty_icon {
-  width: 56px;
-  height: 56px;
+  width: 48px;
+  height: 48px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 14px;
+  border-radius: 12px;
   background: linear-gradient(135deg, #ede9fe 0%, #e0e7ff 100%);
   color: #6366f1;
-  margin-bottom: 16px;
   border: 1px solid #c7d2fe;
+  position: absolute;
+  left: 50%;
+  top: calc(50% - var(--empty-icon-offset));
+  transform: translate(-50%, -50%);
 
   svg {
-    width: 28px;
-    height: 28px;
+    width: 24px;
+    height: 24px;
   }
 }
 
@@ -362,11 +377,16 @@
 }
 
 .lt_transcript_empty_steps {
+  position: absolute;
+  top: calc(50% + var(--empty-steps-offset));
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100%;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  width: 100%;
   max-width: 240px;
+  pointer-events: auto;
 }
 
 .lt_step_item {
@@ -654,6 +674,9 @@
   overflow-y: auto;
   background: #fafbfc;
   scroll-behavior: smooth;
+  position: relative;
+  --empty-inset: -12px;
+  --empty-icon-offset: 68px;
 
   &::-webkit-scrollbar {
     width: 6px;
@@ -953,13 +976,10 @@
 
 // Empty State - AI Panel
 .lt_ai_empty_state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  position: absolute;
+  inset: var(--empty-inset);
   text-align: center;
-  padding: 32px 16px;
-  height: 100%;
+  pointer-events: none;
 }
 
 .lt_empty_icon {
@@ -971,8 +991,11 @@
   border-radius: 12px;
   background: linear-gradient(135deg, #ede9fe 0%, #f3e8ff 100%);
   color: #8b5cf6;
-  margin-bottom: 12px;
   border: 1px solid #ddd6fe;
+  position: absolute;
+  left: 50%;
+  top: calc(50% - var(--empty-icon-offset));
+  transform: translate(-50%, -50%);
 
   svg {
     width: 24px;
@@ -980,19 +1003,31 @@
   }
 }
 
+.lt_empty_text {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
 .lt_empty_title {
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 700;
   color: #1e293b;
   margin-bottom: 6px;
+  letter-spacing: -0.01em;
 }
 
 .lt_empty_subtitle {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   color: #64748b;
-  line-height: 1.4;
-  max-width: 180px;
+  line-height: 1.5;
+  max-width: 280px;
 }
 
 // =====================================

@@ -472,16 +472,15 @@
     }
 
     .secondary {
-      background: transparent;
-      border: 1px solid #e0e0e0;
-      color: #666666;
+      background: #5e7bc6;
+      color: #ffffff;
     }
 
     .primary {
-      background: #5e7bc6;
+      background: #2e7d32;
       color: #ffffff;
       &:disabled {
-        background: #b8c4e6;
+        background: #a5d6a7;
         cursor: not-allowed;
       }
     }

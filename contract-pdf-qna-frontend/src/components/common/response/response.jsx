@@ -6,7 +6,7 @@ import responseBlueIcon from "../../../assets/response_blue.svg";
 import documentsIcon from "../../../assets/documents.svg";
 import thumbsDownIcon from "../../../assets/thumbs_down.svg";
 import thumbsUpIcon from "../../../assets/thumbs_up.svg";
-import shareIcon from "../../../assets/share.svg";
+import copyIcon from "../../../assets/copy.svg";
 import { ItemizedFinalAnswer } from "../itemizedFinalAnswer/itemizedFinalAnswer";
 import TryAgainButton from "../tryAgainButton/tryAgainButton";
 import Popup from "../popup/popup";
@@ -208,6 +208,7 @@ const Response = ({
   isError = false,
   onRetry = null,
   showReferenceIcon = true,
+  showActions,
 }) => {
   const navigate = useNavigate();
   const popupRef = useRef(null);
@@ -496,7 +497,7 @@ const Response = ({
           ) : null}
 
           {/* Action Icons - Reference, Feedback, Share */}
-          {variant !== "finalAnswer" && (
+          {(typeof showActions === "boolean" ? showActions : variant !== "finalAnswer") && (
             <div className="icon_wrapper">
               {/* Reference Icon - View referred clauses */}
               {showReferenceIcon ? (
@@ -557,7 +558,7 @@ const Response = ({
                 onClick={handleShareClick}
                 title={copiedToClipboard ? "Copied!" : "Copy response"}
               >
-                <img src={shareIcon} alt="Share" />
+                <img src={copyIcon} alt="Copy" />
               </div>
             </div>
           )}

@@ -561,175 +561,177 @@ export const ItemizedFinalAnswer = ({ text = "", title = "Final Answer", asCard 
             (it.amountsCustomer?.[0] || "").replace(/^Customer\s*(quoted\/asked)?\s*:\s*/i, "").trim() ||
             (hasAmounts ? "See Amounts below" : "Not applicable");
           return (
-            <div className="ifa_card" key={`${itemNo}-${idx}`}>
-              <div className="ifa_item_header">
-                <strong>{`ITEM ${itemNo}:`}</strong>
-              </div>
-
-              {/* Key facts (in order): Decision, Amount */}
-              <div className="ifa_keyfacts">
-                <div className="ifa_keyfacts_row">
-                  <div className="k">
-                    <strong>Decision</strong>
-                  </div>
-                  <div className="v">
-                    {decision ? (
-                      <DecisionBadge decision={decision} />
-                    ) : (
-                      <span className="ifa_badge ifa_badge_no_decision">No Decision</span>
-                    )}
-                  </div>
+            <details className="ifa_item" key={`${itemNo}-${idx}`} open={idx === 0}>
+              <summary className="ifa_item_summary">
+                <div className="ifa_item_summary_left">
+                  <div className="ifa_item_label">{`ITEM ${itemNo}`}</div>
+                  <div className="ifa_item_name">{applianceName}</div>
                 </div>
-                <div className="ifa_keyfacts_row">
-                  <div className="k">
-                    <strong>Amount</strong>
+                <div className="ifa_item_summary_right">
+                  <div className="ifa_item_meta">
+                    <span className="label">Decision</span>
+                    <span className="value">
+                      {decision ? (
+                        <DecisionBadge decision={decision} />
+                      ) : (
+                        <span className="ifa_badge ifa_badge_no_decision">No Decision</span>
+                      )}
+                    </span>
                   </div>
-                  <div className="v">
-                    <strong>{topAmount || "Not applicable"}</strong>
+                  <div className="ifa_item_meta">
+                    <span className="label">Amount</span>
+                    <span className="value">
+                      <strong>{topAmount || "Not applicable"}</strong>
+                    </span>
                   </div>
+                  <span className="ifa_item_chevron" aria-hidden="true">
+                    ▾
+                  </span>
                 </div>
-              </div>
+              </summary>
 
-              {/* Amounts near the top as requested */}
-              {(it.amountsCustomer?.length || it.amountsCompany?.length) ? (
-                <div className="ifa_amounts ifa_amounts_top">
-                  <div className="h">
-                    <strong>Amounts</strong>
+              <div className="ifa_item_body">
+                {/* Amounts near the top as requested */}
+                {(it.amountsCustomer?.length || it.amountsCompany?.length) ? (
+                  <div className="ifa_amounts ifa_amounts_top">
+                    <div className="h">
+                      <strong>Amounts</strong>
+                    </div>
+                    {it.amountsCustomer?.length ? (
+                      <div className="sub">
+                        <div className="k">
+                          <strong>Customer</strong>
+                        </div>
+                        <ul>
+                          {it.amountsCustomer
+                            .map(cleanAmountLine)
+                            .filter(Boolean)
+                            .map((x, i) => (
+                              <li key={i}>
+                                <strong>{x}</strong>
+                              </li>
+                            ))}
+                        </ul>
+                      </div>
+                    ) : null}
+                    {it.amountsCompany?.length ? (
+                      <div className="sub">
+                        <div className="k">
+                          <strong>Company</strong>
+                        </div>
+                        <ul>
+                          {it.amountsCompany
+                            .map(cleanAmountLine)
+                            .filter(Boolean)
+                            .map((x, i) => (
+                              <li key={i}>
+                                <strong>{x}</strong>
+                              </li>
+                            ))}
+                        </ul>
+                      </div>
+                    ) : null}
                   </div>
-                  {it.amountsCustomer?.length ? (
-                    <div className="sub">
+                ) : null}
+
+                <div className="ifa_meta">
+                  {/* "Item" and "Type" are part of the requested bold set */}
+                  {applianceName && applianceName !== `Item ${idx + 1}` ? (
+                    <div className="row">
                       <div className="k">
-                        <strong>Customer</strong>
+                        <strong>Item</strong>
                       </div>
-                      <ul>
-                        {it.amountsCustomer
-                          .map(cleanAmountLine)
-                          .filter(Boolean)
-                          .map((x, i) => (
-                            <li key={i}>
-                              <strong>{x}</strong>
-                            </li>
-                          ))}
-                      </ul>
+                      <div className="v">
+                        <strong>{applianceName}</strong>
+                      </div>
                     </div>
                   ) : null}
-                  {it.amountsCompany?.length ? (
-                    <div className="sub">
+                  {it.type && it.type.trim() ? (
+                    <div className="row">
                       <div className="k">
-                        <strong>Company</strong>
+                        <strong>Type</strong>
                       </div>
-                      <ul>
-                        {it.amountsCompany
-                          .map(cleanAmountLine)
-                          .filter(Boolean)
-                          .map((x, i) => (
-                            <li key={i}>
-                              <strong>{x}</strong>
-                            </li>
-                          ))}
-                      </ul>
+                      <div className="v">
+                        <strong>{it.type}</strong>
+                      </div>
+                    </div>
+                  ) : null}
+                  {it.related && it.related.trim() ? (
+                    <div className="row">
+                      <div className="k">
+                        <strong>Related</strong>
+                      </div>
+                      <div className="v">{it.related}</div>
                     </div>
                   ) : null}
                 </div>
-              ) : null}
 
-              <div className="ifa_meta">
-                {/* "Item" and "Type" are part of the requested bold set */}
-                {applianceName && applianceName !== `Item ${idx + 1}` ? (
-                  <div className="row">
-                    <div className="k">
-                      <strong>Item</strong>
+                {/* Situation section with enhanced styling */}
+                {it.situation && it.situation.trim() ? (
+                  <div className="ifa_situation">
+                    <div className="h">
+                      <strong>Situation</strong>
                     </div>
-                    <div className="v">
-                      <strong>{applianceName}</strong>
-                    </div>
+                    <div className="content">{it.situation}</div>
                   </div>
                 ) : null}
-                {it.type && it.type.trim() ? (
-                  <div className="row">
-                    <div className="k">
-                      <strong>Type</strong>
-                    </div>
-                    <div className="v">
-                      <strong>{it.type}</strong>
-                    </div>
+
+                {(it.covered?.length || it.notCovered?.length) ? (
+                  <div className="ifa_split">
+                    {it.covered?.length ? (
+                      <div className="col">
+                        <div className="h">
+                          <strong>What's covered</strong>
+                        </div>
+                        <ul>
+                          {it.covered.map((x, i) => (
+                            <li key={i}>{x}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+                    {it.notCovered?.length ? (
+                      <div className="col ifa_limitations">
+                        <div className="h">
+                          <strong>Limitations / not covered</strong>
+                        </div>
+                        <ul>
+                          {it.notCovered.map((x, i) => (
+                            <li key={i}>{x}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
-                {it.related && it.related.trim() ? (
-                  <div className="row">
-                    <div className="k">
-                      <strong>Related</strong>
+
+                {it.why?.length ? (
+                  <div className="ifa_why">
+                    <div className="h">
+                      <strong>Why</strong>
                     </div>
-                    <div className="v">{it.related}</div>
+                    <ul>
+                      {it.why.map((x, i) => (
+                        <li key={i}>{x}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {it.nextSteps?.length ? (
+                  <div className="ifa_next">
+                    <div className="h">
+                      <strong>Next steps</strong>
+                    </div>
+                    <ul>
+                      {it.nextSteps.map((x, i) => (
+                        <li key={i}>{x}</li>
+                      ))}
+                    </ul>
                   </div>
                 ) : null}
               </div>
-
-              {/* Situation section with enhanced styling */}
-              {it.situation && it.situation.trim() ? (
-                <div className="ifa_situation">
-                  <div className="h">
-                    <strong>Situation</strong>
-                  </div>
-                  <div className="content">{it.situation}</div>
-                </div>
-              ) : null}
-
-              {(it.covered?.length || it.notCovered?.length) ? (
-                <div className="ifa_split">
-                  {it.covered?.length ? (
-                    <div className="col">
-                      <div className="h">
-                        <strong>What's covered</strong>
-                      </div>
-                      <ul>
-                        {it.covered.map((x, i) => (
-                          <li key={i}>{x}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  ) : null}
-                  {it.notCovered?.length ? (
-                    <div className="col ifa_limitations">
-                      <div className="h">
-                        <strong>Limitations / not covered</strong>
-                      </div>
-                      <ul>
-                        {it.notCovered.map((x, i) => (
-                          <li key={i}>{x}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-
-              {it.why?.length ? (
-                <div className="ifa_why">
-                  <div className="h">
-                    <strong>Why</strong>
-                  </div>
-                  <ul>
-                    {it.why.map((x, i) => (
-                      <li key={i}>{x}</li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-
-              {it.nextSteps?.length ? (
-                <div className="ifa_next">
-                  <div className="h">
-                    <strong>Next steps</strong>
-                  </div>
-                  <ul>
-                    {it.nextSteps.map((x, i) => (
-                      <li key={i}>{x}</li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-            </div>
+            </details>
           );
         })}
       </div>

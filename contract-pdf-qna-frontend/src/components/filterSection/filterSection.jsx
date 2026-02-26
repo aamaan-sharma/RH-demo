@@ -124,17 +124,14 @@ const FilterSection = ({
             }
           >
             <div className="pill">
-              <LockIcon />
               <span className="label">State</span>
               <span className="value">{selectedState}</span>
             </div>
             <div className="pill">
-              <LockIcon />
               <span className="label">Contract</span>
               <span className="value">{selectedContract}</span>
             </div>
             <div className="pill">
-              <LockIcon />
               <span className="label">Plan</span>
               <span className="value">{selectedPlan}</span>
             </div>
