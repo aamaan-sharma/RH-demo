@@ -503,19 +503,16 @@
             box-shadow: 0 8px 22px rgba(0, 0, 0, 0.04);
 
             &[open] {
-              .question_summary {
-                .q_dropdown_icon {
-                  transform: rotate(90deg);
-                }
+              .question_summary_primary .q_dropdown_icon {
+                transform: rotate(90deg);
               }
             }
 
             .question_summary {
               cursor: pointer;
               display: flex;
-              align-items: baseline;
-              justify-content: space-between;
-              gap: 12px;
+              flex-direction: column;
+              gap: 0;
               font-size: 15px;
               font-weight: 900;
               color: #2f3a57;
@@ -524,6 +521,14 @@
 
               &::-webkit-details-marker {
                 display: none;
+              }
+
+              .question_summary_primary {
+                display: flex;
+                align-items: baseline;
+                justify-content: space-between;
+                gap: 12px;
+                width: 100%;
               }
 
               .q_left {
@@ -567,6 +572,62 @@
                 transition: transform 0.12s ease;
                 transform-origin: center;
               }
+            }
+
+            /* Decision and Amount key-values row (Claims extracted questions) */
+            .calls_decision_amount_row {
+              display: flex;
+              flex-wrap: wrap;
+              align-items: center;
+              gap: 16px 24px;
+              margin-top: 10px;
+              padding-top: 10px;
+              border-top: 1px solid #ededed;
+
+              .calls_decision_meta {
+                display: flex;
+                flex-direction: column;
+                gap: 2px;
+                font-size: 11px;
+                color: #64748b;
+
+                .label {
+                  font-size: 11px;
+                  font-weight: 600;
+                  color: #64748b;
+                  text-transform: uppercase;
+                  letter-spacing: 0.3px;
+                }
+                .value {
+                  font-size: 12px;
+                  font-weight: 700;
+                  color: #111111;
+                }
+              }
+            }
+
+            /* Decision as bold colored text only (no pill) in Claims */
+            .ifa_decision_text {
+              font-weight: 700;
+              font-size: 13px;
+            }
+            .ifa_decision_text.ifa_decision_approved {
+              color: #0f5f3a;
+            }
+            .ifa_decision_text.ifa_decision_rejected,
+            .ifa_decision_text.ifa_decision_denied {
+              color: #a11a1a;
+            }
+            .ifa_decision_text.ifa_decision_no_decision {
+              color: #6b6b6b;
+            }
+            .calls_badge.calls_badge_no_decision {
+              font-weight: 700;
+              font-size: 13px;
+              color: #6b6b6b;
+              background: transparent;
+              border: none;
+              padding: 0;
             }
 
             .question_facts {

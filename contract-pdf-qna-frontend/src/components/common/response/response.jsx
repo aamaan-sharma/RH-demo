@@ -28,7 +28,7 @@ const renderInlineBold = (text) => {
       out.push(
         <strong key={`b-${i}`} className="inline_bold">
           {chunk}
-        </strong>
+        </strong>,
       );
     } else {
       out.push(<React.Fragment key={`t-${i}`}>{chunk}</React.Fragment>);
@@ -59,7 +59,7 @@ const renderResponseContent = (response) => {
               {renderInlineBold(ln)}
             </React.Fragment>
           ))}
-        </div>
+        </div>,
       );
     }
     paraLines = [];
@@ -72,7 +72,7 @@ const renderResponseContent = (response) => {
         {listItems.map((li, idx) => (
           <li key={idx}>{renderInlineBold(li)}</li>
         ))}
-      </ul>
+      </ul>,
     );
     listItems = [];
   };
@@ -113,10 +113,7 @@ const _asStr = (v) => (v === null || v === undefined ? "" : String(v));
 const _prettyTitle = (s) => {
   const raw = _asStr(s).trim();
   if (!raw) return "";
-  return raw
-    .replace(/[_]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return raw.replace(/[_]+/g, " ").replace(/\s+/g, " ").trim();
 };
 
 const pickClauseData = (chunk) => {
@@ -125,8 +122,13 @@ const pickClauseData = (chunk) => {
   // - {content, metadata} (new detailed chunk)
   // - odd shapes: {pageContent}, {text}, etc.
   if (chunk && typeof chunk === "object") {
-    const content =
-      _asStr(chunk.content || chunk.page_content || chunk.pageContent || chunk.text || "").trim();
+    const content = _asStr(
+      chunk.content ||
+        chunk.page_content ||
+        chunk.pageContent ||
+        chunk.text ||
+        "",
+    ).trim();
     const metadata =
       chunk.metadata && typeof chunk.metadata === "object"
         ? chunk.metadata
@@ -178,16 +180,24 @@ const formatChunkReference = (metadata) => {
   } else if (src && typeof src === "object") {
     title = _prettyTitle(src.title);
     const p = src.page_no ?? src.page ?? src.pageNumber ?? src.page_no;
-    if (p !== null && p !== undefined && _asStr(p).trim()) page = `p.${_asStr(p).trim()}`;
+    if (p !== null && p !== undefined && _asStr(p).trim())
+      page = `p.${_asStr(p).trim()}`;
     const c = _asStr(src.clause_no || src.clause || "").trim();
     const sc = _asStr(src.subclause_no || src.subclause || "").trim();
-    if (c && sc) clause = sc.startsWith(".") || c.endsWith(".") ? `clause ${c}${sc}` : `clause ${c}.${sc}`;
+    if (c && sc)
+      clause =
+        sc.startsWith(".") || c.endsWith(".")
+          ? `clause ${c}${sc}`
+          : `clause ${c}.${sc}`;
     else if (c) clause = `clause ${c}`;
     unit = _asStr(src.unit_id || "").trim();
   }
 
   // Extra common metadata fallbacks
-  if (!title) title = _prettyTitle(metadata.title || metadata.document || metadata.file || "");
+  if (!title)
+    title = _prettyTitle(
+      metadata.title || metadata.document || metadata.file || "",
+    );
 
   const parts = [title, page, clause].filter(Boolean);
   const ref = parts.length ? parts.join(" · ") : "";
@@ -204,6 +214,7 @@ const Response = ({
   relevantChunks = [],
   variant = "default",
   headerLabel,
+  hideHeader = false,
   tone = "default", // default | blue
   isError = false,
   onRetry = null,
@@ -212,7 +223,7 @@ const Response = ({
 }) => {
   const navigate = useNavigate();
   const popupRef = useRef(null);
-  
+
   // State for action icons
   const [showFeedbackPopup, setShowFeedbackPopup] = useState(false);
   const [feedbackResponse, setFeedbackResponse] = useState("");
@@ -224,16 +235,20 @@ const Response = ({
     try {
       const cid = String(chatId || "");
       if (!cid) return "";
-      const found = (chats || []).find((c) => String(c?.chat_id || c?.chatId || "") === cid);
+      const found = (chats || []).find(
+        (c) => String(c?.chat_id || c?.chatId || "") === cid,
+      );
       return String(found?.reaction || "");
     } catch {
       return "";
     }
   })();
-  const reactionLocked = existingReaction === "up" || existingReaction === "down";
+  const reactionLocked =
+    existingReaction === "up" || existingReaction === "down";
 
   const isLoading = response === "Loading Response";
-  const isErrorState = isError || (response && response.includes("Please try again"));
+  const isErrorState =
+    isError || (response && response.includes("Please try again"));
   const isBlue = tone === "blue";
   const headerIcon = isBlue ? responseBlueIcon : responseIcon;
 
@@ -258,7 +273,7 @@ const Response = ({
       window.open(
         `/conversation/${conversationId}/chat/${chatId}/referred-clauses`,
         "_blank",
-        "noopener,noreferrer"
+        "noopener,noreferrer",
       );
     }
   };
@@ -343,28 +358,44 @@ const Response = ({
 
   return (
     <div
-      className={`response_wrapper ${variant === "finalAnswer" ? "final_answer" : ""} ${
+      className={`response_wrapper ${variant === "finalAnswer" ? "final_answer" : ""} ${variant === "draftAnswer" ? "draft_answer" : ""} ${
         isBlue ? "tone_blue" : ""
-      }`}
+      } ${hideHeader ? "response_no_header" : ""}`}
     >
-      <div className="response_section">
-        <img src={headerIcon} alt="response icon" />
-        <div className="text">
-          {isLoading ? (
-            <div className="loading_header" aria-live="polite">
-              <span className="label">Generating response</span>
-              <span className="typing_dots" aria-hidden="true">
-                <span />
-                <span />
-                <span />
-              </span>
-            </div>
-          ) : (
-            headerLabel || (variant === "finalAnswer" ? "Final Answer (AI)" : "Generated by AI")
-          )}
+      {!hideHeader ? (
+        <div className="response_section">
+          <img src={headerIcon} alt="response icon" />
+          <div className="text">
+            {isLoading ? (
+              <div className="loading_header" aria-live="polite">
+                <span className="label">Generating response</span>
+                <span className="typing_dots" aria-hidden="true">
+                  <span />
+                  <span />
+                  <span />
+                </span>
+              </div>
+            ) : (
+              headerLabel ||
+              (variant === "finalAnswer"
+                ? "Final Answer (AI)"
+                : variant === "draftAnswer"
+                  ? "AI Draft Answer"
+                  : "Generated by AI")
+            )}
+          </div>
+          {!isLoading && <div className="line"></div>}
         </div>
-        {!isLoading && <div className="line"></div>}
-      </div>
+      ) : isLoading ? (
+        <div className="response_section response_loading_only" aria-live="polite">
+          <span className="label">Generating response</span>
+          <span className="typing_dots" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </span>
+        </div>
+      ) : null}
 
       {isLoading ? (
         <div className="response_loading_body" aria-hidden="true">
@@ -379,6 +410,14 @@ const Response = ({
           >
             {variant === "finalAnswer" ? (
               <ItemizedFinalAnswer text={response} title="" asCard={true} />
+            ) : variant === "draftAnswer" ? (
+              <ItemizedFinalAnswer
+                text={response}
+                title=""
+                asCard={false}
+                compactLayout={true}
+                hideSummaryDecisionAmount={true}
+              />
             ) : (
               renderResponseContent(response)
             )}
@@ -396,10 +435,13 @@ const Response = ({
                 {relevantChunks.map((chunk, index) => {
                   const { content, metadata } = pickClauseData(chunk);
                   const ref = formatChunkReference(metadata);
-                  const src = metadata && typeof metadata === "object" ? metadata.source : null;
+                  const src =
+                    metadata && typeof metadata === "object"
+                      ? metadata.source
+                      : null;
                   const pageNo =
                     src && typeof src === "object"
-                      ? src.page_no ?? src.page ?? src.pageNumber ?? null
+                      ? (src.page_no ?? src.page ?? src.pageNumber ?? null)
                       : null;
                   const clauseNo =
                     src && typeof src === "object"
@@ -410,7 +452,9 @@ const Response = ({
                       ? _asStr(src.subclause_no || src.subclause || "").trim()
                       : "";
                   const unitIdRaw =
-                    src && typeof src === "object" ? _asStr(src.unit_id || "").trim() : "";
+                    src && typeof src === "object"
+                      ? _asStr(src.unit_id || "").trim()
+                      : "";
                   const unitParsed = parseUnitId(unitIdRaw);
                   const fileFromUnit = unitParsed.file;
                   const pageFromUnit = unitParsed.page;
@@ -419,7 +463,8 @@ const Response = ({
                     src && typeof src === "object"
                       ? _prettyTitle(src.title || "")
                       : _prettyTitle(typeof src === "string" ? src : "");
-                  const pageDisplay = _asStr(pageNo).trim() || _asStr(pageFromUnit).trim();
+                  const pageDisplay =
+                    _asStr(pageNo).trim() || _asStr(pageFromUnit).trim();
                   const clauseDisplay = (() => {
                     if (clauseNo) {
                       if (!subClauseNo) return clauseNo;
@@ -441,7 +486,8 @@ const Response = ({
                             // Don't toggle the <details> via the <summary> click.
                             e.preventDefault();
                             e.stopPropagation();
-                            const detailsEl = e.currentTarget?.closest?.("details");
+                            const detailsEl =
+                              e.currentTarget?.closest?.("details");
                             if (detailsEl) detailsEl.open = false;
                           }}
                         >
@@ -451,7 +497,10 @@ const Response = ({
                       <div className="chunk_body">
                         {ref ? <div className="chunk_ref">{ref}</div> : null}
 
-                        <div className="chunk_meta_row" aria-label="Clause metadata">
+                        <div
+                          className="chunk_meta_row"
+                          aria-label="Clause metadata"
+                        >
                           {title ? (
                             <div className="meta_chip" title={title}>
                               <span className="k">Title</span>
@@ -480,12 +529,17 @@ const Response = ({
                           {unitIdRaw && !fileFromUnit ? (
                             <div className="meta_chip" title={unitIdRaw}>
                               <span className="k">Unit</span>
-                              <span className="v">{shortenUnit(unitIdRaw)}</span>
+                              <span className="v">
+                                {shortenUnit(unitIdRaw)}
+                              </span>
                             </div>
                           ) : null}
                         </div>
 
-                        <div className="chunk_text" aria-label={`Clause ${index + 1} text`}>
+                        <div
+                          className="chunk_text"
+                          aria-label={`Clause ${index + 1} text`}
+                        >
                           {content || "(No clause text found)"}
                         </div>
                       </div>
@@ -497,7 +551,9 @@ const Response = ({
           ) : null}
 
           {/* Action Icons - Reference, Feedback, Share */}
-          {(typeof showActions === "boolean" ? showActions : variant !== "finalAnswer") && (
+          {(typeof showActions === "boolean"
+            ? showActions
+            : variant !== "finalAnswer") && (
             <div className="icon_wrapper">
               {/* Reference Icon - View referred clauses */}
               {showReferenceIcon ? (
@@ -513,7 +569,8 @@ const Response = ({
               {/* Thumbs Up Icon - Helpful */}
               <div
                 className={`icon_container ${
-                  existingReaction === "up" || (showFeedbackPopup && feedbackMode === "up")
+                  existingReaction === "up" ||
+                  (showFeedbackPopup && feedbackMode === "up")
                     ? "active selected"
                     : ""
                 } ${reactionLocked ? "locked" : ""}`}
@@ -533,9 +590,11 @@ const Response = ({
               </div>
 
               {/* Feedback Icon - Report unhelpful response */}
-              <div 
+              <div
                 className={`icon_container ${
-                  showFeedbackPopup || existingReaction === "down" ? "active selected" : ""
+                  showFeedbackPopup || existingReaction === "down"
+                    ? "active selected"
+                    : ""
                 } ${reactionLocked ? "locked" : ""}`}
                 onClick={() => {
                   if (sendingReaction || reactionLocked) return;
@@ -553,7 +612,7 @@ const Response = ({
               </div>
 
               {/* Share Icon - Copy to clipboard */}
-              <div 
+              <div
                 className={`icon_container ${copiedToClipboard ? "active" : ""}`}
                 onClick={handleShareClick}
                 title={copiedToClipboard ? "Copied!" : "Copy response"}
@@ -571,7 +630,11 @@ const Response = ({
               feedbackResponse={feedbackResponse}
               setFeedbackResponse={setFeedbackResponse}
               submitFeedback={submitFeedback}
-              title={feedbackMode === "up" ? "Why was it helpful?" : "Why was it not helpful?"}
+              title={
+                feedbackMode === "up"
+                  ? "Why was it helpful?"
+                  : "Why was it not helpful?"
+              }
               chipOptions={
                 feedbackMode === "up"
                   ? ["Accurate", "Clear", "Relevant", "Other"]

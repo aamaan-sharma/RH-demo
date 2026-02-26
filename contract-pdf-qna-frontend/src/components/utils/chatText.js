@@ -116,4 +116,20 @@ export function parseExtractedQuestion(text) {
   return { questionText, facts };
 }
 
+/**
+ * Extract Decision and Amount from a response text (e.g. AI draft answer or final answer).
+ * Looks for "Decision: X" and "Amount: Y" on a line (case-insensitive).
+ * Used in Claims "Extracted questions" to show decision/amount per question.
+ */
+export function parseDecisionAndAmount(text) {
+  const raw = String(text ?? "").replace(/\r\n/g, "\n").trim();
+  let decision = "";
+  let amount = "";
+  const decisionMatch = raw.match(/Decision\s*:\s*(.+?)(?=\n|$)/i);
+  if (decisionMatch) decision = decisionMatch[1].trim();
+  const amountMatch = raw.match(/Amount\s*:\s*(.+?)(?=\n|$)/i);
+  if (amountMatch) amount = amountMatch[1].trim();
+  return { decision, amount };
+}
+
 
