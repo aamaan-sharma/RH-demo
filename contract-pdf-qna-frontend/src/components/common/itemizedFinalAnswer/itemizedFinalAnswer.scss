@@ -1,40 +1,123 @@
 .itemized_final_answer {
   &.ifa_outer_card {
     border: 1px solid #e6e6e6;
-    border-radius: 14px;
+    border-radius: 12px;
     background: #ffffff;
-    padding: 12px 14px;
-    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.07);
+    padding: 0;
+    box-shadow: none;
   }
 
   .ifa_title {
     font-size: 14px;
     font-weight: 800;
     color: #333333;
-    margin-bottom: 10px;
+    margin: 0;
+    padding: 12px 16px;
+    border-bottom: 1px solid #ededed;
   }
 
   .ifa_overall {
-    margin-bottom: 12px;
+    margin: 0;
+    padding: 12px 16px;
+    border-bottom: 1px solid #ededed;
   }
 
   .ifa_cards {
     display: flex;
     flex-direction: column;
+    gap: 0;
+  }
+
+  .ifa_item {
+    border-top: 1px solid #ededed;
+    background: #ffffff;
+  }
+
+  .ifa_item_summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 16px;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .ifa_item_summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .ifa_item_summary_left {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .ifa_item_label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    color: #64748b;
+  }
+
+  .ifa_item_name {
+    font-size: 14px;
+    font-weight: 700;
+    color: #1e293b;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .ifa_item_summary_right {
+    display: flex;
+    align-items: center;
     gap: 12px;
   }
 
+  .ifa_item_meta {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    font-size: 11px;
+    color: #64748b;
+
+    .value {
+      font-size: 12px;
+      font-weight: 700;
+      color: #111111;
+    }
+  }
+
+  .ifa_item_chevron {
+    font-size: 14px;
+    color: #94a3b8;
+    transition: transform 0.2s ease;
+  }
+
+  details[open] .ifa_item_chevron {
+    transform: rotate(180deg);
+  }
+
+  .ifa_item_body {
+    padding: 0 16px 16px;
+  }
+
   .ifa_card {
-    border: 1px solid #e6e6e6;
-    border-radius: 14px;
-    background: #ffffff;
-    padding: 12px 14px;
-    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.07);
+    border: 0;
+    border-top: 1px solid #ededed;
+    border-radius: 0;
+    background: transparent;
+    padding: 14px 16px;
+    box-shadow: none;
   }
 
   .ifa_item_header {
-    margin-bottom: 8px;
-    font-size: 13px;
+    margin-bottom: 10px;
+    font-size: 12px;
     font-weight: 900;
     letter-spacing: 0.3px;
     color: #2f3a57;
@@ -43,10 +126,10 @@
 
   .ifa_keyfacts {
     margin-bottom: 10px;
-    padding: 10px 12px;
-    border-radius: 12px;
-    border: 1px solid rgba(94, 123, 198, 0.18);
-    background: linear-gradient(180deg, #fbfcff 0%, #ffffff 100%);
+    padding: 0;
+    border-radius: 0;
+    border: 0;
+    background: transparent;
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -128,18 +211,18 @@
   }
 
   .ifa_amounts_top {
-    border: 1px solid rgba(0, 0, 0, 0.06);
-    border-radius: 12px;
-    padding: 10px 12px;
-    background: rgba(255, 255, 255, 0.7);
+    border: 0;
+    border-radius: 0;
+    padding: 0;
+    background: transparent;
   }
 
   .ifa_overall_next {
     margin-top: 14px;
-    border: 1px solid #e6e6e6;
-    border-radius: 14px;
-    background: #fbfbfb;
-    padding: 12px 14px;
+    border: 1px solid #ededed;
+    border-radius: 12px;
+    background: #ffffff;
+    padding: 12px 16px;
   }
 
   .ifa_meta {
@@ -172,7 +255,7 @@
   .ifa_split {
     display: grid;
     grid-template-columns: 1fr;
-    gap: 10px;
+    gap: 8px;
     margin-bottom: 10px;
 
     @media (min-width: 900px) {
@@ -182,10 +265,10 @@
 
   .ifa_situation {
     margin-bottom: 10px;
-    padding: 10px 12px;
-    border-radius: 12px;
-    border: 1px solid rgba(94, 123, 198, 0.18);
-    background: linear-gradient(180deg, #fbfcff 0%, #ffffff 100%);
+    padding: 0;
+    border-radius: 0;
+    border: 0;
+    background: transparent;
 
     .h {
       font-size: 12px;
@@ -209,10 +292,10 @@
   .ifa_why,
   .ifa_next {
     margin-bottom: 10px;
-    padding: 10px 12px;
-    border-radius: 12px;
-    border: 1px solid rgba(94, 123, 198, 0.18);
-    background: linear-gradient(180deg, #fbfcff 0%, #ffffff 100%);
+    padding: 0;
+    border-radius: 0;
+    border: 0;
+    background: transparent;
 
     .h {
       font-size: 12px;
@@ -231,11 +314,10 @@
   }
 
   .ifa_split {
-    padding: 12px;
     .col {
-      padding: 8px;
-      border-radius: 8px;
-      background: rgba(255, 255, 255, 0.5);
+      padding: 0;
+      border-radius: 0;
+      background: transparent;
     }
   }
 

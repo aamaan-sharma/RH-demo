@@ -406,7 +406,7 @@ const SideBar = (props) => {
 
   return (
     <div className="sidebar_wrapper">
-      <div className="promo_section">Powered by Enzyme</div>
+      <div className="promo_section"></div>
       <div className="new_chat_button" onClick={() => setChatUrl()}>
         <img src={plusIcon} alt="plus icon" />
         <div className="button_name">

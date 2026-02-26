@@ -21,49 +21,58 @@
   .locked_pills {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 6px 10px;
-    border: 1px solid #ededed;
-    border-radius: 12px;
-    background: #fbfbfb;
+    gap: 12px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
 
     .pill {
       display: flex;
       align-items: center;
       gap: 6px;
-      padding: 6px 10px;
-      border-radius: 999px;
-      border: 1px solid #e6e6e6;
-      background: #ffffff;
+      padding: 0;
+      border-radius: 0;
+      border: 0;
+      background: transparent;
       color: #4f4f4f;
       font-size: 12px;
-      line-height: 12px;
+      line-height: 16px;
+
+      svg {
+        opacity: 0.6;
+      }
+
+      & + .pill {
+        padding-left: 12px;
+        margin-left: 12px;
+        border-left: 1px solid #e5e5e5;
+      }
 
       .label {
-        color: #7b7b7b;
-        font-weight: 600;
+        color: #6f6f6f;
+        font-weight: 500;
       }
 
       .value {
-        font-weight: 700;
-        color: #333333;
+        font-weight: 600;
+        color: #2f2f2f;
       }
 
       &.status {
-        border-color: #dfe6ff;
-        background: #f6f8ff;
+        border: 0;
+        background: transparent;
 
         &.open {
           .value {
-            color: #2f3a57;
+            color: #2e7d32;
+            font-weight: 700;
           }
         }
 
         &.closed {
-          border-color: #ededed;
-          background: #fafafa;
           .value {
-            color: #6b6b6b;
+            color: #7a7a7a;
           }
         }
       }

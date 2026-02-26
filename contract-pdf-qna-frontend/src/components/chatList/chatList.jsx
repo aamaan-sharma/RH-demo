@@ -90,6 +90,7 @@ const ChatList = ({ chats, setChats, conversationId, isCallsMode = false, server
                         tone="blue"
                         isError={chat.isError}
                         onRetry={chat.isError && onRetryChat ? onRetryChat : null}
+                        showActions={false}
                       />
                     ) : null}
                   </details>
@@ -123,6 +124,7 @@ const ChatList = ({ chats, setChats, conversationId, isCallsMode = false, server
                     headerLabel="Assistant"
                     isError={chat.isError}
                     onRetry={chat.isError && onRetryChat ? onRetryChat : null}
+                    showActions={false}
                   />
                 ) : null}
               </div>
@@ -140,10 +142,11 @@ const ChatList = ({ chats, setChats, conversationId, isCallsMode = false, server
               chats={chats}
               setChats={setChats}
               showReferenceIcon={false}
-            relevantChunks={getRelevantChunks(finalAnswer)}
+              relevantChunks={getRelevantChunks(finalAnswer)}
               variant="finalAnswer"
               headerLabel="Final Analyzed Answer"
               tone="blue"
+              showActions={true}
             />
           </div>
         ) : null}

@@ -1807,31 +1807,6 @@ const Home = ({ bearerToken, setBearerToken }) => {
                           })()}
                         </div>
                         <div className="header_actions">
-                          {conversationId ? (
-                            <div
-                              className={`status_badge ${
-                                conversationStatus === "inactive"
-                                  ? "closed"
-                                  : "open"
-                              }`}
-                              title={
-                                conversationStatus === "inactive"
-                                  ? "Closed"
-                                  : "Open"
-                              }
-                            >
-                              {conversationStatus === "inactive"
-                                ? "Closed"
-                                : "Open"}
-                            </div>
-                          ) : (
-                            <div
-                              className="status_badge open"
-                              title="Processing"
-                            >
-                              Processing
-                            </div>
-                          )}
                           {caseDisposition ? (
                             <div
                               className={`disposition_badge ${
