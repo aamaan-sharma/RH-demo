@@ -37,7 +37,7 @@ class Response:
     answer: str =  ""
     confidence: float = 0.0
     latency: float =  0.0
-    relevantChunksDetails: list[str] = field(default_factory=list)
+    relevantChunksDetail: list[str] = field(default_factory=list)
     relevantChunks: list[str] = field(default_factory=list)
 
 
@@ -61,18 +61,6 @@ async def get_memory_instance(*, session_id):
 class InferenceMode(Enum):
     SEARCH = "Search"
     INFER = "Infer"
-
-
-
-class DocCaptureHandler(BaseCallbackHandler):
-    def __init__(self):
-        self.docs = []
-
-    def on_retriever_end(self, documents, **kwargs):
-        self.docs.extend(documents)
-        num = len(documents) if documents else 0
-        print(f"[CHUNKS] step=retriever_end (DocCaptureHandler) num_chunks_received={num} total_captured={len(self.docs)}")
-
 
 
 
@@ -108,41 +96,12 @@ def fetch_user_by_mobile(mobile_number: str) -> str:
         return f"Error fetching user details: {str(e)}"
 
 
-@tool
-def knowledge_base_tool(query: str, policyId: str) -> str:
-    '''
-    tool for extracting relvant document given the query and policyId
-
-    Useful for answering questions related to insurance coverage of
-    home appliances, home fixtures, their repairs/replacement, service
-    requests, about the renewal, cancellation or refund policies,
-    whether a certain service is covered under the contract, permit
-    limit, code violation limit, modification limit, limitations and
-    exclusions.
-
-    args:
-        query: str 
-        policyId: str
-    
-    return:
-        Relevant Document Lists
-
-    '''
-
-    print(f"[TOOL CALL][KNOWLEDGE TOOL]: {query=}, {policyId=}")
-    docs = getRetriver(policyId.strip()).invoke(query)
-    num_chunks = len(docs) if docs else 0
-    print(f"[CHUNKS] step=knowledge_base_tool num_chunks_received={num_chunks}")
-    print(f"[TOOL CALL RESULT][KNOWLEDGE TOOL] {len(docs)=}")
-    return "\n\n".join([doc.page_content for doc in docs])
     
 
 
 
-@cache
-def get_agent_instance(policyId, sessionId):
+def get_agent_instance(policyId, sessionId, *, tools):
     retriever = getRetriver(policyId)
-    tools = [knowledge_base_tool, fetch_user_by_mobile]
 
     #memory = asyncio.run(get_memory_instance(session_id=current_time))
     sys_prompt = ChatPromptTemplate.from_messages([
@@ -162,11 +121,39 @@ def get_agent_instance(policyId, sessionId):
 
 def input_prompt(entered_query, policyId, handler, sessionId):
     # Retriever chain as Tool for agent
-    docHandler = DocCaptureHandler()
-    agent_executor = get_agent_instance(policyId, sessionId)
-    response = agent_executor.invoke({"input": entered_query, "policyId": policyId},callbacks=[handler, docHandler])
-    docs = docHandler.docs
-    return response, docs
+    fetched_docs = []
+    @tool
+    def knowledge_base_tool(query: str, policyId: str) -> str:
+        '''
+        tool for extracting relvant document given the query and policyId
+
+        Useful for answering questions related to insurance coverage of
+        home appliances, home fixtures, their repairs/replacement, service
+        requests, about the renewal, cancellation or refund policies,
+        whether a certain service is covered under the contract, permit
+        limit, code violation limit, modification limit, limitations and
+        exclusions.
+
+        args:
+            query: str 
+            policyId: str
+        
+        return:
+            Relevant Document Lists
+
+        '''
+
+        print(f"[TOOL CALL][KNOWLEDGE TOOL]: {query=}, {policyId=}")
+        docs = getRetriver(policyId.strip()).invoke(query)
+        num_chunks = len(docs) if docs else 0
+        print(f"[CHUNKS] step=knowledge_base_tool num_chunks_received={num_chunks}")
+        print(f"[TOOL CALL RESULT][KNOWLEDGE TOOL] {len(docs)=}")
+        fetched_docs.extend(docs)
+        return "\n\n".join([doc.page_content for doc in docs])
+
+    agent_executor = get_agent_instance(policyId, sessionId, tools = [fetch_user_by_mobile, knowledge_base_tool])
+    response = agent_executor.invoke({"input": entered_query, "policyId": policyId},callbacks=[handler])
+    return response, fetched_docs
 
 
 def handle_request_search(question, transcript_context, policyId: str, sessionId: Optional[str] = None, *, handler: CallbackHandler) -> tuple:
@@ -275,7 +262,7 @@ def process_single_transcript_question(
         returned_chunks = chunk_texts[:MILVUS_MAX_RETURN_CHUNKS] if MILVUS_MAX_RETURN_CHUNKS else chunk_texts
         relvant_chunk_details = chunk_details[:MILVUS_MAX_RETURN_CHUNKS] if MILVUS_MAX_RETURN_CHUNKS is not None else chunk_details
         print(f"[CHUNKS] step=process_single_transcript_question_return num_chunks_returned={len(returned_chunks)}")
-        return Response(answer=answer, relevantChunks=returned_chunks, relevantChunksDetails=relvant_chunk_details, confidence=0.90, latency=q_latency)
+        return Response(answer=answer, relevantChunks=returned_chunks, relevantChunksDetail=relvant_chunk_details, confidence=0.90, latency=q_latency)
     except Exception as e:
         print(f"Error processing transcript question: {e}")
         traceback.print_exc()

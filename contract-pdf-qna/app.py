@@ -990,6 +990,19 @@ def filter_relevant_customer_questions(questions: List[Dict]) -> List[Dict]:
     
     return filtered_questions
 
+from pydantic import BaseModel, Field
+from typing import Optional, Literal, List
+
+class QuestionObj(BaseModel):
+    question: str = ""
+    context: str = ""
+    questionType: Literal["claim_review", "coverage", "eligibility", "authorization", "costs", "process"] = "process"
+    userIntent: str= ""
+
+class QuestionsObj(BaseModel):
+    questionList :List[QuestionObj] = Field(default_factory=List)
+
+
 
 def extract_relevant_customer_questions(transcript_content: str, llm) -> List[Dict]:
     """
@@ -1000,7 +1013,8 @@ def extract_relevant_customer_questions(transcript_content: str, llm) -> List[Di
 
     # Use the new "Policy Analyst" prompt we defined above
     extraction_prompt = QUESTION_EXTRACTION_PROMPT 
-    extraction_chain = extraction_prompt | llm | StrOutputParser()
+    llm = llm.with_structured_output(QuestionsObj)
+    extraction_chain = extraction_prompt | llm 
     
     def _parse_questions_json(raw_text: str) -> List[Dict]:
         """
@@ -1091,7 +1105,9 @@ def extract_relevant_customer_questions(transcript_content: str, llm) -> List[Di
     questions: List[Dict] = []
     try:
         result = extraction_chain.invoke({"transcript": transcript_content})
-        questions = _parse_questions_json(result)
+        questions = result.model_dump()
+        questions = questions.get("questionList", [])
+
     except Exception as e:
         print(f"Error extracting questions: {e}")
 
@@ -6267,14 +6283,18 @@ def _process_transcript_core(data, yield_sse_fn=None):
                 # Extract questions
                 if extract_questions:
                     yield _sse("status", {"stage": "extracting_questions"})
+                    print("[PROCESS TRANSCRIPT][EXTRACTING QUESTION]: Using LLM")
                     llm_extract = ChatOpenAI(temperature=0.0, model="gpt-4o")
                     questions = extract_relevant_customer_questions(transcript_text, llm_extract)
                     if not questions:
+                        print("[PROCESS TRANSCRIPT][EXTRACTING QUESTION]: LLM Failed Using Agent")
                         questions = extract_questions_with_agent(transcript_text, llm_extract)
                     if not questions:
                         extraction_warning = "LLM extraction failed; using deterministic item-based fallback questions."
+                        print("[PROCESS TRANSCRIPT][EXTRACTING QUESTION]: Agent Failed using Heuristics")
                         questions = heuristic_extract_claim_questions(transcript_text)
                     if not questions:
+                        print("[PROCESS TRANSCRIPT][EXTRACTING QUESTION]: Heuristics failed using default behaviour")
                         extraction_warning = "No questions could be extracted from transcript; inferring from context."
                         questions = [{
                             "question": f"Is this issue covered: {transcript_text[:120]}",
@@ -6357,11 +6377,8 @@ def _process_transcript_core(data, yield_sse_fn=None):
                         inferenceMode=InferenceMode(gpt_model),
                         handler=handler,
                         transcript_context=question_obj.get("context", ""),
-                    )
+                    ).__dict__
                     # Response is a dataclass; convert to dict so we can assign questionId, etc.
-                    if hasattr(result, "__dataclass_fields__"):
-                        result = asdict(result)
-                        result["relevantChunksDetail"] = result.get("relevantChunksDetails", [])
                     result["questionId"] = question_id
                     # Keep UI question clean (match normal Claims flow)
                     display_question_text = re.sub(r"\[CALL_CONTEXT:.*?\]\s*", "", str(question_text or "")).strip()
@@ -6615,6 +6632,7 @@ def process_transcript_internal():
         # We reuse the same streaming generator, but we exhaust it without sending bytes to the client.
         # IMPORTANT: the core logic relies on Flask request context (headers + get_json),
         # so we create a request context inside the background thread.
+        print(data)
         def _bg():
             try:
                 with app.test_request_context(
