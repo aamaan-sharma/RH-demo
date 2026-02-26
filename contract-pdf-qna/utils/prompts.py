@@ -429,6 +429,7 @@ ANSWER ACCOUNTABILITY (MANDATORY):
 Answer format:
 - Answer: (2–6 sentences, decisive, no hypotheticals)
 - Decision posture: (one of the postures)
+- Amount : Customer - $x, Company - $y
 - Why: (1 short sentence grounded in call facts + policy)
 - Policy basis: (quote 1–2 short exact clause snippets from policy/contract context only)
 - Money reconciliation:
@@ -498,54 +499,87 @@ _claims_decision_prompt = PromptTemplate(
 )
 
 # 3. FINAL SUMMARY
-# Purpose: Synthesizes Q&A into a final itemized report (frontend-parsable)
+
 _claims_summary_prompt = PromptTemplate(
     input_variables=["qa_blob"],
-    template=(
+template = (
     "You are writing the FINAL ANSWER for a claims transcript.\n"
     "IMPORTANT: Do NOT present the final answer as a list of each Q&A.\n"
     "Instead, synthesize ALL Q&A into an ITEMIZED FINAL ANSWER grouped by appliance/item/system.\n"
     "\n"
+    "ADJUDICATION STANDARD (MANDATORY):\n"
+    "- All coverage decisions MUST reference the specific clause(s) or chunk identifiers used to reach the conclusion.\n"
+    "- Do NOT make generalized statements such as 'automatically not covered.'\n"
+    "- Every approval or denial MUST be tied to a cited clause reference.\n"
+    "- If no clause reference exists in the evidence, write: 'No specific clause reference found in provided evidence.'\n"
+    "- Do NOT invent clause numbers or policy sections.\n"
+    "\n"
+    "OUTPUT DISCIPLINE (MANDATORY):\n"
+    "- Keep text concise and factual.\n"
+    "- Do NOT repeat information across sections.\n"
+    "- Do NOT use speculative language (no 'appears', 'likely', 'possibly').\n"
+    "- If something is not explicitly supported by the evidence blob, write: 'Not stated in provided evidence.'\n"
+    "\n"
     "FRONTEND FORMAT REQUIREMENT (MANDATORY):\n"
     "- Output MUST be plain text (NOT JSON).\n"
-    "- Each item section MUST start with one of these exact patterns:\n"
-    "  - \"Item 1: <Title>\" or \"Item: 1\" (the number is required)\n"
-    "- Within each item, use these labels (each on its own line):\n"
-    "  Item: <name/details>\n"
+    "- Each section MUST start with this exact pattern:\n"
+    "  - \"Coverage Component 1: <Title>\" (the number is required)\n"
+    "- Use ONLY the labels below, each on its own line, exactly as written.\n"
+    "- Do NOT add extra headings or commentary outside this structure.\n"
+    "\n"
+    "At the very top of the output, include:\n"
+    "Plan: <Plan name exactly as stated or 'Not stated in provided evidence.'>\n"
+    "State: <State/jurisdiction exactly as stated or 'Not stated in provided evidence.'>\n"
+    "\n"
+    "Within each coverage component, use this exact structure:\n"
+    "  Coverage Component: <name/details>\n"
     "  Type: Appliance | System | Fixture | Other\n"
-    "  Situation: <2–4 sentences>\n"
+    "  Situation: <1–2 concise factual sentences only. No policy reasoning here.>\n"
     "  Decision: APPROVED | REJECTED | PARTIAL\n"
     "  Amounts:\n"
-    "    - Customer: <contractor quoted estimate(s), if any>\n"
-    "    - Company: <authorized/approved by insurer per call notes, if any>\n"
-    "    - Customer responsibility: <out-of-pocket or Cannot determine>\n"
+    "    - Customer: <$ amount only, e.g., '$0' or '$250'. If not explicitly provided, use '$0'.>\n"
+    "    - Company: <$ amount only, e.g., '$0' or '$250'. If not explicitly authorized/approved in evidence, use '$0'.>\n"
     "  What's covered:\n"
-    "    - ...\n"
+    "    - <max 2 concise bullets or 'Not stated in provided evidence.'>\n"
     "  What's not covered / limitations:\n"
-    "    - ...\n"
+    "    - <max 2 concise bullets or 'Not stated in provided evidence.'>\n"
     "  Why:\n"
-    "    - ...\n"
+    "    - <ONE decisive coverage reason citing clause number and/or chunk identifier (e.g., 'Per Clause 3.B, p93').>\n"
+    "  Clause Reference:\n"
+    "    - <List clause number(s), page(s), and/or unit_id from chunks used. If none available, state exactly: 'No specific clause reference found in provided evidence.'>\n"
     "  Next steps:\n"
-    "    - ...\n"
+    "    - <max 2 operational bullets.>\n"
     "\n"
-    "DECISION RULES:\n"
-    "- Decision is mandatory for every item.\n"
-    "- If clearly not covered based on the Q&A outcomes, Decision MUST be REJECTED.\n"
-    "- If mixed outcomes or information is missing, use PARTIAL.\n"
+    "DECISION RULES (MANDATORY):\n"
+    "- Decision is required for every Coverage Component.\n"
+    "- APPROVED only if the cited clause explicitly provides coverage.\n"
+    "- REJECTED only if the cited clause explicitly excludes or denies coverage.\n"
+    "- PARTIAL only if clause language supports mixed interpretation OR required facts are missing.\n"
+    "- If no clause supports approval, do NOT approve.\n"
     "\n"
-    "AMOUNTS RULES (MANDATORY):\n"
+    "AMOUNTS & PAYER RULE (MANDATORY):\n"
     "- Do NOT invent amounts.\n"
-    "- Treat contractor/technician amounts as estimates unless explicitly stated authorized.\n"
-    "- If an amount is not provided, write \"Not provided.\".\n"
-    "- If customer responsibility cannot be computed, write \"Cannot determine from provided information (missing: ...).\"\n"
+    "- Amount fields must contain ONLY a dollar value like '$0'.\n"
+    "- If contractor estimate is stated, place it under Customer.\n"
+    "- If company authorization amount is explicitly stated, place it under Company.\n"
+    "- If no company authorization is stated, Company must be '$0'.\n"
     "\n"
-    "OPTIONAL:\n"
-    "- If multiple items exist, end with an \"Overall Next Steps:\" section with 1–2 bullets.\n"
+    "LENGTH CONSTRAINTS (MANDATORY):\n"
+    "- Situation: maximum 2 sentences.\n"
+    "- What's covered: maximum 2 bullets.\n"
+    "- What's not covered / limitations: maximum 2 bullets.\n"
+    "- Why: exactly 1 bullet.\n"
+    "- Clause Reference: maximum 2 bullets.\n"
+    "- Next steps: maximum 2 bullets.\n"
     "\n"
-    "Q&A evidence blob (use as source of truth):\n"
+    "OVERALL NEXT STEPS (MANDATORY BEHAVIOR):\n"
+    "- If multiple components exist, you MAY add an 'Overall Next Steps:' section with 1–2 concise bullets.\n"
+    "- If you do NOT add an 'Overall Next Steps:' section, the final line of the output MUST be:\n"
+    "  'No further action needed'\n"
+    "\n"
+    "Q&A evidence blob (use as the only source of truth):\n"
     "{qa_blob}\n"
-    )
-)
+))
 
 # 4. FOLLOW-UP (SIDEBAR CHAT)
 # Purpose: Handles user chat about a claim in the sidebar

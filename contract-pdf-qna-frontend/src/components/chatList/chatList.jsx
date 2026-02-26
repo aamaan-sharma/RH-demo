@@ -1,7 +1,55 @@
 import React, { useEffect, useRef } from "react";
 import Question from "../common/question/question";
 import Response from "../common/response/response";
+import { DecisionBadge, parseDraftSummary } from "../common/itemizedFinalAnswer/itemizedFinalAnswer";
 import { parseExtractedQuestion, stripTranscribeAppendix } from "../utils/chatText";
+
+/** Get decision and amount for display from itemized response (same parsing as answer body). */
+function getDecisionAndAmountFromResponse(responseText) {
+  const raw = String(responseText ?? "").replace(/\r\n/g, "\n").trim();
+  const parsed = parseDraftSummary(raw);
+  const first = parsed?.items?.[0];
+  if (first) {
+    const decision = (first.decision || "").trim();
+    let amount = (first.amount || "").trim();
+    if (!amount && (first.amountsCompany?.length || first.amountsCustomer?.length)) {
+      const clean = (s) => String(s || "").trim().replace(/^(?:Company|Customer)\s*:\s*/i, "").trim() || "$0";
+      const company = clean(first.amountsCompany?.[0]);
+      const customer = clean(first.amountsCustomer?.[0]);
+      amount = `Company ${company}, Customer ${customer}`;
+    }
+    if (!amount) amount = "N/A";
+    return { decision, amount };
+  }
+  // Fallback: match "Decision: X" and "Amount(s): X" anywhere in text (e.g. non-itemized or single-line)
+  let decision = "";
+  let amount = "";
+  const lines = raw.split("\n");
+  for (const line of lines) {
+    const t = line.trim();
+    const dm = t.match(/Decision\s*:\s*(.+)/i);
+    if (dm) decision = dm[1].trim();
+    const am = t.match(/^Amount\s*:\s*(.+)/i);
+    if (am) amount = am[1].trim();
+    if (!amount && /^Amounts\s*:/.test(t)) {
+      const cust = raw.match(/Customer\s*:\s*([^\n]+)/i);
+      const comp = raw.match(/Company\s*:\s*([^\n]+)/i);
+      const c1 = cust ? cust[1].trim() : "$0";
+      const c2 = comp ? comp[1].trim() : "$0";
+      amount = `Company ${c2}, Customer ${c1}`;
+    }
+  }
+  // Also try to find Customer/Company amounts anywhere in raw (e.g. bullet lines)
+  if (!amount && (/Customer\s*:/i.test(raw) || /Company\s*:/i.test(raw))) {
+    const cust = raw.match(/Customer\s*:\s*([^\n]+)/i);
+    const comp = raw.match(/Company\s*:\s*([^\n]+)/i);
+    const c1 = cust ? cust[1].trim() : "$0";
+    const c2 = comp ? comp[1].trim() : "$0";
+    amount = `Company ${c2}, Customer ${c1}`;
+  }
+  if (!amount) amount = "N/A";
+  return { decision, amount };
+}
 
 const isTranscriptExtractedChat = (chat) => {
   const id = chat?.questionId || chat?.chat_id;
@@ -56,16 +104,34 @@ const ChatList = ({ chats, setChats, conversationId, isCallsMode = false, server
                 const parsed = parseExtractedQuestion(chat?.entered_query || "");
                 const qText = parsed?.questionText || stripTranscribeAppendix(chat?.entered_query || "");
                 const facts = Array.isArray(parsed?.facts) ? parsed.facts : [];
+                const { decision, amount } = getDecisionAndAmountFromResponse(chat?.response || "");
                 return (
                   <details className="question_item" key={chat?.chat_id || chat?.questionId || idx}>
                     <summary className="question_summary">
-                      <span className="q_left">
-                        <span className="q_index">{`Q${idx + 1}`}</span>
-                        <span className="q_text">{qText}</span>
-                      </span>
-                      <span className="q_dropdown_icon" aria-hidden="true">
-                        ▸
-                      </span>
+                      <div className="question_summary_primary">
+                        <span className="q_left">
+                          <span className="q_index">{`Q${idx + 1}`}</span>
+                          <span className="q_text">{qText}</span>
+                        </span>
+                        <span className="q_dropdown_icon" aria-hidden="true">
+                          ▸
+                        </span>
+                      </div>
+                      {/* Decision only below question; Amount is shown in the Answer below */}
+                      {chat?.response ? (
+                        <div className="calls_decision_amount_row">
+                          <div className="calls_decision_meta">
+                            <span className="label">Decision</span>
+                            <span className="value">
+                              {decision ? (
+                                <DecisionBadge decision={decision} />
+                              ) : (
+                                <span className="calls_badge calls_badge_no_decision">No Decision</span>
+                              )}
+                            </span>
+                          </div>
+                        </div>
+                      ) : null}
                     </summary>
                     {facts.length > 0 ? (
                       <div className="question_facts" aria-label="Extracted case facts">
@@ -86,7 +152,8 @@ const ChatList = ({ chats, setChats, conversationId, isCallsMode = false, server
                         setChats={setChats}
                         showReferenceIcon={false}
                         relevantChunks={getRelevantChunks(chat)}
-                        headerLabel="AI Draft Answer"
+                        variant="draftAnswer"
+                        hideHeader={true}
                         tone="blue"
                         isError={chat.isError}
                         onRetry={chat.isError && onRetryChat ? onRetryChat : null}

@@ -7,6 +7,30 @@
     box-shadow: none;
   }
 
+  /* Per-question answer: no box/card effect */
+  &.ifa_compact {
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    padding: 0;
+
+    .ifa_title {
+      padding: 0 0 8px 0;
+      border-bottom: none;
+      margin-bottom: 0;
+    }
+
+    .ifa_item {
+      border-top: none;
+      background: transparent;
+    }
+
+    .ifa_item_body {
+      padding: 0 0 12px 0;
+    }
+  }
+
   .ifa_title {
     font-size: 14px;
     font-weight: 800;
@@ -34,17 +58,32 @@
   }
 
   .ifa_item_summary {
+    cursor: pointer;
+    list-style: none;
+    padding: 0;
+  }
+
+  .ifa_item_summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .ifa_item_chevron {
+    font-size: 14px;
+    color: #94a3b8;
+    transition: transform 0.2s ease;
+    flex-shrink: 0;
+  }
+
+  details.ifa_item[open] .ifa_item_chevron {
+    transform: rotate(180deg);
+  }
+
+  .ifa_item_header_row {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
     padding: 12px 16px;
-    cursor: pointer;
-    list-style: none;
-  }
-
-  .ifa_item_summary::-webkit-details-marker {
-    display: none;
   }
 
   .ifa_item_summary_left {
@@ -92,18 +131,115 @@
     }
   }
 
-  .ifa_item_chevron {
-    font-size: 14px;
-    color: #94a3b8;
-    transition: transform 0.2s ease;
-  }
-
-  details[open] .ifa_item_chevron {
-    transform: rotate(180deg);
-  }
-
   .ifa_item_body {
     padding: 0 16px 16px;
+  }
+
+  /* Two-column layout: keys (Claim, Decision, Amount, Why, Next steps) | values */
+  .ifa_two_col {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin-top: 4px;
+  }
+
+  .ifa_two_col .ifa_row {
+    display: grid;
+    grid-template-columns: 140px 1fr;
+    gap: 12px 16px;
+    align-items: baseline;
+    padding: 8px 0;
+    border-bottom: 1px solid #f0f0f0;
+    font-size: 13px;
+
+    &:last-child {
+      border-bottom: 0;
+    }
+
+    .k {
+      font-size: 12px;
+      font-weight: 700;
+      color: #64748b;
+      flex-shrink: 0;
+    }
+
+    .v {
+      font-size: 13px;
+      color: #111111;
+      line-height: 1.4;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+
+      .ifa_why_item {
+        margin-bottom: 6px;
+        &:last-child {
+          margin-bottom: 0;
+        }
+      }
+
+      /* Money reconciliation (Answer only): enterprise-style block */
+      .ifa_money_recon {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 12px 14px;
+        font-size: 12px;
+        line-height: 1.5;
+        color: #334155;
+
+        .ifa_money_recon_header {
+          font-weight: 700;
+          color: #1e293b;
+          margin-top: 10px;
+          margin-bottom: 4px;
+
+          &:first-child {
+            margin-top: 0;
+          }
+        }
+
+        .ifa_money_recon_kv {
+          padding-left: 12px;
+          margin-bottom: 2px;
+          display: flex;
+          flex-wrap: wrap;
+          gap: 0 6px;
+
+          &::before {
+            content: "";
+            display: inline-block;
+            width: 3px;
+            flex-shrink: 0;
+          }
+        }
+
+        .ifa_money_recon_line {
+          padding-left: 12px;
+          margin-bottom: 2px;
+        }
+      }
+    }
+  }
+
+  /* Decision as bold colored text only (no pill/background) */
+  .ifa_decision_text {
+    font-weight: 700;
+    font-size: 13px;
+  }
+
+  .ifa_decision_text.ifa_decision_approved {
+    color: #0f5f3a;
+  }
+
+  .ifa_decision_text.ifa_decision_rejected,
+  .ifa_decision_text.ifa_decision_denied {
+    color: #a11a1a;
+  }
+
+  .ifa_decision_text.ifa_decision_no_decision,
+  .ifa_decision_text.ifa_decision_need_info,
+  .ifa_decision_text.ifa_decision_partial {
+    color: #6b6b6b;
   }
 
   .ifa_card {
@@ -208,6 +344,301 @@
     background: #fafafa;
     color: #888888;
     font-style: italic;
+  }
+
+  /* Enterprise layout: tabs beside each other, single detail panel */
+  &.ifa_enterprise {
+    padding: 16px 20px;
+
+    .ifa_title {
+      font-size: 15px;
+      font-weight: 800;
+      color: #1a1a1a;
+      margin-bottom: 14px;
+      letter-spacing: 0.02em;
+    }
+
+    .ifa_overall {
+      margin-bottom: 14px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid #eee;
+    }
+
+    .ifa_tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 16px;
+      border-bottom: 1px solid #e5e7eb;
+      padding-bottom: 12px;
+    }
+
+    .ifa_tab {
+      appearance: none;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      background: #f9fafb;
+      padding: 10px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #4b5563;
+      cursor: pointer;
+      display: inline-flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
+      text-align: left;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+
+      .ifa_tab_num {
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #6b7280;
+      }
+
+      .ifa_tab_label {
+        font-size: 13px;
+        font-weight: 600;
+        color: #374151;
+        max-width: 180px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      &:hover {
+        background: #f3f4f6;
+        border-color: #9ca3af;
+        color: #111827;
+      }
+
+      &.ifa_tab_active {
+        background: #eff6ff;
+        border-color: #3b82f6;
+        color: #1d4ed8;
+
+        .ifa_tab_num {
+          color: #2563eb;
+        }
+        .ifa_tab_label {
+          color: #1e40af;
+        }
+      }
+    }
+
+    .ifa_detail_panel {
+      min-height: 120px;
+    }
+
+    .ifa_card_single {
+      border: none;
+      border-radius: 0;
+      box-shadow: none;
+      padding: 0;
+      background: transparent;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+
+    /* Label vs value: subheading distinct from value */
+    .ifa_label {
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #4b5563;
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .ifa_value {
+      font-size: 13px;
+      font-weight: 500;
+      color: #111827;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .ifa_row {
+      display: grid;
+      grid-template-columns: 100px 1fr;
+      gap: 12px;
+      align-items: start;
+      padding: 10px 0;
+      border-bottom: 1px solid #f3f4f6;
+
+      &.ifa_row_block {
+        align-items: center;
+      }
+    }
+
+    .ifa_meta {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      margin-bottom: 0;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #f3f4f6;
+
+      .ifa_row {
+        border-bottom: none;
+        padding: 8px 0;
+      }
+      .ifa_row:last-child {
+        padding-bottom: 0;
+      }
+    }
+
+    /* Decision as text (no button/pill look) */
+    .ifa_badge {
+      padding: 0;
+      border-radius: 0;
+      border: none;
+      background: transparent;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .ifa_badge_approved {
+      color: #0f5f3a;
+      background: transparent;
+      border: none;
+      font-weight: 900;
+    }
+    .ifa_badge_rejected,
+    .ifa_badge_denied {
+      color: #a11a1a;
+      background: transparent;
+      border: none;
+      font-weight: 900;
+    }
+    .ifa_badge_partial {
+      color: #7a4c00;
+      background: transparent;
+      border: none;
+      font-weight: 900;
+    }
+    .ifa_badge_need_info,
+    .ifa_badge_cannot_determine,
+    .ifa_badge_no_decision {
+      color: #6b7280;
+      background: transparent;
+      border: none;
+      font-weight: 900;
+    }
+    .ifa_decision_text.ifa_decision_none {
+      font-size: 13px;
+      font-weight: 500;
+      color: #9ca3af;
+      font-style: italic;
+    }
+
+    .ifa_amount_single {
+      padding: 12px 0;
+      border-bottom: 1px solid #f3f4f6;
+
+      .ifa_label {
+        margin-bottom: 6px;
+      }
+      .ifa_amount_primary {
+        font-size: 13px;
+        font-weight: 600;
+        color: #111827;
+        margin-bottom: 6px;
+      }
+      .ifa_amount_lines {
+        margin: 0;
+        padding-left: 18px;
+        font-size: 12px;
+        font-weight: 500;
+        color: #374151;
+        line-height: 1.5;
+      }
+      .ifa_amount_sublabel {
+        font-weight: 600;
+        color: #6b7280;
+      }
+    }
+
+    .ifa_section_label {
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #4b5563;
+      margin-bottom: 6px;
+    }
+
+    .ifa_section_value {
+      font-size: 13px;
+      font-weight: 500;
+      color: #111827;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+
+    .ifa_section {
+      padding: 12px 0;
+      border-bottom: 1px solid #f3f4f6;
+
+      .ifa_list {
+        margin: 0;
+        padding-left: 18px;
+        font-size: 13px;
+        font-weight: 500;
+        color: #374151;
+        line-height: 1.5;
+      }
+    }
+
+    .ifa_split {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+      padding: 12px 0;
+      border-bottom: 1px solid #f3f4f6;
+      margin-bottom: 0;
+      border: none;
+      border-radius: 0;
+      background: transparent;
+
+      @media (min-width: 700px) {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    .ifa_split_col {
+      padding: 0;
+      border-radius: 0;
+      background: transparent;
+
+      .ifa_list {
+        margin: 0;
+        padding-left: 18px;
+        font-size: 13px;
+        font-weight: 500;
+        color: #374151;
+        line-height: 1.5;
+      }
+    }
+
+    .ifa_overall_next {
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px solid #e5e7eb;
+      border-radius: 0;
+      background: transparent;
+
+      .ifa_section_label {
+        margin-bottom: 8px;
+      }
+      .ifa_section_value {
+        font-size: 13px;
+      }
+    }
   }
 
   .ifa_amounts_top {
@@ -400,6 +831,67 @@
       font-weight: 900;
       color: #2f3a57;
       margin-bottom: 8px;
+    }
+  }
+
+  /* AI Draft Answer: single table – keys one column, values one column; hide when not provided */
+  &.ifa_draft_form {
+    padding: 12px 0;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+
+    .ifa_form_table {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .ifa_form_row {
+      display: grid;
+      grid-template-columns: 180px 1fr;
+      gap: 16px;
+      align-items: start;
+      min-height: 28px;
+      padding: 6px 0;
+      border: none;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .ifa_form_label {
+      font-weight: 600;
+      color: #6b7280;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+    }
+    .ifa_form_value {
+      font-weight: 500;
+      color: #1f2937;
+      white-space: pre-wrap;
+      &.ifa_form_decision_approved,
+      &.ifa_form_decision_denied,
+      &.ifa_form_decision_partial,
+      &.ifa_form_decision_none {
+        font-size: 15px;
+        font-weight: 900;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      &.ifa_form_decision_approved { color: #065f46; }
+      &.ifa_form_decision_denied { color: #991b1b; }
+      &.ifa_form_decision_partial { color: #92400e; }
+      &.ifa_form_decision_none { color: #6b7280; }
+    }
+    .ifa_form_list {
+      margin: 0;
+      padding-left: 18px;
+    }
+    .ifa_form_pre {
+      margin: 0;
+      font-size: 12px;
+      font-family: inherit;
+      white-space: pre-wrap;
+      word-break: break-word;
     }
   }
 }
