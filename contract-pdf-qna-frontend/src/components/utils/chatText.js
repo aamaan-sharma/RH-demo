@@ -16,6 +16,17 @@ export function stripTranscribeAppendix(text) {
   return before.replace(/\s+$/g, "").trim();
 }
 
+/**
+ * Remove "Evidence" and everything after it from question text for display.
+ * Used so the UI does not show the Evidence section in the question.
+ */
+export function stripEvidenceAndAfter(text) {
+  const raw = String(text ?? "").trim();
+  const idx = raw.search(/\bEvidence\b/i);
+  if (idx === -1) return raw;
+  return raw.slice(0, idx).replace(/\s+$/g, "").trim();
+}
+
 const _norm = (v) => String(v ?? "").replace(/\s+/g, " ").trim();
 
 const _isNotProvided = (v) => {

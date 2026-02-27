@@ -420,7 +420,7 @@ DECISION POSTURE (choose ONE):
 
 FINAL DECISION MAPPING (MANDATORY, for downstream summaries):
 - ACCEPT_AND_PAY → APPROVED
-- DENY → REJECTED
+- DENY → DENIED
 - ACCEPT_PARTIAL → PARTIAL
 
 ELIGIBILITY OVERRIDE (MANDATORY):
@@ -478,12 +478,12 @@ You are an Insurance Claims Analyst. Produce a single, grounded claim decision.
 GROUNDING RULES (CRITICAL):
 - Use ONLY the provided Policy/contract clauses below (verbatim). Do NOT invent coverage, limits, fees, or amounts.
 - Use the Claims context below only to understand what is being claimed; it is NOT policy language.
-- If the clauses are insufficient to approve or deny, choose CANNOT_DETERMINE or REQUEST_INFO and specify exactly what is missing.
+- Use only these three decision values: APPROVED, DENIED, PARTIAL. If the clauses are insufficient to approve or deny, use PARTIAL and specify what is unclear or missing.
 
 OUTPUT REQUIREMENTS (CRITICAL):
 - Return ONLY valid JSON (no markdown, no extra text).
 - Output must be ONE JSON object with these keys:
-  - decision: "APPROVED" | "REJECTED" | "PARTIAL" | "CANNOT_DETERMINE"
+  - decision: "APPROVED" | "DENIED" | "PARTIAL"
   - shortAnswer: one concise sentence
   - reasons: array of 1–4 short strings
   - citedChunks: array of 1–3 short verbatim clause snippets from the provided clauses
@@ -491,18 +491,16 @@ OUTPUT REQUIREMENTS (CRITICAL):
     - claimId: string
     - items: array of objects with keys name (string) and details (string)
     - situation: string
-    - decision: "APPROVED" | "REJECTED" | "PARTIAL" | "CANNOT_DETERMINE" | "REQUEST_INFO"
+    - decision: "APPROVED" | "DENIED" | "PARTIAL"
     - decisionSummary: one sentence
     - reasons: array of short strings
     - policyBasis: array of short verbatim clause snippets (from provided clauses only)
     - nextSteps: array of short strings
 
-DECISION GUIDANCE:
+DECISION GUIDANCE (only 3 states):
 - APPROVED: clauses clearly support coverage and no exclusion/eligibility blocker is indicated by the clauses for the described situation.
-- REJECTED: clauses clearly exclude or deny coverage for the described situation.
-- PARTIAL: some parts/scope covered and others excluded/limited (be explicit in per-claim decisionSummary).
-- CANNOT_DETERMINE: clauses do not provide enough to decide overall.
-- REQUEST_INFO (per-claim only): if claim facts needed to apply clauses are missing (e.g., cause, timeline, contract start / pre-existing timing) and clauses require them.
+- DENIED: clauses clearly exclude or deny coverage for the described situation.
+- PARTIAL: some parts/scope covered and others excluded/limited, or clauses do not provide enough to decide; be explicit in per-claim decisionSummary.
 
 Policy/contract clauses (verbatim excerpts):
 {chunks}
@@ -552,7 +550,7 @@ template = (
     "  Coverage Component: <name/details>\n"
     "  Type: Appliance | System | Fixture | Other\n"
     "  Situation: <1–2 concise factual sentences only. No policy reasoning here.>\n"
-    "  Decision: APPROVED | REJECTED | PARTIAL\n"
+    "  Decision: APPROVED | DENIED | PARTIAL\n"
     "  Amounts:\n"
     "    - Customer: <$ amount only, e.g., '$0' or '$250'. If not explicitly provided, use '$0'.>\n"
     "    - Company: <$ amount only, e.g., '$0' or '$250'. If not explicitly authorized/approved in evidence, use '$0'.>\n"
@@ -570,7 +568,7 @@ template = (
     "DECISION RULES (MANDATORY):\n"
     "- Decision is required for every Coverage Component.\n"
     "- APPROVED only if the cited clause explicitly provides coverage.\n"
-    "- REJECTED only if the cited clause explicitly excludes or denies coverage.\n"
+    "- DENIED only if the cited clause explicitly excludes or denies coverage.\n"
     "- PARTIAL only if clause language supports mixed interpretation OR required facts are missing.\n"
     "- If no clause supports approval, do NOT approve.\n"
     "\n"
