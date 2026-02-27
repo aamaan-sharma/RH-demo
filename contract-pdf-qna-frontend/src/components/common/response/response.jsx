@@ -220,6 +220,7 @@ const Response = ({
   onRetry = null,
   showReferenceIcon = true,
   showActions,
+  claimForChat = null,
 }) => {
   const navigate = useNavigate();
   const popupRef = useRef(null);
@@ -417,6 +418,7 @@ const Response = ({
                 asCard={false}
                 compactLayout={true}
                 hideSummaryDecisionAmount={true}
+                claimForChat={claimForChat}
               />
             ) : (
               renderResponseContent(response)

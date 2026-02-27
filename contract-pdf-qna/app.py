@@ -4645,6 +4645,9 @@ def _claims_background_process_transcript(
             except Exception:
                 claim_decision = None
 
+        if claim_decision and isinstance(claim_decision.get("claims"), list) and claim_decision["claims"]:
+            final_summary_text = _format_claim_decision_as_final_answer(claim_decision)
+
         if claim_decision:
             _claims_publish_event(conversation_id=cid, event="claimDecision", payload=claim_decision)
 
@@ -4740,7 +4743,7 @@ def generate_claim_decision_from_chunks(chunks: List[str], llm=None, claims_cont
 
     Returns:
       {
-        "decision": "APPROVED"|"REJECTED"|"PARTIAL"|"CANNOT_DETERMINE",
+        "decision": "APPROVED"|"DENIED"|"PARTIAL",
         "shortAnswer": "...",
         "reasons": ["...", "..."],
         "citedChunks": ["...", "..."],
@@ -4749,7 +4752,7 @@ def generate_claim_decision_from_chunks(chunks: List[str], llm=None, claims_cont
             "claimId": "c1",
             "items": [{"name": "...", "details": "..."}],
             "situation": "...",
-            "decision": "APPROVED|REJECTED|PARTIAL|CANNOT_DETERMINE|REQUEST_INFO",
+            "decision": "APPROVED|DENIED|PARTIAL",
             "decisionSummary": "one sentence",
             "reasons": ["..."],
             "policyBasis": ["short quoted fragment", "..."],
@@ -4764,8 +4767,8 @@ def generate_claim_decision_from_chunks(chunks: List[str], llm=None, claims_cont
 
     if not cleaned:
         return {
-            "decision": "CANNOT_DETERMINE",
-            "shortAnswer": "I can’t confirm approval or rejection from the policy text provided.",
+            "decision": "PARTIAL",
+            "shortAnswer": "The system could not generate a grounded decision from the retrieved clauses.",
             "reasons": ["No relevant policy clauses were retrieved to support a decision."],
             "citedChunks": [],
             "claims": [],
@@ -4807,8 +4810,10 @@ def generate_claim_decision_from_chunks(chunks: List[str], llm=None, claims_cont
         data = json.loads(raw)
 
         decision = (data.get("decision") or "").strip().upper()
-        if decision not in ("APPROVED", "REJECTED", "PARTIAL", "CANNOT_DETERMINE"):
-            decision = "CANNOT_DETERMINE"
+        if decision == "REJECTED":
+            decision = "DENIED"
+        if decision not in ("APPROVED", "DENIED", "PARTIAL"):
+            decision = "PARTIAL"
         short_answer = (data.get("shortAnswer") or "").strip()
         reasons = data.get("reasons") or []
         cited = data.get("citedChunks") or []
@@ -4819,7 +4824,7 @@ def generate_claim_decision_from_chunks(chunks: List[str], llm=None, claims_cont
         reasons = [str(r).strip() for r in reasons if str(r).strip()][:4]
         if not reasons:
             reasons = ["The provided policy text is not sufficient to justify a clear decision."]
-            decision = "CANNOT_DETERMINE"
+            decision = "PARTIAL"
 
         if not isinstance(cited, list):
             cited = []
@@ -4853,8 +4858,10 @@ def generate_claim_decision_from_chunks(chunks: List[str], llm=None, claims_cont
                     if s:
                         normalized_items.append({"name": s, "details": ""})
             per_dec = str(c.get("decision") or "").strip().upper()
-            if per_dec not in ("APPROVED", "REJECTED", "PARTIAL", "CANNOT_DETERMINE", "REQUEST_INFO"):
-                per_dec = "CANNOT_DETERMINE"
+            if per_dec == "REJECTED":
+                per_dec = "DENIED"
+            if per_dec not in ("APPROVED", "DENIED", "PARTIAL"):
+                per_dec = "PARTIAL"
             cleaned_claims.append(
                 {
                     "claimId": cid,
@@ -4871,12 +4878,10 @@ def generate_claim_decision_from_chunks(chunks: List[str], llm=None, claims_cont
         if not short_answer:
             if decision == "APPROVED":
                 short_answer = "Your claim appears approved based on the policy clauses provided."
-            elif decision == "REJECTED":
-                short_answer = "Your claim appears rejected based on the policy clauses provided."
-            elif decision == "PARTIAL":
-                short_answer = "Your claim appears partially covered based on the policy clauses provided."
+            elif decision == "DENIED":
+                short_answer = "Your claim appears denied based on the policy clauses provided."
             else:
-                short_answer = "I can’t confirm approval or rejection from the policy text provided."
+                short_answer = "Your claim appears partially covered based on the policy clauses provided."
 
         return {
             "decision": decision,
@@ -4888,12 +4893,120 @@ def generate_claim_decision_from_chunks(chunks: List[str], llm=None, claims_cont
     except Exception as e:
         print(f"Warning: claim decision generation failed: {e}")
         return {
-            "decision": "CANNOT_DETERMINE",
-            "shortAnswer": "I can’t confirm approval or rejection from the policy text provided.",
+            "decision": "PARTIAL",
+            "shortAnswer": "The system could not generate a grounded decision from the retrieved clauses.",
             "reasons": ["The system could not generate a grounded decision from the retrieved clauses."],
             "citedChunks": cleaned[:2],
             "claims": [],
         }
+
+
+def _format_claim_decision_as_final_answer(claim_decision) -> str:
+    """
+    Format claim decision JSON into the exact Final Answer text structure the frontend parser
+    expects (Coverage Component N, Situation, Decision, Amounts, Items, Why, Clause Reference,
+    Next steps). Used so the UI shows all details and Items without repeating 'Claim' multiple times.
+    """
+    if not isinstance(claim_decision, dict):
+        return ""
+    claims = claim_decision.get("claims") or []
+    if not isinstance(claims, list) or not claims:
+        return ""
+
+    lines = [
+        "Plan: Not stated in provided evidence.",
+        "State: Not stated in provided evidence.",
+        "",
+    ]
+    for idx, c in enumerate(claims[:25], start=1):
+        if not isinstance(c, dict):
+            continue
+        cid = str(c.get("claimId") or "").strip()
+        situation = str(c.get("situation") or "").strip()
+        decision = str(c.get("decision") or "").strip().upper()
+        if decision == "REJECTED":
+            decision = "DENIED"
+        if not decision or decision not in ("APPROVED", "DENIED", "PARTIAL"):
+            decision = "DENIED"
+        decision_summary = str(c.get("decisionSummary") or "").strip()
+        reasons = c.get("reasons") or []
+        if not isinstance(reasons, list):
+            reasons = []
+        reasons = [str(r).strip() for r in reasons if str(r).strip()][:5]
+        policy_basis = c.get("policyBasis") or []
+        if not isinstance(policy_basis, list):
+            policy_basis = []
+        policy_basis = [str(p).strip() for p in policy_basis if str(p).strip()][:5]
+        next_steps = c.get("nextSteps") or []
+        if not isinstance(next_steps, list):
+            next_steps = []
+        next_steps = [str(n).strip() for n in next_steps if str(n).strip()][:5]
+        items = c.get("items") or []
+        if not isinstance(items, list):
+            items = []
+
+        title = ""
+        if items and isinstance(items[0], dict):
+            title = str(items[0].get("name") or "").strip()
+        if not title and cid:
+            title = cid
+        if not title:
+            title = f"Coverage Component {idx}"
+
+        lines.append(f"Coverage Component {idx}: {title}")
+        lines.append("Type: Appliance")
+        lines.append(f"Situation: {situation or 'Not stated in provided evidence.'}")
+        lines.append(f"Decision: {decision}")
+        lines.append("Amounts:")
+        lines.append("  - Customer: $0")
+        lines.append("  - Company: $0")
+        lines.append("What's covered:")
+        lines.append("  - Not stated in provided evidence.")
+        lines.append("What's not covered / limitations:")
+        if decision == "DENIED" and (reasons or decision_summary):
+            for r in (reasons[:2] or [decision_summary]):
+                if r:
+                    lines.append(f"  - {r}")
+        else:
+            lines.append("  - Not stated in provided evidence.")
+        if items:
+            lines.append("Items:")
+            for it in items[:10]:
+                if isinstance(it, dict):
+                    nm = str(it.get("name") or "").strip()
+                    det = str(it.get("details") or "").strip()
+                    if nm and det:
+                        lines.append(f"  - {nm}: {det}")
+                    elif nm:
+                        lines.append(f"  - {nm}")
+                    elif det:
+                        lines.append(f"  - {det}")
+                else:
+                    s = str(it or "").strip()
+                    if s:
+                        lines.append(f"  - {s}")
+        why_line = decision_summary or (reasons[0] if reasons else "")
+        if not why_line and reasons:
+            why_line = "; ".join(reasons[:2])
+        lines.append("Why:")
+        lines.append(f"  - {why_line or 'Not stated in provided evidence.'}")
+        lines.append("Clause Reference:")
+        if policy_basis:
+            for p in policy_basis[:2]:
+                if p:
+                    lines.append(f"  - {p}")
+        else:
+            lines.append("  - No specific clause reference found in provided evidence.")
+        lines.append("Next steps:")
+        if next_steps:
+            for n in next_steps[:2]:
+                if n:
+                    lines.append(f"  - {n}")
+        else:
+            lines.append("  - No further action needed.")
+        lines.append("")
+    lines.append("No further action needed.")
+    return "\n".join(lines).strip()
 
 
 def _format_claim_decision_for_chat(claim_decision) -> str:
@@ -5665,6 +5778,7 @@ def process_transcript():
                 response["warning"] = extraction_warning
 
             # Claim decision (Approved/Rejected/Cannot determine), grounded only in retrieved policy chunks
+            claim_decision = None
             try:
                 all_chunks = []
                 for r in results or []:
@@ -5738,6 +5852,9 @@ def process_transcript():
                         if r and (r.get("question") or "").strip()
                     ]
                 ).strip()
+
+            if claim_decision and isinstance(claim_decision.get("claims"), list) and claim_decision["claims"]:
+                final_summary_text = _format_claim_decision_as_final_answer(claim_decision)
 
             response["finalSummary"] = final_summary_text
             response["finalAnswer"] = {
@@ -6526,6 +6643,8 @@ def _process_transcript_core(data, yield_sse_fn=None):
                         )
                     claim_decision = generate_claim_decision_from_chunks(deduped, claims_context=claims_context)
                     yield _sse("claimDecision", claim_decision)
+                    if claim_decision and isinstance(claim_decision.get("claims"), list) and claim_decision["claims"]:
+                        final_summary_text = _format_claim_decision_as_final_answer(claim_decision)
                 except Exception as e:
                     print(f"Warning: failed to generate/stream claimDecision: {e}")
 

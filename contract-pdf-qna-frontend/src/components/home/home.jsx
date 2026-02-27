@@ -1944,6 +1944,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
                     setChats={setChats}
                     conversationId={conversationId}
                     isCallsMode={isCallsMode}
+                    claimDecision={callsClaimDecision}
                     serverError={serverError}
                     onRetryChat={() => {
                       if (
