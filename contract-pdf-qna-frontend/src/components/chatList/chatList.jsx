@@ -1,19 +1,35 @@
 import React, { useEffect, useRef } from "react";
 import Question from "../common/question/question";
 import Response from "../common/response/response";
-import { DecisionBadge, parseDraftSummary } from "../common/itemizedFinalAnswer/itemizedFinalAnswer";
-import { parseExtractedQuestion, stripTranscribeAppendix } from "../utils/chatText";
+import {
+  DecisionBadge,
+  parseDraftSummary,
+} from "../common/itemizedFinalAnswer/itemizedFinalAnswer";
+import {
+  parseExtractedQuestion,
+  stripTranscribeAppendix,
+  stripEvidenceAndAfter,
+} from "../utils/chatText";
 
 /** Get decision and amount for display from itemized response (same parsing as answer body). */
 function getDecisionAndAmountFromResponse(responseText) {
-  const raw = String(responseText ?? "").replace(/\r\n/g, "\n").trim();
+  const raw = String(responseText ?? "")
+    .replace(/\r\n/g, "\n")
+    .trim();
   const parsed = parseDraftSummary(raw);
   const first = parsed?.items?.[0];
   if (first) {
     const decision = (first.decision || "").trim();
     let amount = (first.amount || "").trim();
-    if (!amount && (first.amountsCompany?.length || first.amountsCustomer?.length)) {
-      const clean = (s) => String(s || "").trim().replace(/^(?:Company|Customer)\s*:\s*/i, "").trim() || "$0";
+    if (
+      !amount &&
+      (first.amountsCompany?.length || first.amountsCustomer?.length)
+    ) {
+      const clean = (s) =>
+        String(s || "")
+          .trim()
+          .replace(/^(?:Company|Customer)\s*:\s*/i, "")
+          .trim() || "$0";
       const company = clean(first.amountsCompany?.[0]);
       const customer = clean(first.amountsCustomer?.[0]);
       amount = `Company ${company}, Customer ${customer}`;
@@ -58,17 +74,29 @@ const isTranscriptExtractedChat = (chat) => {
 
 const isFinalAnswerChat = (chat) => {
   const id = chat?.questionId || chat?.chat_id;
-  return id === "final_answer" || chat?.entered_query === "Final Answer for transcript";
+  return (
+    id === "final_answer" ||
+    chat?.entered_query === "Final Answer for transcript"
+  );
 };
 
 // Use first non-empty chunk array so placeholder or detail chunks show when the other is empty
 const getRelevantChunks = (chat) => {
-  const detail = chat?.relevantChunksDetail || chat?.relevant_chunks_detail || [];
+  const detail =
+    chat?.relevantChunksDetail || chat?.relevant_chunks_detail || [];
   const textOnly = chat?.relevantChunks || chat?.relevant_chunks || [];
   return Array.isArray(detail) && detail.length > 0 ? detail : textOnly;
 };
 
-const ChatList = ({ chats, setChats, conversationId, isCallsMode = false, serverError = null, onRetryChat = null }) => {
+const ChatList = ({
+  chats,
+  setChats,
+  conversationId,
+  isCallsMode = false,
+  claimDecision = null,
+  serverError = null,
+  onRetryChat = null,
+}) => {
   const lastChatRef = useRef(null);
 
   useEffect(() => {
@@ -87,7 +115,10 @@ const ChatList = ({ chats, setChats, conversationId, isCallsMode = false, server
         finalAnswer = chat;
         return;
       }
-      if (chat?.source === "transcript_extracted" || isTranscriptExtractedChat(chat)) {
+      if (
+        chat?.source === "transcript_extracted" ||
+        isTranscriptExtractedChat(chat)
+      ) {
         extracted.push(chat);
         return;
       }
@@ -101,49 +132,70 @@ const ChatList = ({ chats, setChats, conversationId, isCallsMode = false, server
             <div className="section_title">Extracted questions</div>
             <div className="questions_list">
               {extracted.map((chat, idx) => {
-                const parsed = parseExtractedQuestion(chat?.entered_query || "");
-                const qText = parsed?.questionText || stripTranscribeAppendix(chat?.entered_query || "");
+                const parsed = parseExtractedQuestion(
+                  chat?.entered_query || "",
+                );
+                const qText = stripEvidenceAndAfter(
+                  parsed?.questionText ||
+                    stripTranscribeAppendix(chat?.entered_query || ""),
+                );
                 const facts = Array.isArray(parsed?.facts) ? parsed.facts : [];
-                const { decision, amount } = getDecisionAndAmountFromResponse(chat?.response || "");
+                const chatId = chat?.chat_id || chat?.questionId;
+                const claim = claimDecision?.claims?.find(
+                  (c) =>
+                    (c?.claimId || "").toString() === (chatId || "").toString(),
+                );
+                const decisionFromClaim = claim?.decision;
+                const { decision: decisionFromResponse } =
+                  getDecisionAndAmountFromResponse(chat?.response || "");
+                const decision = decisionFromClaim ?? decisionFromResponse;
                 return (
-                  <details className="question_item" key={chat?.chat_id || chat?.questionId || idx}>
+                  <details
+                    className="question_item"
+                    key={chat?.chat_id || chat?.questionId || idx}
+                  >
                     <summary className="question_summary">
-                      <div className="question_summary_primary">
-                        <span className="q_left">
-                          <span className="q_index">{`Q${idx + 1}`}</span>
+                      <div className="question_item_header">
+                        <div className="question_item_row">
+                          <span className="q_index" aria-hidden="true">{`Q${idx + 1}`}</span>
                           <span className="q_text">{qText}</span>
-                        </span>
+                          {chat?.response ? (
+                            <span className="question_decision_holder">
+                              {decision ? (
+                                <DecisionBadge decision={decision} />
+                              ) : (
+                                <span className="calls_badge calls_badge_no_decision">
+                                  No Decision
+                                </span>
+                              )}
+                            </span>
+                          ) : null}
+                        </div>
                         <span className="q_dropdown_icon" aria-hidden="true">
                           ▸
                         </span>
                       </div>
-                      {/* Decision only below question; Amount is shown in the Answer below */}
-                      {chat?.response ? (
-                        <div className="calls_decision_amount_row">
-                          <div className="calls_decision_meta">
-                            <span className="label">Decision</span>
-                            <span className="value">
-                              {decision ? (
-                                <DecisionBadge decision={decision} />
-                              ) : (
-                                <span className="calls_badge calls_badge_no_decision">No Decision</span>
-                              )}
-                            </span>
-                          </div>
+                    </summary>
+                    <div className="question_item_body">
+                      {facts.length > 0 ? (
+                        <div
+                          className="question_facts"
+                          aria-label="Extracted case facts"
+                        >
+                          {facts.map((f, i) => (
+                            <div
+                              className="fact_chip"
+                              key={`${f.key || "k"}-${i}`}
+                              title={`${f.label}: ${f.value}`}
+                            >
+                              <span className="k">{f.label}</span>
+                              <span className="v">{f.value}</span>
+                            </div>
+                          ))}
                         </div>
                       ) : null}
-                    </summary>
-                    {facts.length > 0 ? (
-                      <div className="question_facts" aria-label="Extracted case facts">
-                        {facts.map((f, i) => (
-                          <div className="fact_chip" key={`${f.key || "k"}-${i}`} title={`${f.label}: ${f.value}`}>
-                            <span className="k">{f.label}</span>
-                            <span className="v">{f.value}</span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
-                    {chat?.response ? (
+                      {chat?.response ? (
+                        <div className="question_answer_block">
                       <Response
                         response={chat.response}
                         chatId={chat.chat_id}
@@ -156,10 +208,15 @@ const ChatList = ({ chats, setChats, conversationId, isCallsMode = false, server
                         hideHeader={true}
                         tone="blue"
                         isError={chat.isError}
-                        onRetry={chat.isError && onRetryChat ? onRetryChat : null}
+                        onRetry={
+                          chat.isError && onRetryChat ? onRetryChat : null
+                        }
                         showActions={false}
+                        claimForChat={claim}
                       />
-                    ) : null}
+                        </div>
+                      ) : null}
+                    </div>
                   </details>
                 );
               })}
@@ -229,12 +286,16 @@ const ChatList = ({ chats, setChats, conversationId, isCallsMode = false, server
             <Question
               text={chat.entered_query}
               label={
-                isCallsMode && (chat.source === "transcript_extracted" || isTranscriptExtractedChat(chat))
+                isCallsMode &&
+                (chat.source === "transcript_extracted" ||
+                  isTranscriptExtractedChat(chat))
                   ? "Transcript"
                   : "You"
               }
               meta={
-                isCallsMode && (chat.source === "transcript_extracted" || isTranscriptExtractedChat(chat))
+                isCallsMode &&
+                (chat.source === "transcript_extracted" ||
+                  isTranscriptExtractedChat(chat))
                   ? "Extracted question"
                   : null
               }
@@ -249,7 +310,11 @@ const ChatList = ({ chats, setChats, conversationId, isCallsMode = false, server
               setChats={setChats}
               showReferenceIcon={true}
               relevantChunks={getRelevantChunks(chat)}
-              variant={isCallsMode && isFinalAnswerChat(chat) ? "finalAnswer" : "default"}
+              variant={
+                isCallsMode && isFinalAnswerChat(chat)
+                  ? "finalAnswer"
+                  : "default"
+              }
               isError={chat.isError}
               onRetry={chat.isError && onRetryChat ? onRetryChat : null}
             />

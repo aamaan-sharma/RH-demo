@@ -1,8 +1,11 @@
 import "./question.scss";
 import questionUserIcon from "../../../assets/question_user.svg";
-import { stripTranscribeAppendix } from "../../utils/chatText";
+import {
+  stripTranscribeAppendix,
+  stripEvidenceAndAfter,
+} from "../../utils/chatText";
 const Question = ({ text, label = "You", meta = null }) => {
-  const cleanedText = stripTranscribeAppendix(text);
+  const cleanedText = stripEvidenceAndAfter(stripTranscribeAppendix(text));
   return (
     <div className="question_wrapper">
       <div className="user_section">

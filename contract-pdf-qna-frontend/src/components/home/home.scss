@@ -234,24 +234,30 @@
           }
 
             .review_approve_button {
-              border: none;
+              border: 1px solid #cbd5e1;
               border-radius: 10px;
               padding: 10px 12px;
               font-size: 13px;
               font-weight: 800;
-              background: #5e7bc6;
-              color: #ffffff;
+              background: #f8fafc;
+              color: #2f3a57;
               cursor: pointer;
+              transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+              &:hover:not(:disabled) {
+                background: #5e7bc6;
+                color: #ffffff;
+                border-color: #5e7bc6;
+              }
               &:disabled {
-                background: #b8c4e6;
+                background: #f1f5f9;
+                color: #94a3b8;
+                border-color: #e2e8f0;
                 cursor: not-allowed;
               }
             }
 
             .show_transcript_button {
-              background: #5e7bc6;
-              color: #ffffff;
-              border: none;
+              /* Shares theme default + blue hover from .review_approve_button */
             }
 
           .subtle_status {
@@ -478,13 +484,15 @@
         .calls_case_questions,
         .calls_case_chat,
         .calls_final_answer {
-          margin-top: 14px;
+          margin-top: 20px;
 
           .section_title {
-            font-size: 13px;
-            font-weight: 800;
-            color: #333333;
-            margin-bottom: 10px;
+            font-size: 11px;
+            font-weight: 700;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            margin-bottom: 12px;
           }
         }
 
@@ -492,179 +500,180 @@
           .questions_list {
             display: flex;
             flex-direction: column;
-            gap: 14px;
+            gap: 12px;
           }
 
           .question_item {
-            border: 1px solid #ededed;
-            border-radius: 14px;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
             background: #ffffff;
-            padding: 14px 16px;
-            box-shadow: 0 8px 22px rgba(0, 0, 0, 0.04);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+            overflow: hidden;
+            transition: box-shadow 0.2s ease, border-color 0.2s ease;
+
+            &:hover {
+              border-color: #cbd5e1;
+              box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+            }
 
             &[open] {
-              .question_summary_primary .q_dropdown_icon {
+              border-color: #94a3b8;
+              box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+
+              .q_dropdown_icon {
                 transform: rotate(90deg);
               }
             }
 
             .question_summary {
               cursor: pointer;
-              display: flex;
-              flex-direction: column;
-              gap: 0;
-              font-size: 15px;
-              font-weight: 900;
-              color: #2f3a57;
-              padding: 8px 0;
               list-style: none;
+              padding: 0;
+              margin: 0;
 
-              &::-webkit-details-marker {
+              &::-webkit-details-marker,
+              &::marker {
                 display: none;
               }
-
-              .question_summary_primary {
-                display: flex;
-                align-items: baseline;
-                justify-content: space-between;
-                gap: 12px;
-                width: 100%;
-              }
-
-              .q_left {
-                display: flex;
-                align-items: baseline;
-                gap: 10px;
-                min-width: 0;
-                flex: 1 1 auto;
-              }
-
-              .q_index {
-                padding: 4px 8px;
-                border-radius: 999px;
-                border: 1px solid #dfe6ff;
-                background: #f6f8ff;
-                color: #2f3a57;
-                font-size: 12px;
-                flex: 0 0 auto;
-              }
-
-              .q_text {
-                font-size: 15px;
-                color: #111111;
-                font-weight: 900;
-                line-height: 22px;
-                overflow: visible;
-                text-overflow: initial;
-                white-space: normal;
-                word-break: break-word;
-                overflow-wrap: anywhere;
-              }
-
-              .q_dropdown_icon {
-                flex: 0 0 auto;
-                color: #5e7bc6;
-                font-size: 14px;
-                font-weight: 900;
-                margin-left: 6px;
-                opacity: 0.9;
-                transform: rotate(0deg);
-                transition: transform 0.12s ease;
-                transform-origin: center;
-              }
             }
 
-            /* Decision and Amount key-values row (Claims extracted questions) */
-            .calls_decision_amount_row {
+            .question_item_header {
               display: flex;
-              flex-wrap: wrap;
               align-items: center;
-              gap: 16px 24px;
-              margin-top: 10px;
-              padding-top: 10px;
-              border-top: 1px solid #ededed;
-
-              .calls_decision_meta {
-                display: flex;
-                flex-direction: column;
-                gap: 2px;
-                font-size: 11px;
-                color: #64748b;
-
-                .label {
-                  font-size: 11px;
-                  font-weight: 600;
-                  color: #64748b;
-                  text-transform: uppercase;
-                  letter-spacing: 0.3px;
-                }
-                .value {
-                  font-size: 12px;
-                  font-weight: 700;
-                  color: #111111;
-                }
-              }
+              justify-content: space-between;
+              gap: 16px;
+              padding: 16px 18px;
+              min-height: 56px;
             }
 
-            /* Decision as bold colored text only (no pill) in Claims */
-            .ifa_decision_text {
+            .question_item_row {
+              display: flex;
+              align-items: center;
+              gap: 12px;
+              min-width: 0;
+              flex: 1 1 auto;
+            }
+
+            .q_index {
+              flex-shrink: 0;
+              display: inline-flex;
+              align-items: center;
+              justify-content: center;
+              width: 28px;
+              height: 28px;
+              border-radius: 8px;
+              background: #f1f5f9;
+              color: #475569;
+              font-size: 12px;
               font-weight: 700;
-              font-size: 13px;
+              line-height: 1;
+            }
+
+            .q_text {
+              flex: 1 1 auto;
+              min-width: 0;
+              font-size: 15px;
+              font-weight: 600;
+              color: #1e293b;
+              line-height: 1.45;
+              letter-spacing: -0.01em;
+              word-break: break-word;
+            }
+
+            .question_decision_holder {
+              flex-shrink: 0;
+              margin-left: 12px;
+            }
+
+            .q_dropdown_icon {
+              flex-shrink: 0;
+              color: #64748b;
+              font-size: 12px;
+              font-weight: 700;
+              transition: transform 0.2s ease;
+              opacity: 0.85;
+            }
+
+            /* Decision badge (inherited from itemizedFinalAnswer) */
+            .ifa_decision_text {
+              font-weight: 800;
+              font-size: 12px;
+              letter-spacing: 0.02em;
+              padding: 4px 10px;
+              border-radius: 6px;
             }
             .ifa_decision_text.ifa_decision_approved {
-              color: #0f5f3a;
+              color: #065f46;
+              background: #d1fae5;
             }
-            .ifa_decision_text.ifa_decision_rejected,
             .ifa_decision_text.ifa_decision_denied {
-              color: #a11a1a;
+              color: #991b1b;
+              background: transparent;
+            }
+            .ifa_decision_text.ifa_decision_partial {
+              color: #92400e;
+              background: #fef3c7;
             }
             .ifa_decision_text.ifa_decision_no_decision {
-              color: #6b6b6b;
+              color: #475569;
+              background: #f1f5f9;
             }
             .calls_badge.calls_badge_no_decision {
-              font-weight: 700;
-              font-size: 13px;
-              color: #6b6b6b;
-              background: transparent;
+              font-weight: 600;
+              font-size: 12px;
+              color: #475569;
+              background: #f1f5f9;
+              padding: 4px 10px;
+              border-radius: 6px;
               border: none;
-              padding: 0;
+            }
+
+            .question_item_body {
+              padding: 0 18px 18px;
+              border-top: 1px solid #f1f5f9;
             }
 
             .question_facts {
               display: flex;
               flex-wrap: wrap;
               gap: 8px;
-              margin: 8px 0 10px 0;
+              padding-top: 14px;
+              margin-bottom: 14px;
             }
 
             .fact_chip {
               display: inline-flex;
               align-items: center;
               gap: 6px;
-              padding: 6px 10px;
-              border-radius: 999px;
-              border: 1px solid #e6e6e6;
-              background: #fbfbfb;
-              max-width: 100%;
+              padding: 6px 12px;
+              border-radius: 8px;
+              border: 1px solid #e2e8f0;
+              background: #f8fafc;
               font-size: 12px;
-              line-height: 16px;
-              color: #2f3a57;
-              font-weight: 800;
+              line-height: 1.35;
+              color: #334155;
 
               .k {
-                color: #6b6b6b;
-                font-weight: 900;
+                color: #64748b;
+                font-weight: 600;
                 white-space: nowrap;
               }
 
               .v {
-                color: #2f3a57;
-                font-weight: 900;
+                color: #1e293b;
+                font-weight: 500;
                 overflow: hidden;
                 text-overflow: ellipsis;
                 white-space: nowrap;
-                max-width: 320px;
+                max-width: 280px;
               }
+            }
+
+            .question_answer_block {
+              background: #f8fafc;
+              border-radius: 10px;
+              padding: 14px 16px;
+              border: 1px solid #e2e8f0;
             }
           }
         }

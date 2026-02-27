@@ -113,7 +113,8 @@
   .ifa_item_summary_right {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 24px;
+    flex-shrink: 0;
   }
 
   .ifa_item_meta {
@@ -123,12 +124,30 @@
     gap: 2px;
     font-size: 11px;
     color: #64748b;
+    min-width: 88px;
+    text-align: right;
+
+    .label {
+      display: block;
+      width: 100%;
+    }
 
     .value {
       font-size: 12px;
       font-weight: 700;
       color: #111111;
+      width: 100%;
+      text-align: right;
     }
+
+    &.ifa_item_meta_amount {
+      min-width: 240px;
+      align-items: flex-end;
+    }
+  }
+
+  .ifa_amount_display {
+    font-weight: 700;
   }
 
   .ifa_item_body {
@@ -177,21 +196,48 @@
         }
       }
 
-      /* Money reconciliation (Answer only): enterprise-style block */
+      .ifa_component_items {
+        margin: 0;
+        padding-left: 18px;
+        list-style: disc;
+
+        li {
+          margin-bottom: 6px;
+          &:last-child {
+            margin-bottom: 0;
+          }
+        }
+      }
+
+      /* Money reconciliation (Answer only): bill-style block */
+      .ifa_row_block.ifa_row_money_recon {
+        .k strong {
+          font-size: 14px;
+          color: #1e293b;
+        }
+      }
+
       .ifa_money_recon {
-        background: #f8fafc;
-        border: 1px solid #e2e8f0;
-        border-radius: 8px;
-        padding: 12px 14px;
-        font-size: 12px;
-        line-height: 1.5;
+        background: #ffffff;
+        border: 1px solid #cbd5e1;
+        border-radius: 6px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+        padding: 16px 18px;
+        font-size: 14px;
+        line-height: 1.55;
         color: #334155;
+        margin-top: 6px;
 
         .ifa_money_recon_header {
+          font-size: 13px;
           font-weight: 700;
-          color: #1e293b;
-          margin-top: 10px;
-          margin-bottom: 4px;
+          color: #0f172a;
+          margin-top: 14px;
+          margin-bottom: 6px;
+          padding-bottom: 4px;
+          border-bottom: 1px solid #e2e8f0;
+          text-transform: uppercase;
+          letter-spacing: 0.02em;
 
           &:first-child {
             margin-top: 0;
@@ -199,23 +245,38 @@
         }
 
         .ifa_money_recon_kv {
-          padding-left: 12px;
-          margin-bottom: 2px;
           display: flex;
-          flex-wrap: wrap;
-          gap: 0 6px;
+          justify-content: space-between;
+          align-items: baseline;
+          gap: 12px;
+          padding: 8px 0;
+          border-bottom: 1px dotted #e2e8f0;
+          font-variant-numeric: tabular-nums;
 
-          &::before {
-            content: "";
-            display: inline-block;
-            width: 3px;
+          .ifa_money_recon_label {
+            flex: 0 1 auto;
+            min-width: 0;
+          }
+
+          .ifa_money_recon_value {
             flex-shrink: 0;
+            text-align: right;
+            font-weight: 600;
+          }
+
+          &:last-child {
+            border-bottom: none;
           }
         }
 
         .ifa_money_recon_line {
-          padding-left: 12px;
-          margin-bottom: 2px;
+          padding: 6px 0;
+          border-bottom: 1px dotted #e2e8f0;
+          font-size: 14px;
+
+          &:last-child {
+            border-bottom: none;
+          }
         }
       }
     }
@@ -223,8 +284,9 @@
 
   /* Decision as bold colored text only (no pill/background) */
   .ifa_decision_text {
-    font-weight: 700;
+    font-weight: 800;
     font-size: 13px;
+    letter-spacing: 0.02em;
   }
 
   .ifa_decision_text.ifa_decision_approved {
@@ -808,11 +870,19 @@
       background: #fff2f2;
       color: #a11a1a;
     }
+    .ifa_select_decision.ifa_decision_partial {
+      border: 1px solid #fde68a;
+      background: #fef3c7;
+      color: #92400e;
+    }
     .ifa_select_decision.ifa_decision_no_decision {
       border: 1px solid #e6e6e6;
       background: #fafafa;
       color: #888888;
       font-style: italic;
+    }
+    .ifa_meta.ifa_meta_item_name_first {
+      margin-top: 4px;
     }
     .ifa_keyfacts_row .v,
     .ifa_meta .v {
