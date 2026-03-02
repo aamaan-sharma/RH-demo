@@ -1,16 +1,18 @@
 include .env
 export
 
+
+run: cacert.pem bigquery.json
+	uv run python app.py
+
 init:
-	pyenv local
-	python3 -m venv venv
-	. venv/bin/activate; python3 -m pip install -r requirements.txt
-run:
-	. .venv/bin/activate; python3 app.py
+	curl -LsSf https://astral.sh/uv/install.sh | sh
+	uv init .
+	uv add -r requirements.txt
 attu:
-	docker run -p 8000:3000 -e MILVUS_URL=$(MILVUS_HOST):19530 zilliz/attu:latest
+	docker run --name attu -p 8000:3000 -e MILVUS_URL=$(MILVUS_HOST):19530 zilliz/attu:latest || docker start attu
 jaeger:
-	docker run -p 16686:16686 -p 4318:4318 jaegertracing/jaeger:latest
+	docker run --name jaeger -p 16686:16686 -p 4318:4318 jaegertracing/jaeger:latest
 
 event_test:
 	. venv/bin/activate; python3 -c "from tests import test_handle_transcript_event"
