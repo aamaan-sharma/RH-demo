@@ -95,9 +95,31 @@ export const serializeDraftSummary = (parsed) => {
 };
 
 /**
- * Build a list of only the summary fields that changed between previous and updated draft text.
- * Returns [{ fieldName, previousValue, updatedValue }] for display in the change log.
- * Only fields with different previous vs current values are included.
+ * Normalize a value for equality: if two values normalize to the same string, they are
+ * considered the same and must not appear in the changelog (do not show or store).
+ */
+function normalizeForChangelogCompare(value, fieldKey) {
+  const s = String(value ?? "").trim().replace(/\s+/g, " ");
+  if (!s) return "";
+  const lower = s.toLowerCase();
+  if (lower === "not specified" || lower === "n/a" || lower === "na" || lower === "—" || lower === "-") return "";
+  if (fieldKey === "Decision") return s.toUpperCase();
+  if (fieldKey === "Amount" || fieldKey === "Customer Quoted / Asked" || fieldKey === "Company Can Provide") {
+    return s.replace(/\s+/g, "").replace(/,/g, "").replace(/^\$*/, "").trim();
+  }
+  return s;
+}
+
+function isSameValue(prev, next, fieldKey) {
+  const p = normalizeForChangelogCompare(prev, fieldKey);
+  const n = normalizeForChangelogCompare(next, fieldKey);
+  return p === n || (!p && !n);
+}
+
+/**
+ * Build changelog entries: only fields whose value actually changed (after normalization).
+ * If previous and current normalize to the same value (e.g. DENIED vs Denied, $0 vs 0),
+ * that field is not included and is not stored in the changelog.
  */
 export const buildSummaryFieldChanges = (previousText, updatedText) => {
   const prev = parseClaimsFinalAnswer(previousText || "");
@@ -118,78 +140,36 @@ export const buildSummaryFieldChanges = (previousText, updatedText) => {
     const nextItem = nextItems[i] || {};
 
     const fields = [
-      {
-        key: "Item",
-        prev: prevItem.title || prevItem.name || "",
-        next: nextItem.title || nextItem.name || "",
-      },
+      { key: "Item", prev: prevItem.title || prevItem.name || "", next: nextItem.title || nextItem.name || "" },
       { key: "Type", prev: str(prevItem.type), next: str(nextItem.type) },
-      {
-        key: "Related",
-        prev: str(prevItem.related),
-        next: str(nextItem.related),
-      },
-      {
-        key: "Situation",
-        prev: str(prevItem.situation),
-        next: str(nextItem.situation),
-      },
-      {
-        key: "Decision",
-        prev: str(prevItem.decision),
-        next: str(nextItem.decision),
-      },
+      { key: "Related", prev: str(prevItem.related), next: str(nextItem.related) },
+      { key: "Situation", prev: str(prevItem.situation), next: str(nextItem.situation) },
+      { key: "Decision", prev: str(prevItem.decision), next: str(nextItem.decision) },
       { key: "Amount", prev: str(prevItem.amount), next: str(nextItem.amount) },
-      {
-        key: "What's Covered",
-        prev: arrStr(prevItem.covered),
-        next: arrStr(nextItem.covered),
-      },
-      {
-        key: "What's Not Covered / Limitations",
-        prev: arrStr(prevItem.notCovered),
-        next: arrStr(nextItem.notCovered),
-      },
-      {
-        key: "Customer Quoted / Asked",
-        prev: arrStr(prevItem.amountsCustomer),
-        next: arrStr(nextItem.amountsCustomer),
-      },
-      {
-        key: "Company Can Provide",
-        prev: arrStr(prevItem.amountsCompany),
-        next: arrStr(nextItem.amountsCompany),
-      },
+      { key: "What's Covered", prev: arrStr(prevItem.covered), next: arrStr(nextItem.covered) },
+      { key: "What's Not Covered / Limitations", prev: arrStr(prevItem.notCovered), next: arrStr(nextItem.notCovered) },
+      { key: "Customer Quoted / Asked", prev: arrStr(prevItem.amountsCustomer), next: arrStr(nextItem.amountsCustomer) },
+      { key: "Company Can Provide", prev: arrStr(prevItem.amountsCompany), next: arrStr(nextItem.amountsCompany) },
       { key: "Why", prev: arrStr(prevItem.why), next: arrStr(nextItem.why) },
-      {
-        key: "Next Steps (Item Level)",
-        prev: arrStr(prevItem.nextSteps),
-        next: arrStr(nextItem.nextSteps),
-      },
-      {
-        key: "Clause Reference",
-        prev: arrStr(prevItem.clauseReference),
-        next: arrStr(nextItem.clauseReference),
-      },
+      { key: "Next Steps (Item Level)", prev: arrStr(prevItem.nextSteps), next: arrStr(nextItem.nextSteps) },
+      { key: "Clause Reference", prev: arrStr(prevItem.clauseReference), next: arrStr(nextItem.clauseReference) },
     ];
 
     for (const f of fields) {
       const p = str(f.prev);
       const n = str(f.next);
-      if (p !== n) {
-        changes.push({
-          fieldName: prefix + f.key,
-          previousValue: emptyLabel(p) || "—",
-          updatedValue: emptyLabel(n) || "—",
-        });
-      }
+      if (isSameValue(p, n, f.key)) continue;
+      changes.push({
+        fieldName: prefix + f.key,
+        previousValue: emptyLabel(p) || "—",
+        updatedValue: emptyLabel(n) || "—",
+      });
     }
   }
 
-  // Overall Next Step (only if changed)
   const prevOverall = str(prev.overallNextSteps || "");
   const nextOverall = str(next.overallNextSteps || "");
-  if (prevOverall !== nextOverall) {
+  if (!isSameValue(prevOverall, nextOverall, "Overall Next Step")) {
     changes.push({
       fieldName: "Overall Next Step",
       previousValue: emptyLabel(prevOverall) || "—",
@@ -197,19 +177,14 @@ export const buildSummaryFieldChanges = (previousText, updatedText) => {
     });
   }
 
-  // If parsing produced no items, treat the whole text as one field (fallback).
   if (
     changes.length === 0 &&
     prevItems.length === 0 &&
     nextItems.length === 0 &&
-    str(previousText) !== str(updatedText)
+    !isSameValue(previousText, updatedText, "Summary")
   ) {
     return [
-      {
-        fieldName: "Summary",
-        previousValue: str(previousText) || "—",
-        updatedValue: str(updatedText) || "—",
-      },
+      { fieldName: "Summary", previousValue: str(previousText) || "—", updatedValue: str(updatedText) || "—" },
     ];
   }
   return changes;
@@ -301,6 +276,50 @@ function getClaimDisplayName(claim) {
   return items.map((i) => (i?.name || "").trim()).filter(Boolean).join(", ") || "";
 }
 
+const CLAIM_ID_RE = /^q\d+$/i;
+
+/** Derive a short label for the authorization scope from decision summary/reasons when the item name is missing or is a claim ID (e.g. q11). */
+function getClaimDisplayLabel(claim) {
+  if (!claim) return "";
+  const fromItems = getClaimDisplayName(claim);
+  if (fromItems && !CLAIM_ID_RE.test(fromItems.trim())) return fromItems;
+  const summary = (claim.decisionSummary || "").trim();
+  let s = summary || (Array.isArray(claim.reasons) && claim.reasons.length ? String(claim.reasons[0] || "").trim() : "");
+  if (!s) return fromItems || "";
+  s = s
+    .replace(/^(?:The\s+)?authorized\s+/i, "")
+    .replace(/^(?:The\s+)?authorization\s+(?:is\s+)?(?:for\s+)?/i, "")
+    .replace(/\s+is\s+approved\.?$/i, "")
+    .replace(/\s+has\s+been\s+approved\.?$/i, "")
+    .replace(/\s+is\s+denied\.?$/i, "")
+    .replace(/\s+was\s+denied\.?$/i, "")
+    .replace(/\s+is\s+partially\s+approved\.?$/i, "")
+    .replace(/\s+per\s+call\s+notes\.?$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (s.length > 80) s = s.slice(0, 77).split(/\s+/).slice(0, -1).join(" ") + "...";
+  return s || fromItems || "";
+}
+
+/** Build a display item for AmountDisplay from canonical claim.amounts (single source of truth). */
+function getItemForClaimAmounts(claim, fallbackItem) {
+  const amt = claim?.amounts;
+  if (!amt || typeof amt !== "object") return fallbackItem;
+  const company = amt.company_total != null || amt.authorized_by_company != null
+    ? `$${Number(amt.company_total ?? amt.authorized_by_company ?? 0).toFixed(2)}`
+    : "";
+  const customer = amt.customer_out_of_pocket != null
+    ? `$${Number(amt.customer_out_of_pocket).toFixed(2)}`
+    : "";
+  if (!company && !customer) return fallbackItem;
+  return {
+    ...(fallbackItem || {}),
+    amountsCompany: company ? [company] : (fallbackItem?.amountsCompany || []),
+    amountsCustomer: customer ? [customer] : (fallbackItem?.amountsCustomer || []),
+    amount: [company, customer].filter(Boolean).length ? `Company ${company}, Customer ${customer}` : (fallbackItem?.amount || ""),
+  };
+}
+
 export const ItemizedFinalAnswer = ({
   text = "",
   parsed: parsedProp,
@@ -359,16 +378,20 @@ export const ItemizedFinalAnswer = ({
         aria-label="Coverage Components"
       >
         {parsed.items.map((it, idx) => {
-          // Use claim item name or parsed title/name only; no "Coverage Component 1"
-          const claimName = compactLayout && claimForChat && idx === 0 ? getClaimDisplayName(claimForChat) : "";
+          // Prefer descriptive label (authorization scope) over claim ID (e.g. "Labor cost for two outlet repair" over "q11")
+          const claimLabel = compactLayout && claimForChat && idx === 0 ? getClaimDisplayLabel(claimForChat) : "";
+          const parsedTitleOrName = (it.title || "").trim() || (it.name || "").trim();
           const applianceName =
-            claimName ||
-            (it.title || "").trim() ||
-            (it.name || "").trim() ||
+            claimLabel ||
+            (parsedTitleOrName && !CLAIM_ID_RE.test(parsedTitleOrName) ? parsedTitleOrName : "") ||
+            parsedTitleOrName ||
             "";
           const itemNo = it.itemNo || String(idx + 1);
           const useClaimData = Boolean(compactLayout && claimForChat && idx === 0);
-          const decision = it.decision || "";
+          const decision = (useClaimData && (claimForChat?.decision != null && claimForChat.decision !== ""))
+            ? claimForChat.decision
+            : (it.decision || "");
+          const amountItem = useClaimData ? getItemForClaimAmounts(claimForChat, it) : it;
           const isCollapsible = !compactLayout;
 
           const headerRow = (
@@ -387,7 +410,7 @@ export const ItemizedFinalAnswer = ({
                   <div className="ifa_item_meta ifa_item_meta_amount">
                     <span className="label">Amount</span>
                     <span className="value">
-                      <AmountDisplay item={it} />
+                      <AmountDisplay item={amountItem} />
                     </span>
                   </div>
                   {isCollapsible ? (
@@ -508,6 +531,27 @@ export const ItemizedFinalAnswer = ({
                           <strong>Summary</strong>
                         </div>
                         <div className="v">{claimForChat.decisionSummary}</div>
+                      </div>
+                    ) : null}
+                    {claimForChat.amounts?.customer_out_of_pocket > 0 ? (
+                      <div className="ifa_row">
+                        <div className="k">
+                          <strong>Customer responsibility</strong>
+                        </div>
+                        <div className="v">
+                          ${Number(claimForChat.amounts.customer_out_of_pocket).toFixed(2)}
+                        </div>
+                      </div>
+                    ) : null}
+                    {claimForChat.authorization_code && (claimForChat.amounts?.company_total > 0 || claimForChat.amounts?.authorized_by_company > 0) ? (
+                      <div className="ifa_row">
+                        <div className="k">
+                          <strong>Authorized</strong>
+                        </div>
+                        <div className="v">
+                          ${Number(claimForChat.amounts?.company_total ?? claimForChat.amounts?.authorized_by_company ?? 0).toFixed(2)}
+                          {claimForChat.authorization_code ? ` (Auth code: ${claimForChat.authorization_code})` : ""}
+                        </div>
                       </div>
                     ) : null}
                     {Array.isArray(claimForChat.reasons) && claimForChat.reasons.length > 0 ? (
