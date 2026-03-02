@@ -127,6 +127,24 @@ const ChatList = ({
 
     return (
       <div className="chatList_wrapper">
+        {finalAnswer?.response ? (
+          <div className="calls_final_answer">
+            <Response
+              response={finalAnswer.response}
+              chatId={finalAnswer.chat_id}
+              conversationId={conversationId}
+              chats={chats}
+              setChats={setChats}
+              showReferenceIcon={false}
+              relevantChunks={getRelevantChunks(finalAnswer)}
+              variant="finalAnswer"
+              headerLabel="Final Analyzed Answer"
+              tone="blue"
+              showActions={true}
+            />
+          </div>
+        ) : null}
+
         {extracted.length > 0 ? (
           <div className="calls_case_questions">
             <div className="section_title">Extracted questions</div>
@@ -148,7 +166,10 @@ const ChatList = ({
                 const decisionFromClaim = claim?.decision;
                 const { decision: decisionFromResponse } =
                   getDecisionAndAmountFromResponse(chat?.response || "");
-                const decision = decisionFromClaim ?? decisionFromResponse;
+                const decision =
+                  decisionFromClaim != null && decisionFromClaim !== ""
+                    ? decisionFromClaim
+                    : decisionFromResponse;
                 return (
                   <details
                     className="question_item"
@@ -157,7 +178,10 @@ const ChatList = ({
                     <summary className="question_summary">
                       <div className="question_item_header">
                         <div className="question_item_row">
-                          <span className="q_index" aria-hidden="true">{`Q${idx + 1}`}</span>
+                          <span
+                            className="q_index"
+                            aria-hidden="true"
+                          >{`Q${idx + 1}`}</span>
                           <span className="q_text">{qText}</span>
                           {chat?.response ? (
                             <span className="question_decision_holder">
@@ -196,24 +220,24 @@ const ChatList = ({
                       ) : null}
                       {chat?.response ? (
                         <div className="question_answer_block">
-                      <Response
-                        response={chat.response}
-                        chatId={chat.chat_id}
-                        conversationId={conversationId}
-                        chats={chats}
-                        setChats={setChats}
-                        showReferenceIcon={false}
-                        relevantChunks={getRelevantChunks(chat)}
-                        variant="draftAnswer"
-                        hideHeader={true}
-                        tone="blue"
-                        isError={chat.isError}
-                        onRetry={
-                          chat.isError && onRetryChat ? onRetryChat : null
-                        }
-                        showActions={false}
-                        claimForChat={claim}
-                      />
+                          <Response
+                            response={chat.response}
+                            chatId={chat.chat_id}
+                            conversationId={conversationId}
+                            chats={chats}
+                            setChats={setChats}
+                            showReferenceIcon={false}
+                            relevantChunks={getRelevantChunks(chat)}
+                            variant="draftAnswer"
+                            hideHeader={true}
+                            tone="blue"
+                            isError={chat.isError}
+                            onRetry={
+                              chat.isError && onRetryChat ? onRetryChat : null
+                            }
+                            showActions={false}
+                            claimForChat={claim}
+                          />
                         </div>
                       ) : null}
                     </div>
@@ -253,25 +277,6 @@ const ChatList = ({
                 ) : null}
               </div>
             ))}
-          </div>
-        ) : null}
-
-        {finalAnswer?.response ? (
-          <div className="calls_final_answer">
-            <div className="section_title">Final analyzed answer</div>
-            <Response
-              response={finalAnswer.response}
-              chatId={finalAnswer.chat_id}
-              conversationId={conversationId}
-              chats={chats}
-              setChats={setChats}
-              showReferenceIcon={false}
-              relevantChunks={getRelevantChunks(finalAnswer)}
-              variant="finalAnswer"
-              headerLabel="Final Analyzed Answer"
-              tone="blue"
-              showActions={true}
-            />
           </div>
         ) : null}
       </div>
