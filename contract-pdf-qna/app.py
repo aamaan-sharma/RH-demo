@@ -4380,7 +4380,7 @@ def _claims_background_process_transcript(
                 event="error",
                 payload={"error": f"Invalid gpt_model: {gpt_model}. Must be 'Search' or 'Infer'"},
             )
-            retur
+            return
 
         _claims_publish_event(conversation_id=cid, event="status", payload={"stage": "answering"})
 
