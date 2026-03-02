@@ -1,0 +1,41 @@
+[project]
+name = "contract-pdf-qna"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = "==3.11.14"
+dependencies = [
+    "certifi==2025.11.12",
+    "closest>=0.2.0",
+    "dnspython==2.4.2",
+    "eventlet==0.35.2",
+    "flask==2.3.3",
+    "flask-cors==6.0.1",
+    "flask-socketio==5.3.6",
+    "fsspec==2025.12.0",
+    "gcsfs==2025.12.0",
+    "google-auth==2.41.1",
+    "google-cloud-bigquery==3.38.0",
+    "langchain==0.3.27",
+    "langchain-community==0.3.31",
+    "langchain-core==0.3.80",
+    "langchain-openai==0.3.35",
+    "langkit==0.0.35",
+    "nltk>=3.9.3",
+    "numpy==1.26.4",
+    "oauth2client==4.1.3",
+    "openai==2.8.1",
+    "opentelemetry-api>=1.22.0,<2.0.0",
+    "opentelemetry-exporter-otlp>=1.22.0,<2.0.0",
+    "opentelemetry-instrumentation>=0.43b0,<1.0",
+    "opentelemetry-sdk>=1.22.0,<2.0.0",
+    "pymilvus==2.3.0",
+    "pymongo==4.5.0",
+    "python-dotenv==1.0.0",
+    "sentence-transformers==5.1.2",
+    "setuptools==80.0.0",
+    "tiktoken==0.7.0",
+    "transformers>=4.41.0,<5.0.0",
+    "whylabs-textstat==0.7.4",
+    "whylogs==1.6.4",
+]

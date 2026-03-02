@@ -991,18 +991,8 @@ def filter_relevant_customer_questions(questions: List[Dict]) -> List[Dict]:
     
     return filtered_questions
 
-from pydantic import BaseModel, Field
-from typing import Optional, Literal, List
 
-class QuestionObj(BaseModel):
-    question: str = ""
-    context: str = ""
-    questionType: Literal["claim_review", "coverage", "eligibility", "authorization", "costs", "process"] = "process"
-    userIntent: str= ""
-
-class QuestionsObj(BaseModel):
-    questionList :List[QuestionObj] = Field(default_factory=List)
-
+from utils.prompts_schema import QuestionsObj
 
 
 def extract_relevant_customer_questions(transcript_content: str, llm) -> List[Dict]:
@@ -1016,93 +1006,6 @@ def extract_relevant_customer_questions(transcript_content: str, llm) -> List[Di
     extraction_prompt = QUESTION_EXTRACTION_PROMPT 
     llm = llm.with_structured_output(QuestionsObj)
     extraction_chain = extraction_prompt | llm 
-    
-    def _parse_questions_json(raw_text: str) -> List[Dict]:
-        """
-        Best-effort parser for the question extractor output.
-        The LLM is instructed to return a JSON array, but may still wrap it in text/markdown.
-        """
-        def _normalize_items(maybe_items: Any) -> List[Dict]:
-            """
-            Normalize common extractor output shapes into the canonical list[dict] with at least:
-              - question (str)
-              - context (str)
-              - questionType (str)
-              - userIntent (str)
-            """
-            if maybe_items is None:
-                return []
-
-            # If the model returns an object wrapper, unwrap common keys.
-            if isinstance(maybe_items, dict):
-                for key in ("questions", "items", "data", "result"):
-                    if isinstance(maybe_items.get(key), list):
-                        maybe_items = maybe_items.get(key)
-                        break
-
-            if not isinstance(maybe_items, list):
-                return []
-
-            normalized: List[Dict] = []
-            for x in maybe_items:
-                if isinstance(x, dict):
-                    q = (x.get("question") or "").strip()
-                    # Some models return {"text": "..."} or {"q": "..."}; accept best-effort.
-                    if not q:
-                        q = (x.get("text") or x.get("q") or "").strip()
-                    if not q:
-                        continue
-                    normalized.append(
-                        {
-                            "question": q,
-                            "context": str(x.get("context") or "").strip(),
-                            "questionType": str(x.get("questionType") or x.get("type") or "claim_review").strip(),
-                            "userIntent": str(x.get("userIntent") or x.get("intent") or "").strip(),
-                        }
-                    )
-                elif isinstance(x, str):
-                    q = x.strip()
-                    if not q:
-                        continue
-                    normalized.append(
-                        {
-                            "question": q,
-                            "context": "",
-                            "questionType": "claim_review",
-                            "userIntent": "",
-                        }
-                    )
-            return normalized
-
-        if raw_text is None:
-            return []
-        txt = str(raw_text)
-        # Strip markdown code fences if present
-        txt = re.sub(r'```json\\n?', '', txt)
-        txt = re.sub(r'```\\n?', '', txt)
-        txt = txt.strip()
-
-        # If the response contains leading/trailing text, try to extract the first JSON array.
-        if not txt.startswith("["):
-            m = re.search(r"\\[[\\s\\S]*\\]", txt)
-            if m:
-                txt = m.group(0).strip()
-
-        data: Any = None
-        try:
-            data = json.loads(txt)
-        except Exception:
-            # Try object form: {"questions":[...]} or similar
-            try:
-                m_obj = re.search(r"\\{[\\s\\S]*\\}", txt)
-                if not m_obj:
-                    return []
-                data = json.loads(m_obj.group(0))
-            except Exception:
-                return []
-
-        return _normalize_items(data)
-
     questions: List[Dict] = []
     try:
         result = extraction_chain.invoke({"transcript": transcript_content})
@@ -2542,6 +2445,7 @@ def chat_history():
         ]
         for chat in chats:
             chat_id = chat.get("chat_id")
+            chat["tags"] = docs.get("tags", [])
             if chat_id in feedback_dict:
                 chat["reaction"] = feedback_dict[chat_id]
             # Normalize chunk fields for frontend consumption (keep backwards-compatible snake_case too)
@@ -4609,7 +4513,7 @@ def _claims_background_process_transcript(
             try:
                 all_chunks: List[str] = []
                 for r in results or []:
-                    rc2 = r.get("relevantChunks") or []
+                    rc2 = r.get("relvantChunks") or []
                     if isinstance(rc2, list):
                         all_chunks.extend([str(x) for x in rc2 if str(x).strip()])
                 seen = set()
@@ -6491,6 +6395,7 @@ def _process_transcript_core(data, yield_sse_fn=None):
                             "questionType": "coverage",
                             "userIntent": "Customer wants to know if the described issue is covered",
                             "questionId": "q1",
+                            "tags": []
                         }]
                 else:
                     questions = provided_questions
@@ -6572,6 +6477,7 @@ def _process_transcript_core(data, yield_sse_fn=None):
                     # Keep UI question clean (match normal Claims flow)
                     display_question_text = re.sub(r"\[CALL_CONTEXT:.*?\]\s*", "", str(question_text or "")).strip()
                     result["question"] = display_question_text
+                    result["tags"] = question_obj.get("tags", [])
                     result["context"] = question_obj.get("context", "")
                     result["questionType"] = question_obj.get("questionType", "general")
                     result["userIntent"] = question_obj.get("userIntent", "")
@@ -6606,6 +6512,7 @@ def _process_transcript_core(data, yield_sse_fn=None):
                                     "chats": {
                                         "chat_id": question_id,
                                         "entered_query": display_question_text,
+                                        "tags": result.get("tags", []),
                                         "response": result.get("answer", ""),
                                         "relevant_chunks": chunks,
                                         "relevant_chunks_detail": chunks_detail,
@@ -6639,6 +6546,7 @@ def _process_transcript_core(data, yield_sse_fn=None):
                         "answer",
                         {
                             "questionId": question_id,
+                            "tags": result.get("tags", []),
                             "question": display_question_text,
                             "answer": result.get("answer", ""),
                             "relevantChunks": result.get("relevantChunks", []),
@@ -6715,8 +6623,8 @@ def _process_transcript_core(data, yield_sse_fn=None):
                         )
                     claim_decision = generate_claim_decision_from_chunks(deduped, claims_context=claims_context)
                     yield _sse("claimDecision", claim_decision)
-                    if claim_decision and isinstance(claim_decision.get("claims"), list) and claim_decision["claims"]:
-                        final_summary_text = _format_claim_decision_as_final_answer(claim_decision)
+                    #if claim_decision and isinstance(claim_decision.get("claims"), list) and claim_decision["claims"] and final_summary_text.strip() == "":
+                    #    final_summary_text = _format_claim_decision_as_final_answer(claim_decision)
                 except Exception as e:
                     print(f"Warning: failed to generate/stream claimDecision: {e}")
 
@@ -6796,6 +6704,7 @@ def _process_transcript_core(data, yield_sse_fn=None):
 
 @app.route("/internal/transcripts/process", methods=["POST"])
 def process_transcript_internal():
+
     """
     Internal transcript processor (streaming)
     (Cloud Run / system-triggered)

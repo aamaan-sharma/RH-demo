@@ -63,6 +63,25 @@ class InferenceMode(Enum):
     INFER = "Infer"
 
 
+from pydantic import BaseModel
+
+class PolicyDetails(BaseModel):
+    contract: str
+    region: str
+    plan: str
+
+@tool
+def policy_expand(policyId: str) -> str:
+    """
+    tool for expanding the policyId to get the contract, region, and plan.
+    args:
+        policyId: str
+    returns:
+        PolicyDetails: contract, region, and plan
+    """
+    print(f"[TOOL CALL][POLICY EXPAND]: {policyId=}")
+    region, contract, plan = policyId.split("_")
+    return PolicyDetails(contract=contract, region=region, plan=plan).model_dump_json()
 
 
 
