@@ -150,6 +150,7 @@ from config import (
 )
 
 from utils.kb import get_vector_db, _retrieve_policy_chunks_for_claims
+from utils.claims_normalizer import resolve_claim_decisions
 # -----------------------------------------------------------------------------
 # Session-level trace context (1 trace per live sessionId)
 # -----------------------------------------------------------------------------
@@ -4544,12 +4545,13 @@ def _claims_background_process_transcript(
                 final_summary_text = summary_future.result() or ""
             except Exception:
                 final_summary_text = ""
-            try:
-                claim_decision = claim_future.result()
-            except Exception:
-                claim_decision = None
+        try:
+            claim_decision = claim_future.result()
+        except Exception:
+            claim_decision = None
 
         if claim_decision and isinstance(claim_decision.get("claims"), list) and claim_decision["claims"]:
+            claim_decision = resolve_claim_decisions(results, claim_decision)
             final_summary_text = _format_claim_decision_as_final_answer(claim_decision)
 
         if claim_decision:
@@ -4805,11 +4807,43 @@ def generate_claim_decision_from_chunks(chunks: List[str], llm=None, claims_cont
         }
 
 
+def _claim_display_label_from_summary(decision_summary: str, reasons: List[str], cid: str) -> str:
+    """
+    Derive a short display label for the authorization scope from decision summary or reasons,
+    so the UI can show e.g. "Labor cost for two outlet repair" instead of the claim ID (q11).
+    """
+    raw = (decision_summary or "").strip()
+    if not raw and isinstance(reasons, list) and reasons:
+        raw = (reasons[0] or "").strip()
+    if not raw:
+        return cid
+    s = raw
+    for prefix in (
+        r"^(?:The\s+)?authorized\s+",
+        r"^(?:The\s+)?authorization\s+(?:is\s+)?(?:for\s+)?",
+        r"^Authorization\s+(?:is\s+)?(?:for\s+)?",
+    ):
+        s = re.sub(prefix, "", s, flags=re.IGNORECASE)
+    for suffix in (
+        r"\s+is\s+approved\.?$",
+        r"\s+has\s+been\s+approved\.?$",
+        r"\s+is\s+denied\.?$",
+        r"\s+was\s+denied\.?$",
+        r"\s+is\s+partially\s+approved\.?$",
+        r"\s+per\s+call\s+notes\.?$",
+    ):
+        s = re.sub(suffix, "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\s+", " ", s).strip()
+    if len(s) > 80:
+        s = s[:77].rsplit(" ", 1)[0] + "..."
+    return s if s else cid
+
+
 def _format_claim_decision_as_final_answer(claim_decision) -> str:
     """
-    Format claim decision JSON into the exact Final Answer text structure the frontend parser
-    expects (Coverage Component N, Situation, Decision, Amounts, Items, Why, Clause Reference,
-    Next steps). Used so the UI shows all details and Items without repeating 'Claim' multiple times.
+    Format claim decision JSON (with resolved amounts and canonical decision) into the exact
+    Final Answer text structure the frontend parser expects. Summary is a projection of the
+    canonical CoverageComponentDecision so all views stay consistent.
     """
     if not isinstance(claim_decision, dict):
         return ""
@@ -4849,9 +4883,23 @@ def _format_claim_decision_as_final_answer(claim_decision) -> str:
         if not isinstance(items, list):
             items = []
 
+        amounts = c.get("amounts") or {}
+        company_total = float(amounts.get("company_total") or amounts.get("authorized_by_company") or 0)
+        customer_oop = float(amounts.get("customer_out_of_pocket") or 0)
+        customer_total = float(amounts.get("customer_total") or customer_oop)
+        auth_code = str(c.get("authorization_code") or "").strip()
+        covered_parts = c.get("covered_parts") or []
+        not_covered_parts = c.get("not_covered_parts") or []
+        if not isinstance(covered_parts, list):
+            covered_parts = []
+        if not isinstance(not_covered_parts, list):
+            not_covered_parts = []
+
         title = ""
         if items and isinstance(items[0], dict):
             title = str(items[0].get("name") or "").strip()
+        if not title and (decision_summary or reasons):
+            title = _claim_display_label_from_summary(decision_summary, reasons, cid)
         if not title and cid:
             title = cid
         if not title:
@@ -4862,17 +4910,35 @@ def _format_claim_decision_as_final_answer(claim_decision) -> str:
         lines.append(f"Situation: {situation or 'Not stated in provided evidence.'}")
         lines.append(f"Decision: {decision}")
         lines.append("Amounts:")
-        lines.append("  - Customer: $0")
-        lines.append("  - Company: $0")
+        lines.append(f"  - Customer: ${customer_oop:.2f}")
+        lines.append(f"  - Company: ${company_total:.2f}")
         lines.append("What's covered:")
-        lines.append("  - Not stated in provided evidence.")
+        if covered_parts:
+            for cp in covered_parts[:3]:
+                if cp:
+                    lines.append(f"  - {cp}")
+        else:
+            lines.append("  - Not stated in provided evidence.")
         lines.append("What's not covered / limitations:")
-        if decision == "DENIED" and (reasons or decision_summary):
+        if not_covered_parts:
+            for ncp in not_covered_parts[:3]:
+                if ncp:
+                    lines.append(f"  - {ncp}")
+        elif decision == "DENIED" and (reasons or decision_summary):
             for r in (reasons[:2] or [decision_summary]):
                 if r:
                     lines.append(f"  - {r}")
         else:
             lines.append("  - Not stated in provided evidence.")
+        if company_total > 0 or customer_oop > 0:
+            lines.append("Money reconciliation:")
+            if company_total > 0:
+                auth_line = f"  - Authorized / approved by insurer (per call notes): ${company_total:.2f}"
+                if auth_code:
+                    auth_line += f" (Auth code: {auth_code})"
+                lines.append(auth_line)
+            if customer_oop > 0:
+                lines.append(f"  - Customer responsibility (out-of-pocket): ${customer_oop:.2f}")
         if items:
             lines.append("Items:")
             for it in items[:10]:
@@ -4892,6 +4958,12 @@ def _format_claim_decision_as_final_answer(claim_decision) -> str:
         why_line = decision_summary or (reasons[0] if reasons else "")
         if not why_line and reasons:
             why_line = "; ".join(reasons[:2])
+        if customer_oop > 0 and "Customer responsibility" not in (why_line or ""):
+            why_line = (why_line or "").strip()
+            if why_line:
+                why_line += f" Customer responsibility: ${customer_oop:.2f}."
+            else:
+                why_line = f"Customer responsibility: ${customer_oop:.2f}."
         lines.append("Why:")
         lines.append(f"  - {why_line or 'Not stated in provided evidence.'}")
         lines.append("Clause Reference:")

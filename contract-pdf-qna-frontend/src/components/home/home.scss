@@ -594,29 +594,23 @@
               opacity: 0.85;
             }
 
-            /* Decision badge (inherited from itemizedFinalAnswer) */
+            /* Decision badge: colored text only (no background/pill) */
             .ifa_decision_text {
               font-weight: 800;
               font-size: 12px;
               letter-spacing: 0.02em;
-              padding: 4px 10px;
-              border-radius: 6px;
             }
             .ifa_decision_text.ifa_decision_approved {
               color: #065f46;
-              background: #d1fae5;
             }
             .ifa_decision_text.ifa_decision_denied {
               color: #991b1b;
-              background: transparent;
             }
             .ifa_decision_text.ifa_decision_partial {
               color: #92400e;
-              background: #fef3c7;
             }
             .ifa_decision_text.ifa_decision_no_decision {
               color: #475569;
-              background: #f1f5f9;
             }
             .calls_badge.calls_badge_no_decision {
               font-weight: 600;
