@@ -1699,6 +1699,9 @@ const Home = ({ bearerToken, setBearerToken }) => {
                 isCallsGenerating={
                   isCallsMode && callsGenerationStage === "generating"
                 }
+                isClaimsHomepage={
+                  isCallsMode && !conversationId
+                }
                 transcriptStatusFilter={transcriptStatusFilter}
                 onTranscriptStatusChange={handleTranscriptStatusChange}
                 conversationStatus={conversationStatus}
@@ -1791,18 +1794,15 @@ const Home = ({ bearerToken, setBearerToken }) => {
                   {isCallsMode && callsTranscriptName ? (
                     <div className="calls_transcript_header">
                       <div className="header_row">
-                        <div className="title">
-                          Case transcript:{" "}
+                        <div className="title_block">
+                          <span className="title_overline">Case transcript</span>
                           {(() => {
                             const display =
                               formatTranscriptDisplayName(callsTranscriptName);
                             return (
-                              <span
-                                className="file"
-                                title={display.raw || callsTranscriptName}
-                              >
+                              <h2 className="title_primary" title={display.raw || callsTranscriptName}>
                                 {display.primary || callsTranscriptName}
-                              </span>
+                              </h2>
                             );
                           })()}
                         </div>
@@ -1845,6 +1845,35 @@ const Home = ({ bearerToken, setBearerToken }) => {
                               Review &amp; Proceed
                             </button>
                           ) : null}
+                        </div>
+                      </div>
+                      <div className="case_meta_row" role="region" aria-label="Case details">
+                        <div className="meta_item">
+                          <span className="meta_label">State</span>
+                          <span className="meta_value">{selectedState}</span>
+                        </div>
+                        <div className="meta_divider" aria-hidden="true" />
+                        <div className="meta_item">
+                          <span className="meta_label">Contract</span>
+                          <span className="meta_value">{selectedContract}</span>
+                        </div>
+                        <div className="meta_divider" aria-hidden="true" />
+                        <div className="meta_item">
+                          <span className="meta_label">Plan</span>
+                          <span className="meta_value">{selectedPlan}</span>
+                        </div>
+                        <div className="meta_divider" aria-hidden="true" />
+                        <div
+                          className={`meta_item meta_status ${conversationStatus === "inactive" ? "closed" : "open"}`}
+                        >
+                          <span className="meta_label">Status</span>
+                          <span className="meta_value">
+                            {callsGenerationStage === "generating"
+                              ? "Processing…"
+                              : conversationStatus === "inactive"
+                                ? "Closed"
+                                : "Open"}
+                          </span>
                         </div>
                       </div>
                       {isCheckingExistingTranscriptConversation ||
@@ -1911,7 +1940,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
                         </div>
                       ) : callsGenerationStage === "done" ||
                         conversationStatus === "inactive" ? (
-                        <div className="subtle_hint">
+                        <div className="generated_date_block">
                           {(() => {
                             const ts =
                               caseClosedAt ||
@@ -1920,19 +1949,31 @@ const Home = ({ bearerToken, setBearerToken }) => {
                             if (!ts) return null;
                             const label =
                               conversationStatus === "inactive"
-                                ? "Closed"
-                                : "Generated";
+                                ? "Closed on"
+                                : "Generated on";
+                            const d = new Date(ts);
+                            const datePart = d.toLocaleDateString(undefined, {
+                              weekday: "short",
+                              month: "long",
+                              day: "numeric",
+                              year: "numeric",
+                            });
+                            const timePart = d.toLocaleTimeString(undefined, {
+                              hour: "numeric",
+                              minute: "2-digit",
+                              hour12: true,
+                            });
                             return (
-                              <span className="approved_at">
-                                {label}:{" "}
-                                {new Date(ts).toLocaleString(undefined, {
-                                  year: "numeric",
-                                  month: "short",
-                                  day: "2-digit",
-                                  hour: "2-digit",
-                                  minute: "2-digit",
-                                })}
-                              </span>
+                              <>
+                                <span className="generated_date_label">
+                                  {label}
+                                </span>
+                                <span className="generated_date_value">
+                                  {datePart}
+                                  <span className="generated_date_sep"> · </span>
+                                  {timePart}
+                                </span>
+                              </>
                             );
                           })()}
                         </div>

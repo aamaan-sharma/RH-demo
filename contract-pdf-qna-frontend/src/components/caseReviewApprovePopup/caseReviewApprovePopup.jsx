@@ -258,8 +258,13 @@ const CaseReviewApprovePopup = ({
   const displaySummary = aiFinalDraft || "";
 
   return (
-    <div className="case_review_backdrop" role="dialog" aria-modal="true">
-      <div className="case_review_modal">
+    <div
+      className="case_review_backdrop"
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+    >
+      <div className="case_review_modal" onClick={(e) => e.stopPropagation()}>
         <div className="header">
           <div className="title">Review & Proceed</div>
           <button type="button" className="close" onClick={onClose}>

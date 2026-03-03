@@ -39,6 +39,8 @@ const FilterSection = ({
   selectedModel,
   isCallsMode,
   isCallsGenerating = false,
+  // True when on Claims tab with no conversation selected (Claims homepage)
+  isClaimsHomepage = false,
   // Transcript list filter (used when picking a transcript)
   transcriptStatusFilter,
   onTranscriptStatusChange,
@@ -47,33 +49,11 @@ const FilterSection = ({
   onConversationStatusChange,
   isConversationActive,
 }) => {
-  const isCallsCaseLocked = Boolean(isCallsMode && isConversationActive);
-  const isCallsFilteringLocked = Boolean(isCallsCaseLocked || (isCallsMode && isCallsGenerating));
-
-  const LockIcon = ({ size = 14 }) => (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <path
-        d="M7 10V8a5 5 0 0 1 10 0v2"
-        stroke="#6B6B6B"
-        strokeWidth="2"
-        strokeLinecap="round"
-      />
-      <path
-        d="M6 10h12a2 2 0 0 1 2 2v7a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3v-7a2 2 0 0 1 2-2Z"
-        stroke="#6B6B6B"
-        strokeWidth="2"
-        strokeLinejoin="round"
-      />
-    </svg>
+  const isCallsFilteringLocked = Boolean(
+    (isCallsMode && isConversationActive) || (isCallsMode && isCallsGenerating)
   );
+  // Hide State / Contract Type / Plan dropdowns on Claims homepage only; keep them for Search and Infer
+  const showFilterDropdowns = !isCallsFilteringLocked && !isClaimsHomepage;
 
   const handleStateChange = (state) => {
     setSelectedState(state);
@@ -114,40 +94,7 @@ const FilterSection = ({
         />
       </div>
       <div className="dropdown_part">
-        {isCallsFilteringLocked ? (
-          <div
-            className="locked_pills"
-            title={
-              isCallsCaseLocked
-                ? "Locked to this case. Exit case to change filters."
-                : "Locked while we extract questions. Please wait until processing completes."
-            }
-          >
-            <div className="pill">
-              <span className="label">State</span>
-              <span className="value">{selectedState}</span>
-            </div>
-            <div className="pill">
-              <span className="label">Contract</span>
-              <span className="value">{selectedContract}</span>
-            </div>
-            <div className="pill">
-              <span className="label">Plan</span>
-              <span className="value">{selectedPlan}</span>
-            </div>
-            {isCallsCaseLocked ? (
-              <div className={`pill status ${conversationStatus === "inactive" ? "closed" : "open"}`}>
-                <span className="label">Case</span>
-                <span className="value">{conversationStatus === "inactive" ? "Closed" : "Open"}</span>
-              </div>
-            ) : (
-              <div className="pill status open">
-                <span className="label">Case</span>
-                <span className="value">Processing…</span>
-              </div>
-            )}
-          </div>
-        ) : (
+        {showFilterDropdowns ? (
           <>
             <Dropdown
               dropdownName="State"
@@ -171,12 +118,8 @@ const FilterSection = ({
               onhandleClick={handlePlanChange}
             />
           </>
-        )}
-        {isCallsMode && !isConversationActive && (
-          null
-        )}
-
-        {isCallsMode && isConversationActive && !isCallsCaseLocked ? null : null}
+        ) : null}
+        {isCallsMode && !isConversationActive && null}
       </div>
     </div>
   );
