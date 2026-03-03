@@ -31,6 +31,9 @@ const LiveTranscript = () => {
   const [agentName, setAgentName] = useState("-");
   const [contactId, setContactId] = useState(null);
   const [callState, setCallState] = useState("IDLE");
+  const [callStateTimestamp, setCallStateTimestamp] = useState(
+    () => new Date(),
+  );
 
   const [transcripts, setTranscripts] = useState([]);
   // Reflect Amazon Connect login/CCP readiness (NOT backend socket connection).
@@ -89,7 +92,27 @@ const LiveTranscript = () => {
     return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   };
 
+  // Human-readable timestamp for Call State (e.g. "Mar 3, 2025, 12:34:15 PM")
+  const formatCallStateTimestamp = (date) => {
+    if (!date) return "—";
+    const d = date instanceof Date ? date : new Date(date);
+    if (Number.isNaN(d.getTime())) return "—";
+    return d.toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  };
+
   const isCallConnected = callState === "CONNECTED";
+
+  // Keep timestamp in sync when call state changes
+  useEffect(() => {
+    setCallStateTimestamp(new Date());
+  }, [callState]);
 
   const getEffectiveCcpUrl = () => {
     if (!CCP_URL) return CCP_URL;
@@ -186,22 +209,31 @@ const LiveTranscript = () => {
             // Enable copilot ONLY when call is connected (Analyze Live tab requirement)
             try {
               const sid = contact.getContactId ? contact.getContactId() : id;
-              
+
               // Extract phone number from initial connection endpoint
               let phoneNumber = null;
               try {
-                const conn = contact.getInitialConnection ? contact.getInitialConnection() : null;
-                const endpoint = conn && conn.getEndpoint ? conn.getEndpoint() : null;
+                const conn = contact.getInitialConnection
+                  ? contact.getInitialConnection()
+                  : null;
+                const endpoint =
+                  conn && conn.getEndpoint ? conn.getEndpoint() : null;
                 phoneNumber = endpoint ? endpoint.phoneNumber : null;
-                console.log("[CCP] Call connected, extracted phoneNumber:", phoneNumber);
+                console.log(
+                  "[CCP] Call connected, extracted phoneNumber:",
+                  phoneNumber,
+                );
               } catch (err) {
-                console.warn("[CCP] Could not extract phoneNumber from contact:", err);
+                console.warn(
+                  "[CCP] Could not extract phoneNumber from contact:",
+                  err,
+                );
               }
 
               if (sid) {
-                socket.emit("copilot_enable", { 
+                socket.emit("copilot_enable", {
                   sessionId: sid,
-                  phoneNumber: phoneNumber
+                  phoneNumber: phoneNumber,
                 });
               }
             } catch (err) {
@@ -628,6 +660,14 @@ const LiveTranscript = () => {
             <span className="k">Call State:</span>
             <span className="v">{callState}</span>
           </div>
+          {isCallConnected ? (
+            <div className="lt_kv">
+              <span className="k">Time:</span>
+              <span className="v">
+                {formatCallStateTimestamp(callStateTimestamp)}
+              </span>
+            </div>
+          ) : null}
           {contactId ? (
             <div className="lt_kv">
               <span className="k">ContactId / SessionId:</span>
@@ -647,6 +687,15 @@ const LiveTranscript = () => {
 
       {/* CENTER: AI Suggestions Panel */}
       <aside className="lt_center lt_ai_panel">
+        <button
+          type="button"
+          className="lt_panel_toggle"
+          onClick={() => setIsTranscriptOpen((prev) => !prev)}
+          aria-label={isTranscriptOpen ? "Collapse transcript" : "Expand transcript"}
+          title={isTranscriptOpen ? "Collapse transcript" : "Expand transcript"}
+        >
+          {isTranscriptOpen ? "<" : ">"}
+        </button>
         {/* USER DETAILS - Commented out per request
         <div className="live_transcript_card lt_right_section">
           <div className="label">USER DETAILS</div>
@@ -708,20 +757,6 @@ const LiveTranscript = () => {
             )}
             <div className="lt_ai_badge">Live</div>
             <div className="lt_ai_spacer" aria-hidden="true" />
-            <button
-              type="button"
-              className="lt_ai_transcript_button"
-              onClick={() => setIsTranscriptOpen((prev) => !prev)}
-              aria-pressed={isTranscriptOpen}
-              aria-label={
-                isTranscriptOpen ? "Collapse transcript" : "Expand transcript"
-              }
-              title={
-                isTranscriptOpen ? "Collapse transcript" : "Expand transcript"
-              }
-            >
-              {isTranscriptOpen ? "<" : ">"}
-            </button>
           </div>
 
           <div className="lt_ai_body" ref={suggestionsScrollerRef}>
@@ -909,14 +944,6 @@ const LiveTranscript = () => {
 
       {isTranscriptOpen ? (
         <div className="lt_transcript_panel_wrap">
-          <button
-            type="button"
-            className="lt_transcript_close"
-            onClick={() => setIsTranscriptOpen(false)}
-            aria-label="Close transcript"
-          >
-            {"<"}
-          </button>
           {transcriptPanel}
         </div>
       ) : null}
