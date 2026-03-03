@@ -285,6 +285,8 @@ def _lookup_user_by_phone(phone_candidates: tuple) -> Optional[User]:
 handler = CallbackHandler()
 
 
+
+processed_evidences = set()
 def handle_transcript_event(payload: Dict[str, Any], parent_context=None) :
     session_id = _s(payload.get("sessionId"))
     speaker = _s(payload.get("speaker")).lower()
@@ -508,16 +510,21 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) :
                 if not _cooldown_ok(st) and not important_change:
                     cards = None
                 else:
-                    cards = _call_suggest_llm_traced(
-                        intent=intent,
-                        customer_verified=verified,
-                        customer_context=customer_ctx,
-                        tool_result=tool_result,
-                        transcript=transcript,
-                        evidence=evidence,
-                        handler=handler,
-                        span=sp_llm,
-                    )
+                    if evidence in processed_evidences:
+                        print(f"[LIVE_COPILOT] Evidence already processed, skipping suggest LLM call", evidence, flush=True)
+                    else:
+                        print(f"[LIVE_COPILOT] Calling suggest LLM with intent: {intent}, customer_verified: {verified}", flush=True)
+                        cards = _call_suggest_llm_traced(
+                            intent=intent,
+                            customer_verified=verified,
+                            customer_context=customer_ctx,
+                            tool_result=tool_result,
+                            transcript=transcript,
+                            evidence=evidence,
+                            handler=handler,
+                            span=sp_llm,
+                        )
+                        processed_evidences.add(evidence)
             # ---------------- phase: response_postprocessing ----------------
             # In-memory deduplication and token aggregation - no span needed
             if cards is None:
