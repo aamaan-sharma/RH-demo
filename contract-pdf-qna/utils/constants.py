@@ -89,7 +89,7 @@ TRANSCRIPT_METADATA_CACHE_VERSION = "v2"
 # ============================================================================
 
 # Hardcoded: emit suggestions at most once per second (no env needed)
-COPILOT_COOLDOWN_SECONDS = 2
+COPILOT_COOLDOWN_SECONDS = 1
 COPILOT_MAX_VERIFICATION_ASKS = _env_int("COPILOT_MAX_VERIFICATION_ASKS", 2)
 
 
