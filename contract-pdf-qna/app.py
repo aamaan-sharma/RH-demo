@@ -6500,10 +6500,11 @@ def _process_transcript_core(data, yield_sse_fn=None):
 
                     results.append(result)
 
+
                     # Persist incremental chat to Mongo
                     try:
                         chunks = result.get("relevantChunks") or []
-                        chunks_detail = result.get("relevantChunksDetail") or []
+                        chunks_detail = json.loads(json.dumps(result.get("relevantChunksDetail"))) or []
                         relevant_docs_text = "\n\n---\n\n".join([str(c) for c in chunks if str(c).strip()])
                         upd_res = qna_collection.update_one(
                             {"_id": conv_doc_id},
