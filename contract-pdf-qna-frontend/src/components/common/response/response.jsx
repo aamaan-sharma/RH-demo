@@ -432,7 +432,10 @@ const Response = ({
 
           {Array.isArray(relevantChunks) && relevantChunks.length > 0 ? (
             <div className="chunks_wrapper">
-              <div className="chunks_title">Referenced contract clauses</div>
+              <div className="chunks_header">
+                <h3 className="chunks_title">Referenced contract clauses</h3>
+                <p className="chunks_subtitle">Source information and clause text</p>
+              </div>
               <div className="chunks_list">
                 {relevantChunks.map((chunk, index) => {
                   const { content, metadata } = pickClauseData(chunk);
@@ -474,18 +477,18 @@ const Response = ({
                     }
                     return _asStr(clauseFromUnit).trim();
                   })();
+                  const hasMeta = title || fileFromUnit || pageDisplay || clauseDisplay || (unitIdRaw && !fileFromUnit);
 
                   return (
                     <details className="chunk_item" key={index}>
                       <summary className="chunk_summary">
-                        <span className="chunk_summary_text">{`Clause ${index + 1}`}</span>
+                        <span className="chunk_summary_text">{title || `Clause ${index + 1}`}</span>
                         <button
                           type="button"
                           className="chunk_close"
-                          aria-label={`Close Clause ${index + 1}`}
+                          aria-label={title ? `Close ${title}` : `Close Clause ${index + 1}`}
                           title="Close"
                           onClick={(e) => {
-                            // Don't toggle the <details> via the <summary> click.
                             e.preventDefault();
                             e.stopPropagation();
                             const detailsEl =
@@ -497,46 +500,31 @@ const Response = ({
                         </button>
                       </summary>
                       <div className="chunk_body">
-                        {ref ? <div className="chunk_ref">{ref}</div> : null}
+                        {ref && !hasMeta ? <div className="chunk_ref">{ref}</div> : null}
 
-                        <div
-                          className="chunk_meta_row"
-                          aria-label="Clause metadata"
-                        >
-                          {title ? (
-                            <div className="meta_chip" title={title}>
-                              <span className="k">Title</span>
-                              <span className="v">{title}</span>
+                        {hasMeta ? (
+                          <div className="chunk_meta_block" aria-label="Clause metadata">
+                            <div className="chunk_meta_line">
+                              <span className="chunk_meta_line_label">Source:</span>
+                              {[
+                                fileFromUnit && { label: "File", value: fileFromUnit, title: fileFromUnit },
+                                pageDisplay && { label: "Page", value: pageDisplay },
+                                clauseDisplay && { label: "Clause", value: clauseDisplay },
+                                unitIdRaw && !fileFromUnit && { label: "Unit", value: shortenUnit(unitIdRaw), title: unitIdRaw },
+                              ]
+                                .filter(Boolean)
+                                .map((item, i) => (
+                                  <span key={i}>
+                                    {i > 0 ? <span className="chunk_meta_sep"> · </span> : null}
+                                    <span className="chunk_meta_item" title={item.title}>
+                                      <span className="chunk_meta_item_label">{item.label}</span>
+                                      <span className="chunk_meta_item_value">{item.value}</span>
+                                    </span>
+                                  </span>
+                                ))}
                             </div>
-                          ) : null}
-                          {fileFromUnit ? (
-                            <div className="meta_chip" title={fileFromUnit}>
-                              <span className="k">File</span>
-                              <span className="v">{fileFromUnit}</span>
-                            </div>
-                          ) : null}
-                          {pageDisplay ? (
-                            <div className="meta_chip">
-                              <span className="k">Page</span>
-                              <span className="v">{pageDisplay}</span>
-                            </div>
-                          ) : null}
-                          {clauseDisplay ? (
-                            <div className="meta_chip">
-                              <span className="k">Clause</span>
-                              <span className="v">{clauseDisplay}</span>
-                            </div>
-                          ) : null}
-                          {/* Keep full unit_id in tooltip for debugging (not shown in UI). */}
-                          {unitIdRaw && !fileFromUnit ? (
-                            <div className="meta_chip" title={unitIdRaw}>
-                              <span className="k">Unit</span>
-                              <span className="v">
-                                {shortenUnit(unitIdRaw)}
-                              </span>
-                            </div>
-                          ) : null}
-                        </div>
+                          </div>
+                        ) : null}
 
                         <div
                           className="chunk_text"

@@ -154,168 +154,205 @@
     padding: 0 24px;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 16px;
+  }
 
-    .chunks_title {
+  .chunks_header {
+    margin-bottom: 4px;
+  }
+
+  .chunks_title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #1e293b;
+    letter-spacing: -0.02em;
+    margin: 0 0 4px 0;
+  }
+
+  .chunks_subtitle {
+    font-size: 12px;
+    font-weight: 500;
+    color: #64748b;
+    margin: 0;
+  }
+
+  .chunks_list {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
+    align-items: start;
+  }
+
+  @media (max-width: 1100px) {
+    .chunks_list {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+  @media (max-width: 860px) {
+    .chunks_list {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+  @media (max-width: 560px) {
+    .chunks_list {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .chunk_item {
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    background: #fafbfc;
+    padding: 14px 16px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+
+    &:hover {
+      background: #ffffff;
+      border-color: #cbd5e1;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+    }
+
+    &[open] {
+      grid-column: 1 / -1;
+      background: #ffffff;
+      border-color: #cbd5e1;
+    }
+
+    .chunk_summary {
+      cursor: pointer;
       font-size: 14px;
       font-weight: 600;
-      color: #333333;
-    }
+      color: #1e293b;
+      list-style: none;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
 
-    .chunks_list {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 12px;
-      align-items: start;
-    }
-
-    // Responsive fallbacks (avoid squishing cards on smaller viewports)
-    @media (max-width: 1100px) {
-      .chunks_list {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-      }
-    }
-    @media (max-width: 860px) {
-      .chunks_list {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
-    }
-    @media (max-width: 560px) {
-      .chunks_list {
-        grid-template-columns: 1fr;
+      &::-webkit-details-marker {
+        display: none;
       }
     }
 
-    .chunk_item {
-      border: 1px solid #e6e6e6;
-      border-radius: 10px;
-      background: #fafafa;
-      padding: 10px 12px;
-      box-shadow: 0 8px 22px rgba(0, 0, 0, 0.03);
-      transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+    .chunk_summary_text {
+      flex: 1 1 auto;
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .chunk_close {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      border: 1px solid #e2e8f0;
+      background: #ffffff;
+      color: #64748b;
+      font-size: 18px;
+      line-height: 1;
+      font-weight: 600;
+      cursor: pointer;
+      flex: 0 0 auto;
+      padding: 0;
+      transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 
       &:hover {
-        background: #ffffff;
-        box-shadow: 0 10px 26px rgba(0, 0, 0, 0.06);
-        transform: translateY(-1px);
+        background: #f1f5f9;
+        border-color: #cbd5e1;
+        color: #334155;
       }
+    }
 
-      // Keep the "expanded details" feel from list view by letting open cards span the full row.
-      &[open] {
-        grid-column: 1 / -1;
-        background: #ffffff;
-      }
-
-      .chunk_summary {
-        cursor: pointer;
-        font-size: 14px;
-        font-weight: 600;
-        color: #333333;
-        list-style: none;
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 10px;
-
-        &::-webkit-details-marker {
-          display: none;
-        }
-      }
-
-      .chunk_summary_text {
-        flex: 1 1 auto;
-        min-width: 0;
-      }
-
+    &:not([open]) {
       .chunk_close {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 26px;
-        height: 26px;
-        border-radius: 999px;
-        border: 1px solid #e6e6e6;
-        background: #ffffff;
-        color: #6b6b6b;
-        font-size: 18px;
-        line-height: 18px;
-        font-weight: 700;
-        cursor: pointer;
-        flex: 0 0 auto;
-        padding: 0;
-
-        &:hover {
-          background: #f4f6ff;
-          border-color: #dfe6ff;
-          color: #2f3a57;
-        }
+        display: none;
       }
+    }
 
-      // Only show the close button when the clause is expanded.
-      &:not([open]) {
-        .chunk_close {
-          display: none;
-        }
-      }
+    .chunk_body {
+      margin-top: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
 
-      .chunk_body {
-        margin-top: 10px;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-      }
+    .chunk_ref {
+      font-size: 12px;
+      font-weight: 600;
+      color: #475569;
+      letter-spacing: 0.01em;
+    }
 
-      .chunk_ref {
-        font-size: 12px;
-        font-weight: 800;
-        color: #2f3a57;
-        opacity: 0.9;
-      }
+    .chunk_meta_block {
+      display: block;
+    }
 
-      .chunk_meta_row {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-      }
+    .chunk_meta_line {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 2px 0;
+      font-size: 11px;
+      line-height: 1.45;
+      color: #64748b;
+      padding: 6px 10px 6px 10px;
+      margin-left: 0;
+      border-left: 3px solid #e2e8f0;
+      background: #f8fafc;
+      border-radius: 0 6px 6px 0;
+    }
 
-      .meta_chip {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 6px 10px;
-        border-radius: 999px;
-        border: 1px solid #e6e6e6;
-        background: #ffffff;
-        max-width: 100%;
-        font-size: 12px;
-        line-height: 16px;
-        color: #2f3a57;
-        font-weight: 800;
+    .chunk_meta_line_label {
+      font-weight: 700;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-right: 8px;
+      flex-shrink: 0;
+    }
 
-        .k {
-          color: #6b6b6b;
-          font-weight: 900;
-          white-space: nowrap;
-        }
+    .chunk_meta_sep {
+      color: #cbd5e1;
+      font-weight: 500;
+      margin: 0 5px;
+      user-select: none;
+    }
 
-        .v {
-          color: #2f3a57;
-          font-weight: 900;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-          max-width: 340px;
-        }
-      }
+    .chunk_meta_item {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 4px;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
 
-      .chunk_text {
-        font-size: 13px;
-        line-height: 18px;
-        color: #333333;
-        white-space: pre-wrap;
-        word-break: break-word;
-        overflow-wrap: anywhere;
-      }
+    .chunk_meta_item_label {
+      font-weight: 600;
+      color: #94a3b8;
+      flex-shrink: 0;
+    }
+
+    .chunk_meta_item_value {
+      font-weight: 500;
+      color: #64748b;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .chunk_text {
+      font-size: 13px;
+      line-height: 1.55;
+      color: #334155;
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-wrap: anywhere;
     }
   }
 

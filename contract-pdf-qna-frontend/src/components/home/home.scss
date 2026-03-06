@@ -314,8 +314,8 @@
 
           .review_approve_button {
             border: 1px solid #e2e8f0;
-            border-radius: 6px;
-            padding: 8px 16px;
+            border-radius: 10px;
+            padding: 10px 18px;
             font-size: 13px;
             font-weight: 600;
             background: #ffffff;
@@ -339,9 +339,8 @@
           }
 
           .show_transcript_button {
-            border-color: #94a3b8;
             background: #ffffff;
-            color: #475569;
+            color: #334155;
 
             &:hover:not(:disabled) {
               background: #2563eb;

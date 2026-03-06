@@ -1575,7 +1575,7 @@ def _process_question_with_index(
     )
     if hasattr(result, "__dataclass_fields__"):
         result = asdict(result)
-        result["relevantChunksDetail"] = result.get("relevantChunksDetails", [])
+        result["relevantChunksDetail"] = result.get("relevantChunksDetail") or result.get("relevantChunksDetails") or []
     result["questionId"] = question_id
     result["question"] = question_text
     result["context"] = question_obj.get("context", "")
@@ -1676,6 +1676,7 @@ def process_questions_parallel(
                     "question": questions[idx].get("question", ""),
                     "answer": f"Error processing question: {str(e)}",
                     "relevantChunks": ["(No supporting excerpts found)"],
+                    "relevantChunksDetail": [],
                     "confidence": 0.0,
                     "latency": 0.0,
                     "error": str(e),
@@ -1769,6 +1770,7 @@ def process_questions_parallel_stream(
                             "question": result.get("question"),
                             "answer": result.get("answer", ""),
                             "relevantChunks": result.get("relevantChunks", []),
+                            "relevantChunksDetail": result.get("relevantChunksDetail") or result.get("relevant_chunks_detail") or [],
                             "confidence": result.get("confidence", 0.0),
                             "latency": result.get("latency", 0.0),
                             "questionType": result.get("questionType"),
@@ -1786,6 +1788,7 @@ def process_questions_parallel_stream(
                     "question": questions[idx].get("question", ""),
                     "answer": f"Error processing question: {str(e)}",
                     "relevantChunks": ["(No supporting excerpts found)"],
+                    "relevantChunksDetail": [],
                     "confidence": 0.0,
                     "latency": 0.0,
                     "error": str(e),
@@ -1804,6 +1807,7 @@ def process_questions_parallel_stream(
                             "question": result.get("question"),
                             "answer": result.get("answer", ""),
                             "relevantChunks": result.get("relevantChunks", []),
+                            "relevantChunksDetail": result.get("relevantChunksDetail") or result.get("relevant_chunks_detail") or [],
                             "confidence": result.get("confidence", 0.0),
                             "latency": result.get("latency", 0.0),
                             "questionType": result.get("questionType"),
@@ -2454,6 +2458,9 @@ def chat_history():
             # so the frontend can show page / bbox / clause numbers when available.
             if "relevant_chunks_detail" in chat and "relevantChunksDetail" not in chat:
                 chat["relevantChunksDetail"] = chat.get("relevant_chunks_detail")
+            # Always ensure Clauses Metadata is present for frontend (default to [] if missing)
+            if "relevantChunksDetail" not in chat:
+                chat["relevantChunksDetail"] = chat.get("relevant_chunks_detail") or []
             if "relevant_chunks" in chat and "relevantChunks" not in chat:
                 chat["relevantChunks"] = chat.get("relevant_chunks")
             # If older records only have detail objects, derive the text-only list for UI + legacy uses.
@@ -4408,7 +4415,7 @@ def _claims_background_process_transcript(
             )
             if hasattr(result, "__dataclass_fields__"):
                 result = asdict(result)
-                result["relevantChunksDetail"] = result.get("relevantChunksDetails", [])
+                result["relevantChunksDetail"] = result.get("relevantChunksDetail") or result.get("relevantChunksDetails") or []
             display_question_text = re.sub(r"\[CALL_CONTEXT:.*?\]\s*", "", question_text).strip()
             result["questionId"] = question_id
             result["question"] = display_question_text
@@ -4865,7 +4872,7 @@ def _format_claim_decision_as_final_answer(claim_decision) -> str:
         if decision == "REJECTED":
             decision = "DENIED"
         if not decision or decision not in ("APPROVED", "DENIED", "PARTIAL"):
-            decision = "DENIED"
+            decision = "PARTIAL"
         decision_summary = str(c.get("decisionSummary") or "").strip()
         reasons = c.get("reasons") or []
         if not isinstance(reasons, list):
@@ -5209,6 +5216,7 @@ def process_transcript_stream():
                             "question": q.get("question") or "",
                             "answer": q.get("answer") or "",
                             "relevantChunks": q.get("relevantChunks") or [],
+                            "relevantChunksDetail": q.get("relevantChunksDetail") or q.get("relevant_chunks_detail") or [],
                             "confidence": q.get("confidence", 0.0),
                             "latency": q.get("latency", 0.0),
                             "questionType": q.get("questionType"),
@@ -5521,7 +5529,7 @@ def process_transcript():
                     ]
 
                 # Normalize cached format to required API contract:
-                # relevantChunks must be list[str] and non-empty.
+                # relevantChunks must be list[str] and non-empty; relevantChunksDetail always present.
                 try:
                     for q in cached.get("questions", []) or []:
                         rc = q.get("relevantChunks") or []
@@ -5534,6 +5542,7 @@ def process_transcript():
                         if MILVUS_MAX_RETURN_CHUNKS is not None:
                             rc = rc[:MILVUS_MAX_RETURN_CHUNKS]
                         q["relevantChunks"] = rc
+                        q["relevantChunksDetail"] = q.get("relevantChunksDetail") or q.get("relevant_chunks_detail") or []
                 except Exception as e:
                     print(f"Warning: failed to normalize cached relevantChunks: {e}")
 
@@ -5877,6 +5886,7 @@ def process_transcript():
                 "entered_query": "Final Answer for transcript",
                 "response": final_summary_text,
                 "relevant_chunks": [],
+                "relevant_chunks_detail": [],
                 "relevant_docs": "",
                 "gpt_model": "Calls",
                 "underlying_model": gpt_model,
@@ -5891,6 +5901,7 @@ def process_transcript():
                 "question": "Final Answer for transcript",
                 "answer": final_summary_text,
                 "relevantChunks": [],
+                "relevantChunksDetail": [],
                 "confidence": 0.0,
                 "latency": 0.0,
             }]
@@ -6493,6 +6504,8 @@ def _process_transcript_core(data, yield_sse_fn=None):
                     if MILVUS_MAX_RETURN_CHUNKS is not None:
                         rc = rc[:MILVUS_MAX_RETURN_CHUNKS]
                     result["relevantChunks"] = rc
+                    # Always send clauses metadata (relevantChunksDetail) to frontend
+                    result["relevantChunksDetail"] = result.get("relevantChunksDetail") or result.get("relevant_chunks_detail") or []
 
                     if "error" not in result:
                         confidences.append(result.get("confidence", 0.0))
@@ -6639,6 +6652,7 @@ def _process_transcript_core(data, yield_sse_fn=None):
                                     "entered_query": "Final Answer for transcript",
                                     "response": final_summary_text,
                                     "relevant_chunks": [],
+                                    "relevant_chunks_detail": [],
                                     "relevant_docs": "",
                                     "gpt_model": "Calls",
                                     "underlying_model": gpt_model,

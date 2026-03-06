@@ -138,7 +138,7 @@ const ChatList = ({
               showReferenceIcon={false}
               relevantChunks={getRelevantChunks(finalAnswer)}
               variant="finalAnswer"
-              headerLabel="Final Analyzed Answer"
+              headerLabel="Final Summary"
               tone="blue"
               showActions={true}
             />

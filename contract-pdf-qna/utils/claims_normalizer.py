@@ -147,7 +147,7 @@ def derive_canonical_decision(
             return DECISION_DENIED
         return DECISION_PARTIAL  # some authorized, rest denied
 
-    if decision_posture == "ACCEPT_PARTIAL":
+    if decision_posture in ("ACCEPT_PARTIAL", "REQUEST_INFO", "RESERVE_RIGHTS"):
         return DECISION_PARTIAL
 
     if has_auth and has_cust:
