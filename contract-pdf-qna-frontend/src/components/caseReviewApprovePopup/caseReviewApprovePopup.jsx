@@ -31,17 +31,24 @@ const getItemNameFromChanges = (changes) => {
   const itemChange = changes.find(
     (c) =>
       c?.fieldName === "Item" ||
-      (typeof c?.fieldName === "string" && /^Item\s+\d+\s*-\s*Item$/i.test(c.fieldName.trim()))
+      (typeof c?.fieldName === "string" &&
+        /^Item\s+\d+\s*-\s*Item$/i.test(c.fieldName.trim())),
   );
   const title = itemChange
-    ? (itemChange.updatedValue ?? itemChange.previousValue ?? "").trim() || "Item"
+    ? (itemChange.updatedValue ?? itemChange.previousValue ?? "").trim() ||
+      "Item"
     : "Summary";
   const situationChange = changes.find(
     (c) =>
-      typeof c?.fieldName === "string" && /^Item\s+\d+\s*-\s*Situation$/i.test(c.fieldName.trim())
+      typeof c?.fieldName === "string" &&
+      /^Item\s+\d+\s*-\s*Situation$/i.test(c.fieldName.trim()),
   );
   const situation = situationChange
-    ? (situationChange.updatedValue ?? situationChange.previousValue ?? "").trim()
+    ? (
+        situationChange.updatedValue ??
+        situationChange.previousValue ??
+        ""
+      ).trim()
     : "";
   if (situation) return `${title} (${situation})`;
   return title || "Item(s) updated";
@@ -53,7 +60,8 @@ const cleanOverallNextStepDisplay = (value) => {
   const s = String(value).trim();
   const lines = s.split("\n");
   const result = [];
-  const labelRe = /^\s*(\*\*Overall Next Steps?\*\*:?\s*|Overall Next Step\s*:?\s*)$/i;
+  const labelRe =
+    /^\s*(\*\*Overall Next Steps?\*\*:?\s*|Overall Next Step\s*:?\s*)$/i;
   for (const line of lines) {
     const trimmed = line.trim();
     if (labelRe.test(trimmed)) continue;
@@ -76,7 +84,11 @@ const getChangesByItem = (changes) => {
     if (itemMatch) {
       const heading = itemMatch[1];
       if (!byKey[heading]) {
-        byKey[heading] = { heading, changes: [], stripPrefix: `${itemMatch[1]} - ` };
+        byKey[heading] = {
+          heading,
+          changes: [],
+          stripPrefix: `${itemMatch[1]} - `,
+        };
         seen.add(heading);
       }
       byKey[heading].changes.push(c);
@@ -100,7 +112,12 @@ const getChangesByItem = (changes) => {
   });
   const groups = itemOrder.map((key) => byKey[key]);
   if (otherChanges.length > 0) {
-    groups.push({ heading: "Summary", displayName: "", changes: otherChanges, stripPrefix: "" });
+    groups.push({
+      heading: "Summary",
+      displayName: "",
+      changes: otherChanges,
+      stripPrefix: "",
+    });
   }
   groups.forEach((g) => {
     if (g.displayName !== undefined) return;
@@ -116,7 +133,11 @@ const getChangesByItem = (changes) => {
       const itemChange = g.changes.find((c) =>
         (c?.fieldName || "").trim().endsWith(" - Item"),
       );
-      const name = (itemChange?.updatedValue || itemChange?.previousValue || "").trim();
+      const name = (
+        itemChange?.updatedValue ||
+        itemChange?.previousValue ||
+        ""
+      ).trim();
       g.displayName = name || g.heading;
     } else {
       g.displayName = "";
@@ -132,8 +153,22 @@ const decisionToneClass = (decision) => {
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
 
-  const positive = ["approve", "approved", "accept", "accepted", "yes", "covered"];
-  const negative = ["deny", "denied", "reject", "rejected", "no", "not_covered"];
+  const positive = [
+    "approve",
+    "approved",
+    "accept",
+    "accepted",
+    "yes",
+    "covered",
+  ];
+  const negative = [
+    "deny",
+    "denied",
+    "reject",
+    "rejected",
+    "no",
+    "not_covered",
+  ];
   const review = [
     "cannot_determine",
     "cant_determine",
@@ -254,7 +289,10 @@ const CaseReviewApprovePopup = ({
     setIsEditMode(false);
   };
 
-  const hasEditableItems = editableParsed && Array.isArray(editableParsed.items) && editableParsed.items.length > 0;
+  const hasEditableItems =
+    editableParsed &&
+    Array.isArray(editableParsed.items) &&
+    editableParsed.items.length > 0;
   const displaySummary = aiFinalDraft || "";
 
   return (
@@ -267,7 +305,7 @@ const CaseReviewApprovePopup = ({
       <div className="case_review_modal" onClick={(e) => e.stopPropagation()}>
         <div className="header">
           <div className="title">Review & Proceed</div>
-          <button type="button" className="close" onClick={onClose}>
+          <button type="button" className="close" onClick={onClose} aria-label="Close">
             ✕
           </button>
         </div>
@@ -278,7 +316,9 @@ const CaseReviewApprovePopup = ({
             <div className="meta_grid">
               <div className="meta_item">
                 <div className="k">Case ID</div>
-                <div className="v">{caseName || transcriptName || caseId || "—"}</div>
+                <div className="v">
+                  {caseName || transcriptName || caseId || "—"}
+                </div>
               </div>
               <div className="meta_item">
                 <div className="k">State</div>
@@ -299,7 +339,9 @@ const CaseReviewApprovePopup = ({
               {caseDisposition ? (
                 <div className="meta_item">
                   <div className="k">Disposition</div>
-                  <div className="v">{String(caseDisposition).toUpperCase()}</div>
+                  <div className="v">
+                    {String(caseDisposition).toUpperCase()}
+                  </div>
                 </div>
               ) : null}
             </div>
@@ -307,19 +349,22 @@ const CaseReviewApprovePopup = ({
 
           <div className="section">
             <div className="section_title_row">
-              <span className="section_title">Final analyzed answer</span>
-              {!isEditMode && aiFinalDraft && typeof onSaveDraftSummary === "function" && !isClosed ? (
-                <button type="button" className="edit_summary_btn" onClick={handleEdit}>
+              <span className="section_title">Final Summary</span>
+              {!isEditMode &&
+              aiFinalDraft &&
+              typeof onSaveDraftSummary === "function" &&
+              !isClosed ? (
+                <button
+                  type="button"
+                  className="edit_summary_btn"
+                  onClick={handleEdit}
+                >
                   Edit
                 </button>
               ) : null}
             </div>
-            <div className="hint">
-              This is the structured summary you will proceed with and forward.
-            </div>
             {displaySummary || isEditMode ? (
-              <div className="ai_draft">
-                <div className="ai_label">AI draft summary</div>
+              <>
                 {isEditMode ? (
                   <>
                     {hasEditableItems ? (
@@ -363,10 +408,14 @@ const CaseReviewApprovePopup = ({
                   </>
                 ) : (
                   <div className="ai_text">
-                    <ItemizedFinalAnswer text={displaySummary} title="" asCard={true} />
+                    <ItemizedFinalAnswer
+                      text={displaySummary}
+                      title=""
+                      asCard={true}
+                    />
                   </div>
                 )}
-              </div>
+              </>
             ) : null}
             {summaryEditLog && summaryEditLog.length > 0 ? (
               <div className="change_log_section">
@@ -379,35 +428,55 @@ const CaseReviewApprovePopup = ({
                       <div className="change_log_entry" key={idx}>
                         <div className="change_log_item_header">
                           <div className="change_log_header_row">
-                            <span className="change_log_date">{formatChangeLogDate(entry.editedAt)}</span>
-                            <span className="change_log_user">{entry.editedBy || "—"}</span>
+                            <span className="change_log_date">
+                              {formatChangeLogDate(entry.editedAt)}
+                            </span>
+                            <span className="change_log_user">
+                              {entry.editedBy || "—"}
+                            </span>
                           </div>
                         </div>
                         {getChangesByItem(changes).map((group, gIdx) => (
                           <div className="change_log_table_group" key={gIdx}>
                             {group.displayName ? (
-                              <div className="change_log_table_heading">{group.displayName}</div>
+                              <div className="change_log_table_heading">
+                                {group.displayName}
+                              </div>
                             ) : null}
                             <table className="change_log_table">
                               <thead>
                                 <tr>
-                                  <th className="change_log_th change_log_th_field">Field</th>
-                                  <th className="change_log_th change_log_th_prev">Previous</th>
-                                  <th className="change_log_th change_log_th_curr">Current</th>
+                                  <th className="change_log_th change_log_th_field">
+                                    Field
+                                  </th>
+                                  <th className="change_log_th change_log_th_prev">
+                                    Previous
+                                  </th>
+                                  <th className="change_log_th change_log_th_curr">
+                                    Current
+                                  </th>
                                 </tr>
                               </thead>
                               <tbody>
                                 {group.changes.map((c, i) => {
                                   const displayField = group.stripPrefix
-                                    ? (c.fieldName || "").replace(group.stripPrefix, "")
-                                    : (c.fieldName || "—");
+                                    ? (c.fieldName || "").replace(
+                                        group.stripPrefix,
+                                        "",
+                                      )
+                                    : c.fieldName || "—";
                                   const isOverallNextStep =
-                                    (c.fieldName || "").trim() === "Overall Next Step";
+                                    (c.fieldName || "").trim() ===
+                                    "Overall Next Step";
                                   const prevDisplay = isOverallNextStep
-                                    ? cleanOverallNextStepDisplay(c.previousValue)
+                                    ? cleanOverallNextStepDisplay(
+                                        c.previousValue,
+                                      )
                                     : c.previousValue;
                                   const currDisplay = isOverallNextStep
-                                    ? cleanOverallNextStepDisplay(c.updatedValue)
+                                    ? cleanOverallNextStepDisplay(
+                                        c.updatedValue,
+                                      )
                                     : c.updatedValue;
                                   return (
                                     <tr key={i}>
@@ -456,7 +525,13 @@ const CaseReviewApprovePopup = ({
             className="danger"
             onClick={() => onReject?.(comments)}
             disabled={!canReject}
-            title={isClosed ? "Case is already closed." : isEditMode ? "Save or exit edit mode first." : ""}
+            title={
+              isClosed
+                ? "Case is already closed."
+                : isEditMode
+                  ? "Save or exit edit mode first."
+                  : ""
+            }
           >
             {isRejecting ? "Rejecting…" : "Reject & Proceed"}
           </button>
@@ -465,7 +540,13 @@ const CaseReviewApprovePopup = ({
             className="primary"
             onClick={() => onApprove?.(comments)}
             disabled={!canApprove}
-            title={isClosed ? "Case is already closed." : isEditMode ? "Save or exit edit mode first." : ""}
+            title={
+              isClosed
+                ? "Case is already closed."
+                : isEditMode
+                  ? "Save or exit edit mode first."
+                  : ""
+            }
           >
             {isApproving ? "Approving…" : "Approve & Proceed"}
           </button>
@@ -476,5 +557,3 @@ const CaseReviewApprovePopup = ({
 };
 
 export default CaseReviewApprovePopup;
-
-

@@ -1474,6 +1474,8 @@ const Home = ({ bearerToken, setBearerToken }) => {
                 response: response.data.aiResponse,
                 chat_id: response.data.chatId,
                 gpt_model: "Calls",
+                relevantChunks: response.data.relevantChunks,
+                relevantChunksDetail: response.data.relevantChunksDetail,
               },
             ]);
           }

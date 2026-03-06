@@ -691,7 +691,9 @@ const LiveTranscript = () => {
           type="button"
           className="lt_panel_toggle"
           onClick={() => setIsTranscriptOpen((prev) => !prev)}
-          aria-label={isTranscriptOpen ? "Collapse transcript" : "Expand transcript"}
+          aria-label={
+            isTranscriptOpen ? "Collapse transcript" : "Expand transcript"
+          }
           title={isTranscriptOpen ? "Collapse transcript" : "Expand transcript"}
         >
           {isTranscriptOpen ? "<" : ">"}
@@ -751,7 +753,7 @@ const LiveTranscript = () => {
                 />
               </svg>
             </div>
-            <div className="lt_ai_title">AI Assistant</div>
+            <div className="lt_ai_title">AI Copilot</div>
             {copilotCards && copilotCards.length > 0 && (
               <div className="lt_ai_count">{copilotCards.length}</div>
             )}
@@ -943,9 +945,7 @@ const LiveTranscript = () => {
       </aside>
 
       {isTranscriptOpen ? (
-        <div className="lt_transcript_panel_wrap">
-          {transcriptPanel}
-        </div>
+        <div className="lt_transcript_panel_wrap">{transcriptPanel}</div>
       ) : null}
     </div>
   );
