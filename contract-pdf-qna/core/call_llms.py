@@ -346,21 +346,22 @@ def _rag_answer(*, question: str, customer: Dict[str, Any], handler: CallbackHan
 
 
 class Diagnostics(BaseModel):
-    steps: List[str] = Field(default_factory=list)
-    questions: List[str] = Field(default_factory=list)
+    steps: List[str] = Field(default_factory=list, description='List of steps')
+    questions: List[str] = Field(default_factory=list, description='List of questions')
 
 
 def _diagnostics_steps(*, transcript: str, handler: CallbackHandler, span) -> Dict[str, Any]:
     # Generic troubleshooting guidance without coverage promises
-    llm = DIAGNOSTIC_LLM.with_structured_output(Diagnostics) # Use cached instance
+    llm = DIAGNOSTIC_LLM.with_structured_output(Diagnostics)
     chain = _diagnostics_prompt | llm 
-    raw = chain.invoke({"transcript": transcript}, config={"callbacks": [handler]})
-    if _trace_include_payloads():
-        span.set_attribute("llm.prompt.preview", _preview(transcript))
-        span.set_attribute("llm.response.preview", _preview(raw))
     try:
+        raw = chain.invoke({"transcript": transcript}, config={"callbacks": [handler]})
+        if _trace_include_payloads():
+            span.set_attribute("llm.prompt.preview", _preview(transcript))
+            span.set_attribute("llm.response.preview", _preview(raw))
         return raw
-    except Exception:
+    except Exception as e:
+        print('[LIVE COPILOT][Diagnostic LLM]: Error', e)
         return {"steps": [], "questions": []}
 
 

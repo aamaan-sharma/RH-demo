@@ -1,0 +1,526 @@
+[
+  {
+    "sessionId": "8447846901",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
+    },
+    "createdAt": 1774829700,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": []
+  },
+  {
+    "sessionId": "8447846901",
+    "intent": "CLAIM_STATUS",
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
+    },
+    "confidence": 0.85,
+    "customer": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus",
+      "sessionId": "8447846901"
+    },
+    "createdAt": "1774829706",
+    "cards": [
+      {
+        "title": "Clarifying Coverage for Leakages",
+        "csrScript": "Could you please specify the locations or systems where the leakages are occurring? This will help us determine the coverage under your ShieldPlus plan.",
+        "evidence": "i need to request a claim for a couple of leakages at my house.",
+        "priority": "high"
+      }
+    ]
+  },
+  {
+    "sessionId": "8447846901",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
+    },
+    "createdAt": 1774829706,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": []
+  },
+  {
+    "sessionId": "8447846901",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
+    },
+    "confidence": 0.2,
+    "customer": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus",
+      "sessionId": "8447846901"
+    },
+    "createdAt": "1774829709",
+    "cards": [
+      {
+        "title": "Clarification Needed",
+        "csrScript": "Could you please provide more details about the issue you're experiencing? This will help me determine the coverage under your ShieldPlus plan.",
+        "evidence": "that's right.",
+        "priority": "high"
+      }
+    ]
+  },
+  {
+    "sessionId": "8447846901",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
+    },
+    "createdAt": 1774829709,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": []
+  },
+  {
+    "sessionId": "8447846901",
+    "intent": "INQUIRY",
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
+    },
+    "confidence": 0.85,
+    "customer": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus",
+      "sessionId": "8447846901"
+    },
+    "createdAt": "1774829723",
+    "cards": [
+      {
+        "title": "Foundation Leak Coverage",
+        "csrScript": "The leak by the foundation is covered under your ShieldPlus plan if it involves covered lines or pipes within the main foundation. However, if the leak is due to external factors or involves non-covered items, it may not be covered. If access requires going through concrete, coverage is limited to $1,000 for access and rerouting.",
+        "evidence": "the first is a leak by the foundation outside",
+        "priority": "high"
+      },
+      {
+        "title": "Backflow Preventer Coverage",
+        "csrScript": "Unfortunately, issues related to the backflow preventer for the irrigation system aren't covered under your current policy because coverage for irrigation systems requires additional coverage not included in your standard plan. I can schedule a technician to assess the issue and provide an estimate if you'd like.",
+        "evidence": "it’s the backflow preventer for the irrigation system",
+        "priority": "high"
+      }
+    ]
+  },
+  {
+    "sessionId": "8447846901",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
+    },
+    "createdAt": 1774829723,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": []
+  },
+  {
+    "sessionId": "8447846901",
+    "intent": "INQUIRY",
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
+    },
+    "confidence": 0.95,
+    "customer": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus",
+      "sessionId": "8447846901"
+    },
+    "createdAt": "1774829890",
+    "cards": [
+      {
+        "title": "Foundation Leak Coverage",
+        "csrScript": "Leaks within the main foundation involving covered lines or pipes are covered under your ShieldPlus plan. If access requires going through concrete, coverage is limited to $1,000 for access and rerouting. I can schedule a technician to assess and address the issue.",
+        "evidence": "leak by the foundation",
+        "priority": "high"
+      },
+      {
+        "title": "Irrigation System Backflow Preventer",
+        "csrScript": "Unfortunately, the backflow preventer for the irrigation system isn't covered under your plan because it requires additional coverage not included in your standard plan. I can schedule a technician to provide an estimate for repair.",
+        "evidence": "backflow preventer for the irrigation system",
+        "priority": "medium"
+      }
+    ]
+  },
+  {
+    "sessionId": "8447846901",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
+    },
+    "createdAt": 1774829890,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": []
+  },
+  {
+    "sessionId": "8447846901",
+    "intent": "PROBLEM",
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
+    },
+    "confidence": 0.95,
+    "customer": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus",
+      "sessionId": "8447846901"
+    },
+    "createdAt": "1774829903",
+    "cards": [
+      {
+        "title": "Supply Line Coverage",
+        "csrScript": "Unfortunately, the supply lines under your kitchen and bar sinks aren't covered under your ShieldPlus plan because they are considered part of the plumbing system, which is excluded due to age and corrosion. I can schedule a technician to assess the repair cost and provide an estimate if you'd like.",
+        "evidence": "two supply lines—one under the kitchen sink and one under the bar sink. they are probably lines leaking due to age and corrosion.",
+        "priority": "high"
+      }
+    ]
+  },
+  {
+    "sessionId": "8447846901",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
+    },
+    "createdAt": 1774829903,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": []
+  },
+  {
+    "sessionId": "8447846901",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
+    },
+    "confidence": 0.0,
+    "customer": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus",
+      "sessionId": "8447846901"
+    },
+    "createdAt": "1774829940",
+    "cards": [
+      {
+        "title": "Technician Service Issue",
+        "csrScript": "Unfortunately, issues with a technician's service are not covered under your plan because they fall under limitations and exclusions, such as secondary costs or damages resulting from delays or neglect. I can schedule a technician to assess the situation and provide a solution.",
+        "evidence": "yes, normal wear and tear as mentioned by the technician.",
+        "priority": "high"
+      }
+    ]
+  },
+  {
+    "sessionId": "8447846901",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
+    },
+    "createdAt": 1774829940,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": []
+  },
+  {
+    "sessionId": "8447846901",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
+    },
+    "confidence": 0.0,
+    "customer": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus",
+      "sessionId": "8447846901"
+    },
+    "createdAt": "1774830211",
+    "cards": [
+      {
+        "title": "Technician Service Issue Coverage",
+        "csrScript": "If the technician cannot resolve the issue, you may need to find an outside service contractor, but this must be authorized by us first. If authorized, the contractor must provide a diagnosis and cost estimate before any work is done. We will review this and make a coverage decision.",
+        "evidence": "Is the issue with the technician's service covered under my current policy?",
+        "priority": "high"
+      }
+    ]
+  },
+  {
+    "sessionId": "8447846901",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
+    },
+    "createdAt": 1774830211,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": []
+  },
+  {
+    "sessionId": "8447846901",
+    "intent": "SMALL_TALK",
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
+    },
+    "confidence": 0.95,
+    "customer": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus",
+      "sessionId": "8447846901"
+    },
+    "createdAt": "1774830226",
+    "cards": [
+      {
+        "title": "Technician Service Issue Coverage",
+        "csrScript": "If the technician cannot handle the problem, you may need to find an outside contractor, but this must be authorized by us first. Once authorized, the contractor will provide a diagnosis and cost estimate, and we'll make a coverage decision. If you need assistance with this process, let me know.",
+        "evidence": "Is the issue with the technician's service covered under my current policy?",
+        "priority": "high"
+      }
+    ]
+  },
+  {
+    "sessionId": "8447846901",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
+    },
+    "createdAt": 1774830226,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": []
+  },
+  {
+    "sessionId": "8447846901",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
+    },
+    "confidence": 0.2,
+    "customer": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus",
+      "sessionId": "8447846901"
+    },
+    "createdAt": "1774830306",
+    "cards": [
+      {
+        "title": "Technician Service Issue Coverage",
+        "csrScript": "If the issue with the technician's service is related to a covered breakdown and follows the proper service request process, it should be covered under your plan. Unauthorized services or issues outside the scope of coverage won't be reimbursed.",
+        "evidence": "Is the issue with the technician's service covered under my current policy?",
+        "priority": "high"
+      },
+      {
+        "title": "Next Steps if Technician Cannot Resolve Issue",
+        "csrScript": "If the technician cannot resolve the issue, you may need to find an outside service contractor, but this must be authorized by us first. Once authorized, the contractor must provide us with a diagnosis and costs before any work is done, and we'll make a coverage decision.",
+        "evidence": "What are the next steps if the technician cannot handle the problem?",
+        "priority": "high"
+      }
+    ]
+  },
+  {
+    "sessionId": "8447846901",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
+    },
+    "createdAt": 1774830306,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": []
+  },
+  {
+    "sessionId": "8447846901",
+    "intent": "SMALL_TALK",
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
+    },
+    "confidence": 0.95,
+    "customer": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus",
+      "sessionId": "8447846901"
+    },
+    "createdAt": "1774830317",
+    "cards": [
+      {
+        "title": "Technician Service Coverage",
+        "csrScript": "If the issue with the technician's service is related to a covered breakdown and follows the proper service request process, it should be covered under your plan. Unauthorized services or issues outside the scope of coverage won't be reimbursed.",
+        "evidence": "Is the issue with the technician's service covered under my current policy?",
+        "priority": "high"
+      },
+      {
+        "title": "Next Steps if Technician Cannot Resolve Issue",
+        "csrScript": "If the technician cannot resolve the issue, you may need to find an outside service contractor, but this must be authorized by us first. Once authorized, the contractor must provide us with a diagnosis and costs before any work is done.",
+        "evidence": "What are the next steps if the technician cannot handle the problem?",
+        "priority": "high"
+      }
+    ]
+  }
+]
