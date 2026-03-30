@@ -11,40 +11,14 @@
       "contractType": "DTC",
       "plan": "ShieldPlus"
     },
-    "createdAt": 1771534317,
+    "createdAt": 1774853835,
     "confidence": 0.0,
     "customer": {},
-    "cards": [],
-    "conversation": {
-      "speaker": "AGENT",
-      "text": "Thank you for calling American Home Shield. How can I help you today?"
-    },
-    "timing": 1.156275749206543
+    "cards": []
   },
   {
     "sessionId": "8447846901",
     "intent": "PROBLEM",
-    "confidence": 0.95,
-    "customer": {
-      "name": "Sarah Bible",
-      "email": "sarah.bible@abc.com",
-      "mobile": "+18447846901",
-      "age": 24,
-      "state": "California",
-      "contractType": "DTC",
-      "plan": "ShieldPlus",
-      "verified": false,
-      "sessionId": "8447846901"
-    },
-    "cards": [
-      {
-        "title": "Clarify Leakage Details",
-        "csrScript": "Could you please describe the location and extent of the leakages?",
-        "evidence": "I need to request a claim for a couple of leakages at my house.",
-        "priority": "high"
-      }
-    ],
-    "createdAt": "1771534325",
     "userDetails": {
       "name": "Sarah Bible",
       "email": "sarah.bible@abc.com",
@@ -54,98 +28,6 @@
       "contractType": "DTC",
       "plan": "ShieldPlus"
     },
-    "conversation": {
-      "speaker": "CUSTOMER",
-      "text": "Hi, this is Sarah. I need to request a claim for a couple of leakages at my house."
-    },
-    "timing": 7.9591124057769775
-  },
-  {
-    "sessionId": "8447846901",
-    "intent": "OTHER",
-    "userDetails": {
-      "name": "Sarah Bible",
-      "email": "sarah.bible@abc.com",
-      "mobile": "+18447846901",
-      "age": 24,
-      "state": "California",
-      "contractType": "DTC",
-      "plan": "ShieldPlus"
-    },
-    "createdAt": 1771534325,
-    "confidence": 0.0,
-    "customer": {},
-    "cards": [],
-    "conversation": {
-      "speaker": "AGENT",
-      "text": "Understood. Just to confirm, you are based in California and on the ShieldPlus plan. Is that correct?"
-    },
-    "timing": 0.0002262592315673828
-  },
-  {
-    "sessionId": "8447846901",
-    "intent": "PROBLEM",
-    "confidence": 0.95,
-    "customer": {
-      "name": "Sarah Bible",
-      "email": "sarah.bible@abc.com",
-      "mobile": "+18447846901",
-      "age": 24,
-      "state": "California",
-      "contractType": "DTC",
-      "plan": "ShieldPlus",
-      "verified": false,
-      "sessionId": "8447846901"
-    },
-    "cards": [
-      {
-        "title": "Clarify Leakage Details",
-        "csrScript": "Could you please describe the locations and severity of the leakages?",
-        "evidence": "I need to request a claim for a couple of leakages at my house.",
-        "priority": "high"
-      }
-    ],
-    "createdAt": "1771534332",
-    "userDetails": {
-      "name": "Sarah Bible",
-      "email": "sarah.bible@abc.com",
-      "mobile": "+18447846901",
-      "age": 24,
-      "state": "California",
-      "contractType": "DTC",
-      "plan": "ShieldPlus"
-    },
-    "conversation": {
-      "speaker": "CUSTOMER",
-      "text": "That's right."
-    },
-    "timing": 6.494693040847778
-  },
-  {
-    "sessionId": "8447846901",
-    "intent": "OTHER",
-    "userDetails": {
-      "name": "Sarah Bible",
-      "email": "sarah.bible@abc.com",
-      "mobile": "+18447846901",
-      "age": 24,
-      "state": "California",
-      "contractType": "DTC",
-      "plan": "ShieldPlus"
-    },
-    "createdAt": 1771534332,
-    "confidence": 0.0,
-    "customer": {},
-    "cards": [],
-    "conversation": {
-      "speaker": "AGENT",
-      "text": "Great, can you help me with details about the leakages, please?"
-    },
-    "timing": 0.0005621910095214844
-  },
-  {
-    "sessionId": "8447846901",
-    "intent": "PROBLEM",
     "confidence": 0.85,
     "customer": {
       "name": "Sarah Bible",
@@ -155,32 +37,17 @@
       "state": "California",
       "contractType": "DTC",
       "plan": "ShieldPlus",
-      "verified": false,
       "sessionId": "8447846901"
     },
+    "createdAt": "1774853855",
     "cards": [
       {
-        "title": "Coverage for Backflow Preventer Leak",
-        "csrScript": "The leak by the foundation outside, specifically the backflow preventer for the irrigation system, is not covered under your plan. Coverage is limited to items within the main foundation of the home.",
-        "evidence": "the first is a leak by the foundation outside. it’s the backflow preventer for the irrigation system.",
+        "title": "Leakage Coverage",
+        "csrScript": "Based on your ShieldPlus plan, leaks or breakages of water lines, gas lines, waste or plumbing waste vent lines, drain lines, drains, and pipes within the main foundation of the home are covered. However, bathtubs, sinks, bidets, shower enclosures, and base pans are not covered. I can help schedule a technician to assess and address the covered leakages.",
+        "evidence": "i need to request a claim for a couple of leakages at my house.",
         "priority": "high"
       }
-    ],
-    "createdAt": "1771534354",
-    "userDetails": {
-      "name": "Sarah Bible",
-      "email": "sarah.bible@abc.com",
-      "mobile": "+18447846901",
-      "age": 24,
-      "state": "California",
-      "contractType": "DTC",
-      "plan": "ShieldPlus"
-    },
-    "conversation": {
-      "speaker": "CUSTOMER",
-      "text": "The first is a leak by the foundation outside. It’s the backflow preventer for the irrigation system. I need to check the issue and if that’s covered."
-    },
-    "timing": 22.519887685775757
+    ]
   },
   {
     "sessionId": "8447846901",
@@ -194,40 +61,31 @@
       "contractType": "DTC",
       "plan": "ShieldPlus"
     },
-    "createdAt": 1771534354,
+    "createdAt": 1774853855,
     "confidence": 0.0,
     "customer": {},
-    "cards": [],
-    "conversation": {
-      "speaker": "AGENT",
-      "text": "Irrigation and backflow preventers located outside the main foundation are not covered under this plan. Did you find a cause for that leak?"
+    "cards": []
+  },
+  {
+    "sessionId": "8447846901",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
     },
-    "timing": 0.00044417381286621094
+    "createdAt": 1774853859,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": []
   },
   {
     "sessionId": "8447846901",
     "intent": "INQUIRY",
-    "confidence": 0.95,
-    "customer": {
-      "name": "Sarah Bible",
-      "email": "sarah.bible@abc.com",
-      "mobile": "+18447846901",
-      "age": 24,
-      "state": "California",
-      "contractType": "DTC",
-      "plan": "ShieldPlus",
-      "verified": false,
-      "sessionId": "8447846901"
-    },
-    "cards": [
-      {
-        "title": "Coverage for Irrigation System Leak",
-        "csrScript": "The leak by the foundation for the irrigation system is not covered under your plan. Coverage is limited to items within the main foundation of the home.",
-        "evidence": "The first is a leak by the foundation outside. It’s the backflow preventer for the irrigation system.",
-        "priority": "high"
-      }
-    ],
-    "createdAt": "1771534365",
     "userDetails": {
       "name": "Sarah Bible",
       "email": "sarah.bible@abc.com",
@@ -237,37 +95,6 @@
       "contractType": "DTC",
       "plan": "ShieldPlus"
     },
-    "conversation": {
-      "speaker": "CUSTOMER",
-      "text": "No idea. The technician mentioned that they do not handle this. I just wanted to check coverage before moving on to requesting another technician."
-    },
-    "timing": 11.04450535774231
-  },
-  {
-    "sessionId": "8447846901",
-    "intent": "OTHER",
-    "userDetails": {
-      "name": "Sarah Bible",
-      "email": "sarah.bible@abc.com",
-      "mobile": "+18447846901",
-      "age": 24,
-      "state": "California",
-      "contractType": "DTC",
-      "plan": "ShieldPlus"
-    },
-    "createdAt": 1771534365,
-    "confidence": 0.0,
-    "customer": {},
-    "cards": [],
-    "conversation": {
-      "speaker": "AGENT",
-      "text": "Understood. I will document the denial for the irrigation line. What is the second issue?"
-    },
-    "timing": 0.00043582916259765625
-  },
-  {
-    "sessionId": "8447846901",
-    "intent": "PROBLEM",
     "confidence": 0.85,
     "customer": {
       "name": "Sarah Bible",
@@ -277,32 +104,23 @@
       "state": "California",
       "contractType": "DTC",
       "plan": "ShieldPlus",
-      "verified": false,
       "sessionId": "8447846901"
     },
+    "createdAt": "1774853871",
     "cards": [
       {
-        "title": "Coverage for Supply Line Leaks",
-        "csrScript": "The leaks in the supply lines under the kitchen and bar sinks are not covered under your plan, as coverage is limited to items within the main foundation of the home, and these specific components are not listed as covered.",
-        "evidence": "two supply lines—one under the kitchen sink and one under the bar sink. they are probably lines leaking due to age and corrosion.",
+        "title": "Foundation Leak Coverage",
+        "csrScript": "Unfortunately, leaks by the foundation outside your home aren't covered under your current policy because coverage is limited to items within the main foundation. I can schedule a technician to assess the repair cost for you.",
+        "evidence": "the first is a leak by the foundation outside",
+        "priority": "high"
+      },
+      {
+        "title": "Backflow Preventer Coverage",
+        "csrScript": "Unfortunately, your policy doesn't cover issues with the backflow preventer for the irrigation system because it requires additional coverage not included in your standard plan. I can arrange for a technician to provide an estimate if you'd like.",
+        "evidence": "it’s the backflow preventer for the irrigation system",
         "priority": "high"
       }
-    ],
-    "createdAt": "1771534381",
-    "userDetails": {
-      "name": "Sarah Bible",
-      "email": "sarah.bible@abc.com",
-      "mobile": "+18447846901",
-      "age": 24,
-      "state": "California",
-      "contractType": "DTC",
-      "plan": "ShieldPlus"
-    },
-    "conversation": {
-      "speaker": "CUSTOMER",
-      "text": "Two supply lines—one under the kitchen sink and one under the bar sink. They are probably lines leaking due to age and corrosion."
-    },
-    "timing": 16.273831844329834
+    ]
   },
   {
     "sessionId": "8447846901",
@@ -316,20 +134,97 @@
       "contractType": "DTC",
       "plan": "ShieldPlus"
     },
-    "createdAt": 1771534381,
+    "createdAt": 1774853871,
     "confidence": 0.0,
     "customer": {},
-    "cards": [],
-    "conversation": {
-      "speaker": "AGENT",
-      "text": "Was the failure caused by normal wear and tear?"
+    "cards": []
+  },
+  {
+    "sessionId": "8447846901",
+    "intent": "INQUIRY",
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
     },
-    "timing": 0.0004639625549316406
+    "confidence": 0.85,
+    "customer": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus",
+      "sessionId": "8447846901"
+    },
+    "createdAt": "1774853887",
+    "cards": [
+      {
+        "title": "Foundation Leak Coverage",
+        "csrScript": "Unfortunately, leaks by the foundation outside your home aren't covered under your current policy because coverage is limited to items within the main foundation. I can schedule a technician to assess the repair cost if you'd like.",
+        "evidence": "the first is a leak by the foundation outside.",
+        "priority": "high"
+      },
+      {
+        "title": "Backflow Preventer Coverage",
+        "csrScript": "Unfortunately, issues with the backflow preventer for the irrigation system aren't covered under your plan because it requires additional coverage not included in your standard plan. I can arrange for a technician to provide an estimate if that would help.",
+        "evidence": "it’s the backflow preventer for the irrigation system.",
+        "priority": "high"
+      }
+    ]
+  },
+  {
+    "sessionId": "8447846901",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
+    },
+    "createdAt": 1774853887,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": []
+  },
+  {
+    "sessionId": "8447846901",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
+    },
+    "createdAt": 1774853889,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": []
   },
   {
     "sessionId": "8447846901",
     "intent": "PROBLEM",
-    "confidence": 0.95,
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
+    },
+    "confidence": 0.85,
     "customer": {
       "name": "Sarah Bible",
       "email": "sarah.bible@abc.com",
@@ -338,32 +233,17 @@
       "state": "California",
       "contractType": "DTC",
       "plan": "ShieldPlus",
-      "verified": false,
       "sessionId": "8447846901"
     },
+    "createdAt": "1774853913",
     "cards": [
       {
-        "title": "Coverage for Supply Line Leaks",
-        "csrScript": "The leaks in the supply lines under the kitchen and bar sinks caused by normal wear and tear are covered under your ShieldPlus plan.",
+        "title": "Coverage for Leaks Under Kitchen and Bar Sinks",
+        "csrScript": "Leaks caused by normal wear and tear in the plumbing lines under your kitchen and bar sinks are covered under your ShieldPlus plan. However, the sinks themselves and certain other conditions are not covered. If the leak requires accessing through concrete, there's a $1,000 limit for those repairs.",
         "evidence": "two supply lines—one under the kitchen sink and one under the bar sink. they are probably lines leaking due to age and corrosion.",
         "priority": "high"
       }
-    ],
-    "createdAt": "1771534388",
-    "userDetails": {
-      "name": "Sarah Bible",
-      "email": "sarah.bible@abc.com",
-      "mobile": "+18447846901",
-      "age": 24,
-      "state": "California",
-      "contractType": "DTC",
-      "plan": "ShieldPlus"
-    },
-    "conversation": {
-      "speaker": "CUSTOMER",
-      "text": "Yes, normal wear and tear as mentioned by the technician."
-    },
-    "timing": 6.435698509216309
+    ]
   },
   {
     "sessionId": "8447846901",
@@ -377,15 +257,43 @@
       "contractType": "DTC",
       "plan": "ShieldPlus"
     },
-    "createdAt": 1771534388,
+    "createdAt": 1774853913,
     "confidence": 0.0,
     "customer": {},
-    "cards": [],
-    "conversation": {
-      "speaker": "AGENT",
-      "text": "And is the total for that repair quoted by the technician is?"
+    "cards": []
+  },
+  {
+    "sessionId": "8447846901",
+    "intent": "INQUIRY",
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
     },
-    "timing": 0.0004315376281738281
+    "confidence": 0.85,
+    "customer": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus",
+      "sessionId": "8447846901"
+    },
+    "createdAt": "1774853937",
+    "cards": [
+      {
+        "title": "Coverage for Normal Wear and Tear",
+        "csrScript": "Your ShieldPlus plan covers repairs for breakdowns caused by normal wear and tear, so the $120 repair cost should be covered. If you have any further questions or need assistance, feel free to ask!",
+        "evidence": "yes, normal wear and tear as mentioned by the technician.",
+        "priority": "high"
+      }
+    ]
   },
   {
     "sessionId": "8447846901",
@@ -399,19 +307,23 @@
       "contractType": "DTC",
       "plan": "ShieldPlus"
     },
-    "createdAt": 1771534388,
+    "createdAt": 1774853937,
     "confidence": 0.0,
     "customer": {},
-    "cards": [],
-    "conversation": {
-      "speaker": "AGENT",
-      "text": "Great, this is covered under your plan. I can authorize the $120 for the supply line repairs but will have to deny the exterior irrigation leak. Your authorization code is 120-RBDI."
-    },
-    "timing": 0.0006604194641113281
+    "cards": []
   },
   {
     "sessionId": "8447846901",
-    "intent": "PROBLEM",
+    "intent": "SMALL_TALK",
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
+    },
     "confidence": 0.95,
     "customer": {
       "name": "Sarah Bible",
@@ -421,38 +333,17 @@
       "state": "California",
       "contractType": "DTC",
       "plan": "ShieldPlus",
-      "verified": false,
       "sessionId": "8447846901"
     },
+    "createdAt": "1774853960",
     "cards": [
       {
-        "title": "Irrigation System Leak Coverage",
-        "csrScript": "The leak by the foundation outside, specifically the backflow preventer for the irrigation system, is not covered under your plan.",
-        "evidence": "The first is a leak by the foundation outside. It’s the backflow preventer for the irrigation system.",
-        "priority": "high"
-      },
-      {
-        "title": "Supply Line Leak Coverage",
-        "csrScript": "The supply line leaks under the kitchen and bar sinks are covered under your plan. I have authorized $120 for the repairs.",
-        "evidence": "Two supply lines—one under the kitchen sink and one under the bar sink. They are probably lines leaking due to age and corrosion.",
+        "title": "Coverage for Supply Line Repairs",
+        "csrScript": "The $120 repair cost for the supply line is covered under your ShieldPlus plan because it falls under normal wear and tear. I'll authorize the repair for you.",
+        "evidence": "great, this is covered under your plan. i can authorize the $120 for the supply line repairs",
         "priority": "high"
       }
-    ],
-    "createdAt": "1771534398",
-    "userDetails": {
-      "name": "Sarah Bible",
-      "email": "sarah.bible@abc.com",
-      "mobile": "+18447846901",
-      "age": 24,
-      "state": "California",
-      "contractType": "DTC",
-      "plan": "ShieldPlus"
-    },
-    "conversation": {
-      "speaker": "CUSTOMER",
-      "text": "Got it. Thank you."
-    },
-    "timing": 9.739261388778687
+    ]
   },
   {
     "sessionId": "8447846901",
@@ -466,19 +357,40 @@
       "contractType": "DTC",
       "plan": "ShieldPlus"
     },
-    "createdAt": 1771534398,
+    "createdAt": 1774853960,
     "confidence": 0.0,
     "customer": {},
-    "cards": [],
-    "conversation": {
-      "speaker": "AGENT",
-      "text": "You're welcome. Is there anything else?"
-    },
-    "timing": 0.0003924369812011719
+    "cards": []
   },
   {
     "sessionId": "8447846901",
-    "intent": "CLAIM_STATUS",
+    "intent": "OTHER",
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
+    },
+    "createdAt": 1774853963,
+    "confidence": 0.0,
+    "customer": {},
+    "cards": []
+  },
+  {
+    "sessionId": "8447846901",
+    "intent": "SMALL_TALK",
+    "userDetails": {
+      "name": "Sarah Bible",
+      "email": "sarah.bible@abc.com",
+      "mobile": "+18447846901",
+      "age": 24,
+      "state": "California",
+      "contractType": "DTC",
+      "plan": "ShieldPlus"
+    },
     "confidence": 0.95,
     "customer": {
       "name": "Sarah Bible",
@@ -488,59 +400,16 @@
       "state": "California",
       "contractType": "DTC",
       "plan": "ShieldPlus",
-      "verified": false,
       "sessionId": "8447846901"
     },
+    "createdAt": "1774853978",
     "cards": [
       {
-        "title": "Irrigation System Leak Coverage",
-        "csrScript": "The leak by the foundation outside, specifically the backflow preventer for the irrigation system, is not covered under your plan.",
-        "evidence": "the first is a leak by the foundation outside. it’s the backflow preventer for the irrigation system.",
-        "priority": "high"
-      },
-      {
-        "title": "Supply Line Leak Coverage",
-        "csrScript": "The supply line leaks under the kitchen and bar sinks are covered under your plan. I have authorized $120 for the repairs.",
-        "evidence": "two supply lines—one under the kitchen sink and one under the bar sink. they are probably lines leaking due to age and corrosion.",
-        "priority": "high"
+        "title": "Small Talk",
+        "csrScript": "Thank you for calling American Home Shield. Have a safe and great day!",
+        "evidence": "no, that’s it.",
+        "priority": "low"
       }
-    ],
-    "createdAt": "1771534404",
-    "userDetails": {
-      "name": "Sarah Bible",
-      "email": "sarah.bible@abc.com",
-      "mobile": "+18447846901",
-      "age": 24,
-      "state": "California",
-      "contractType": "DTC",
-      "plan": "ShieldPlus"
-    },
-    "conversation": {
-      "speaker": "CUSTOMER",
-      "text": "No, that’s it."
-    },
-    "timing": 6.6012043952941895
-  },
-  {
-    "sessionId": "8447846901",
-    "intent": "OTHER",
-    "userDetails": {
-      "name": "Sarah Bible",
-      "email": "sarah.bible@abc.com",
-      "mobile": "+18447846901",
-      "age": 24,
-      "state": "California",
-      "contractType": "DTC",
-      "plan": "ShieldPlus"
-    },
-    "createdAt": 1771534404,
-    "confidence": 0.0,
-    "customer": {},
-    "cards": [],
-    "conversation": {
-      "speaker": "AGENT",
-      "text": "Thank you for calling American Home Shield. Have a safe and great day!"
-    },
-    "timing": 0.0007069110870361328
+    ]
   }
 ]

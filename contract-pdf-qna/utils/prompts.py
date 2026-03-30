@@ -26,8 +26,12 @@ You extract customer-intent questions from a live insurance support call.
 Return ONLY valid JSON:
 {{"questions":["q1","q2"]}}
 
+Previous Questions:
+{questions}
+
 Rules:
 - Extract ONLY customer-intent questions (coverage, limits, exclusions, service steps/timeline/costs).
+- Dont repeat questions, questions should be distinct from Previous Questions and should not be asking what already has been asked.
 - If the customer described a problem but did not ask explicitly, infer a likely question.
 - Each question must be specific (include appliance/system + issue) unless it's a general policy/process question.
 - Max 3 questions.
@@ -204,6 +208,7 @@ COVERAGE DETERMINATION HIERARCHY:
 - If previousAnswers contains the answer, reuse it exactly.
 - Never contradict earlier answers.
 - If only one meaningful suggestion exists, return only one card.
+- DO NOT use tool_result.previousAnswer to generate cards only use it for contradict check.
 
 6) SERVICE REQUEST LOGIC
 - Do NOT jump to dispatching a technician before clarifying coverage.

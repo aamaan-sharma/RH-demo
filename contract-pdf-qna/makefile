@@ -2,6 +2,10 @@ include .env
 export
 
 
+
+cacert.pem:
+	@echo 'cacert.pem doesnt exsist' && false
+
 run: cacert.pem bigquery.json
 	uv run python app.py
 
@@ -15,7 +19,7 @@ jaeger:
 	docker run --name jaeger -p 16686:16686 -p 4318:4318 jaegertracing/jaeger:latest
 
 event_test:
-	. venv/bin/activate; python3 -c "from tests import test_handle_transcript_event"
+	. .venv/bin/activate; python3 -c "from tests import test_handle_transcript_event"
 
 test_time:
 	. venv/bin/activate; python3 -c "from tests import tests_measure"

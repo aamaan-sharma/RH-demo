@@ -1,5 +1,5 @@
 # Set the OpenAI API Keys, embedding model,
-_async_mode = "threading"
+#_async_mode = "threading"
 # try:
 #     import eventlet  # noqa: F401
 
@@ -43,7 +43,6 @@ from utils.milvus_utils import get_milvus_collection_name
 from live_copilot import handle_transcript_event, handle_copilot_enable_event
 from core.transcript_process import input_prompt, process_single_transcript_question, InferenceMode
 from utils.kb import getPolicyid
-LIVE_COPILOT_AVAILABLE = True
 
 # GCP Storage imports using fsspec (unified filesystem interface)
 try:
@@ -208,12 +207,12 @@ try:
     socketio = SocketIO(
         app,
         cors_allowed_origins="*",
-        async_mode=_async_mode,
+        #async_mode=_async_mode,
         manage_session=True
     )
 except Exception:
     raise
-print(_async_mode)
+#print(_async_mode)
 
 # ----------------------------
 # Live Copilot: session gating
@@ -6746,7 +6745,6 @@ def process_transcript_internal():
         # We reuse the same streaming generator, but we exhaust it without sending bytes to the client.
         # IMPORTANT: the core logic relies on Flask request context (headers + get_json),
         # so we create a request context inside the background thread.
-        print(data)
         def _bg():
             try:
                 with app.test_request_context(
@@ -6777,9 +6775,10 @@ def process_transcript_internal():
     # Streaming path: return the normal SSE stream (200).
     return _process_transcript_core(data, yield_sse_fn=None)
 
+from live_copilot import process_transcript_event_loop
+background_task_started = False
 @app.route("/webhook", methods=["POST"])
 def transcript_event():
-
     data = request.get_json()
     if not data:
         return jsonify({"error": "invalid payload"}), 400
@@ -6791,6 +6790,11 @@ def transcript_event():
 
     # Get or create session trace context for proper nesting
     parent_ctx = _get_or_create_session_trace_context(session_id)
+    global background_task_started
+    if not background_task_started :
+        background_task_started = True
+        thread = threading.Thread(target=process_transcript_event_loop, args=(socketio, parent_ctx))
+        thread.start()
     
     with tracer.start_as_current_span("webhook.transcript_event", context=parent_ctx) as webhook_span:
         webhook_span.set_attribute("live.session_id", session_id)
@@ -6828,60 +6832,46 @@ def transcript_event():
         # 4. Transcript is complete (not partial)
         require_session = _flag_enabled("ENABLE_LIVE_COPILOT_REQUIRE_SESSION", "1")
         copilot_ok = (
-            LIVE_COPILOT_AVAILABLE
-            and _flag_enabled("ENABLE_LIVE_COPILOT", "0")
+            _flag_enabled("ENABLE_LIVE_COPILOT", "0")
             and should_start_copilot(data)
         )
-        if copilot_ok and (not require_session or _copilot_session_is_enabled(session_id)):
-            def process_copilot_async():
+        print("[LIVE COPILOT]", f"{copilot_ok=}, {require_session=}")
+        if copilot_ok and (not require_session or _copilot_session_is_enabled(session_id)) or True:
+            print('[LIVE COPILOT] RUNNIG')
+            async def process_copilot_data():
                 try:
-                    # Build copilot payload with session context
-                    # Include phone, state, plan, contractType from transcript payload
-                    # Normalize speaker so live_copilot sees "customer" for customer-side utterances
-                    raw_speaker = (data.get("speaker") or "").strip().lower()
-                    speaker = "customer" if raw_speaker in ("user", "caller", "participant", "customer") else raw_speaker or "customer"
-                    copilot_payload = {
-                        "sessionId": session_id,
-                        "contactId": data.get("contactId"),
-                        "speaker": speaker,
-                        "text": data.get("text"),
-                        "isPartial": data.get("isPartial", False),
-                        "beginOffsetMillis": data.get("beginOffsetMillis"),
-                        "endOffsetMillis": data.get("endOffsetMillis"),
-                        # New fields from transcript for session context
-                        # Support both 'phoneNumber' (Amazon Connect) and 'phone' keys
-                        "phoneNumber": data.get("phoneNumber") or data.get("phone"),
-                        "state": data.get("state"),
-                        "contractType": data.get("contractType"),
-                        "plan": data.get("plan"),
-                    }
+
+                    from core.schemas import CopilotSessionData
+                    sessionData = None
+                    try:
+                        sessionData = CopilotSessionData(**data)
+                    except Exception as e:
+                        print('[LIVE COPILOT][IN DATA] SessionData Parsing Failed', e)
+                   
+                    handle_transcript_event(sessionData)
                     
-                    # Call Live Copilot to process transcript under the session trace root (1 trace per sessionId)
-                    # Use the same parent context so spans nest correctly
-                    copilot_result = handle_transcript_event(copilot_payload, parent_context=parent_ctx)
-                    
-                    if copilot_result:
-                        if include_payloads:
-                            try:
-                                limit = int(os.getenv("OTEL_TRACE_PAYLOAD_PREVIEW_CHARS", "500") or 500)
-                            except Exception:
-                                limit = 500
-                            print(
-                                "🟢 COPILOT SUGGESTION (payload):",
-                                json.dumps(copilot_result, indent=2, default=str)[: max(0, limit)],
-                            )
-                        else:
-                            try:
-                                cards = copilot_result.get("cards") or []
-                                print(
-                                    "🟢 COPILOT SUGGESTION (summary): "
-                                    f"sessionId={copilot_result.get('sessionId')}, intent={copilot_result.get('intent')}, cards={len(cards)}"
-                                )
-                            except Exception:
-                                pass
-                        # Emit suggestion to UI
-                        # socketio.emit("suggestion_update", copilot_result)
-                        socketio.emit("suggestion_update", copilot_result, room=session_id)
+                    #if copilot_result:
+                    #    if include_payloads:
+                    #        try:
+                    #            limit = int(os.getenv("OTEL_TRACE_PAYLOAD_PREVIEW_CHARS", "500") or 500)
+                    #        except Exception:
+                    #            limit = 500
+                    #        print(
+                    #            "🟢 COPILOT SUGGESTION (payload):",
+                    #            json.dumps(copilot_result, indent=2, default=str)[: max(0, limit)],
+                    #        )
+                    #    else:
+                    #        try:
+                    #            cards = copilot_result.get("cards") or []
+                    #            print(
+                    #                "🟢 COPILOT SUGGESTION (summary): "
+                    #                f"sessionId={copilot_result.get('sessionId')}, intent={copilot_result.get('intent')}, cards={len(cards)}"
+                    #            )
+                    #        except Exception:
+                    #            pass
+                    #    # Emit suggestion to UI
+                    #    # socketio.emit("suggestion_update", copilot_result)
+                    #    socketio.emit("suggestion_update", copilot_result, room=session_id)
                 except Exception as e:
                     print(f"⚠️ Copilot processing error (non-blocking): {e}")
                     # Avoid spamming full tracebacks in normal demos; enable when debugging.
@@ -6893,7 +6883,8 @@ def transcript_event():
                         import traceback
                         traceback.print_exc()
             # threading.Thread(target=process_copilot_async, daemon=True).start()
-            socketio.start_background_task(process_copilot_async)
+            #socketio.start_background_task(process_copilot_async)
+            asyncio.run(process_copilot_data())
         # =============================================================
 
         return jsonify({"ok": True}), 200
@@ -6991,7 +6982,7 @@ def on_copilot_enable(data):
         print(f"🟢 COPILOT ENABLED for session: {session_id} (Phone: {phone_number})")
         
         # Proactive lookup for user details if phone is provided
-        if LIVE_COPILOT_AVAILABLE and phone_number:
+        if phone_number:
             try:
                 res = handle_copilot_enable_event(session_id, phone_number)
                 if res and res.get("userDetails"):
@@ -7034,5 +7025,5 @@ if __name__ == "__main__":
         port=port,
         debug=debug,
         use_reloader=False,
-        allow_unsafe_werkzeug=True,
+        #allow_unsafe_werkzeug=True,
     )

@@ -1,7 +1,8 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, AliasChoices, field_validator
 from typing import Optional, List, Dict, Any, Literal
 from time import time
 from core.db import User
+from collections import OrderedDict
 
 
 
@@ -32,8 +33,11 @@ class Question(BaseModel):
     citedChunks: List[dict] = Field(default_factory=list)
     ts: int = Field(default_factory=lambda: int(time()))
 
+class QA(BaseModel):
+    question: str = ""
+    answer: str = ""
 
-from collections import OrderedDict
+
 
 class SessionState(BaseModel):
     session_id: str
@@ -48,10 +52,31 @@ class SessionState(BaseModel):
     selected_plan: str = ""
     selected_state: str = ""
 
-    questions_queue: OrderedDict[str, Question] = Field(default_factory=OrderedDict)
-    answered: OrderedDict[str, Question] = Field(default_factory=OrderedDict)
+    questions: List[QA] = Field(default_factory=list)
     # Emission stability / dedupe
     last_emit_fingerprint: str = ""
     
     # MongoDB user details for display in UI header
     mongo_user_details: Optional[Dict[str, Any]] = None
+
+POSSIBLE_CUSTOMER_LABELS = ("customer", "caller", "homeowner", "policyholder", "member")
+
+class CopilotSessionData(BaseModel):
+    sessionId: str
+    contactId: Optional[str]
+    speaker: Literal['customer', 'agent']
+    text: str
+    isPartial: bool
+    beginOffsetMillis: int
+    endOffsetMillis: int
+    phoneNumber: str = Field(validation_alias=AliasChoices('phone', 'phoneNumber'))
+    state: str
+    contractType: str
+    plan: str
+
+    @field_validator('speaker', mode="before")
+    @classmethod
+    def speaker_normalize(cls, value):
+        return "customer" if value.lower() in POSSIBLE_CUSTOMER_LABELS else "agent"
+
+
