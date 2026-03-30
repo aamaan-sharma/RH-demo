@@ -810,6 +810,13 @@
           rgb(255, 255, 255) 40%
         );
 
+        /* Claims mode: solid bar, no backdrop blur / frosted gradient over chat */
+        &.inpufield_wrapper--claims {
+          background: #ffffff;
+          backdrop-filter: none;
+          -webkit-backdrop-filter: none;
+        }
+
         &.disabled {
           // Grey fade to visually replace the input bar when chat is disabled.
           background: linear-gradient(
@@ -839,6 +846,16 @@
           color: #6b6b6b;
           font-size: 13px;
           font-weight: 900;
+        }
+
+        &.inpufield_wrapper--claims .chat_disabled_banner {
+          background: #ffffff;
+          backdrop-filter: none;
+          -webkit-backdrop-filter: none;
+        }
+
+        &.inpufield_wrapper--claims.disabled {
+          background: #ececec;
         }
 
         .add_transcript_button {

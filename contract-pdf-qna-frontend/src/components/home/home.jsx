@@ -2039,7 +2039,7 @@ const Home = ({ bearerToken, setBearerToken }) => {
             </div>
           ) : null}
           <div
-            className={`inpufield_wrapper ${
+            className={`inpufield_wrapper ${isCallsMode ? "inpufield_wrapper--claims" : ""} ${
               isCallsMode && conversationId && conversationStatus === "inactive"
                 ? "disabled"
                 : ""
