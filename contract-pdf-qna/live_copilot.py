@@ -232,21 +232,25 @@ def process_transcript_event_loop(socketio,parent_context=None):
             break
         try:
             result = process_transcript_event(transcriptChunk, parent_context)
-            socketio.emit("suggestion_update", result, room=transcriptChunk.sessionId)
+            if result != None:
+                socketio.emit("suggestion_update", result, room=transcriptChunk.sessionId)
         except Exception as e:
             print('[LIVE COPILOT][PROCESSING], An Error Occured ', e)
         
 
 
 questions = []
+processed_evidence = set()
+
 def process_transcript_event(payload: CopilotSessionData, parent_context=None):
     global questions
-    global deque
+    global text_buffer
+    global processed_evidence
 
     session_id = payload.sessionId
     speaker = payload.speaker
-    deque.append(payload.text)
-    text = "\n".join(deque)
+    text_buffer.append(payload.text)
+    text = "\n".join(text_buffer)
     customer_ctx = None
 
     is_partial = payload.isPartial
@@ -299,6 +303,9 @@ def process_transcript_event(payload: CopilotSessionData, parent_context=None):
                 intent = _s(intent_obj.get("intent")) or "OTHER"
                 confidence = float(intent_obj.get("confidence") or 0.0)
                 evidence = _s(intent_obj.get("evidenceQuote")) or text[:200]
+                if evidence in processed_evidence:
+                    return None
+                processed_evidence.add(evidence)
                 entities = intent_obj.get("entities") or {}
                 phone_entity = _s(entities.get("phone"))
 
