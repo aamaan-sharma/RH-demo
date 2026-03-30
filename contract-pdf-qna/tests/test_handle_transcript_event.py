@@ -1,20 +1,27 @@
 from dataclasses import dataclass
 import json
 import live_copilot as lc
-from token_module import token_calculator, CallbackHandler
+from core.schemas import CopilotSessionData
+from threading import Thread
+
+
+
+class socketioFactory:
+    def __init__(self):
+        self.result = []
+
+    def emit(self, event, data, room):
+        self.result += [ data ]
+        print(data)
+
+
+socketio = socketioFactory()
+
+thread = Thread(target=lc.process_transcript_event_loop, args=(socketio, ))
+thread.start()
 
     
 
-@dataclass
-class Payload:
-    sessionId: str = ""
-    speaker: str = "agent"
-    text: str = ""
-    phoneNumber: str = ""
-    contractType: str = ""
-    plan: str = ""
-    state: str = ""
-    isPartial: bool = False
 
 
 conversation = None
@@ -37,17 +44,12 @@ def processFile(phoneNumber, conversation):
         speaker = Conversation(**conv).speaker.lower()
         text = Conversation(**conv).text.lower()
         s = time.time()
-        result = lc.handle_transcript_event(Payload(text=text, speaker=speaker, phoneNumber=phoneNumber, sessionId=phoneNumber).__dict__)
+        lc.handle_transcript_event(CopilotSessionData(text=text, speaker=speaker, phoneNumber=phoneNumber, sessionId=phoneNumber, isPartial=False,contactId=phoneNumber,contractType="", state="",plan="", beginOffsetMillis=0, endOffsetMillis=0))
         end = time.time() - s
-        print(f"{result=}")
-
-        if result == None:
-            continue
-        result["conversation"] = conv
-        result["timing"] = end
-        results += [ result ]
+    lc.handle_transcript_event(None)
+    thread.join()
     with open(f"tests/converse_results/results_{phoneNumber}.json", "w") as file:
-        json.dump(results, file)
+        json.dump(socketio.result, file)
 
 
     
@@ -60,3 +62,4 @@ for name in files:
     with open(name) as file:
         conversation = json.load(file)
         processFile(phoneNumber, conversation)
+

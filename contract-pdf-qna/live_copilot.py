@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
+from concurrent.futures import ThreadPoolExecutor
 from core.db import User
 from functools import lru_cache
 from contextvars import ContextVar
@@ -10,6 +11,7 @@ from pymongo.collection import Collection
 
 from core import db
 from core.schemas import Response, Transcript, SessionState, Question
+from core.schemas import QA
 
 
 
@@ -33,11 +35,28 @@ from config import (
     VERBOSE_DEBUG
 )
 
+
+'''
+Changes
+- handle_live_copilot will be a synchrnous function.
+    1. Append payload data to a queue (with lock).
+    2. notify the worker (background task).
+
+- worker.
+    - process the transcript event (sequential in nature).
+    - push out socketio events.
+
+
+'''
+
 _live_session_id_var: ContextVar[str] = ContextVar("live_session_id", default="")
 
 import re
 from utils.helpers import _s, _norm_text, _trace_include_payloads, _preview, _now_epoch, _fingerprint, _log
 from core.call_llms import _call_intent_llm, _call_suggest_llm_traced, _diagnostics_steps, _extract_questions_llm, _rag_answer
+
+QNA_THREAD_POOL_SIZE=5
+qna_executor = ThreadPoolExecutor(max_workers=QNA_THREAD_POOL_SIZE)
 
 
 
@@ -60,12 +79,6 @@ def _set_session_attr(span) -> None:
 
 
 
-
-
-
-
-
-
 _sessions: Dict[str, SessionState] = {}
 
 
@@ -77,62 +90,22 @@ def _get_state(session_id: str) -> SessionState:
     return st
 
 
-def _cooldown_ok(st: SessionState) -> bool:
-    return (time() - float(st.last_suggested_at or 0.0)) >= float(COPILOT_COOLDOWN_SECONDS or 0)
 
 
-def _append_buffer(st: SessionState, speaker: str, text: str):
-    st.buffer.append(Transcript(speaker=speaker, text=text))
-    if len(st.buffer) > 30:
-        st.buffer = st.buffer[-30:]
 
 
-def _buffer_text(st: SessionState) -> str:
-    lines = []
-    for item in st.buffer[-20:]:
-        sp = _s(item.speaker).lower() or "unknown"
-        tx = _s(item.text)
-        if not tx:
-            continue
-        lines.append(f"{sp}: {tx}")
-    return "\n".join(lines).strip()
 
 
-def _effective_customer_context(st: SessionState) -> Dict[str, Any]:
+def _effective_customer_context(st: User) -> Dict[str, Any]:
     """
     Prefer verified customer profile when present, but always keep plan context available
     (either from verified user doc or from UI-provided session context).
     """
-    base = dict(st.customer or {})
-    verified = bool(base.get("verified"))
+    base = st.model_dump()
+    verified = bool(base.get("verified", True))
     # If unverified, fill plan context from session selections.
-    if not base.get("contractType"):
-        base["contractType"] = st.contract_type
-    if not base.get("plan"):
-        base["plan"] = st.selected_plan
-    if not base.get("state"):
-        base["state"] = st.selected_state
-    if "verified" not in base:
-        base["verified"] = verified
-    if not base.get("name"):
-        base["name"] = "Customer"
     return base
 
-
-
-def _looks_like_verification_request(text: str) -> bool:
-    t = _norm_text(text)
-    if not t:
-        return False
-    keywords = [
-        "phone",
-        "mobile",
-        "contact number",
-        "callback number",
-        "number to reach you",
-        "best number",
-    ]
-    return any(k in t for k in keywords)
 
 
 def _should_extract_questions(text: str) -> bool:
@@ -144,55 +117,6 @@ def _should_extract_questions(text: str) -> bool:
     # Heuristics: coverage/policy intent
     cues = ["covered", "cover", "limit", "deductible", "fee", "cost", "refund", "cancel", "renew", "service request"]
     return any(c in t for c in cues)
-
-
-
-
-
-def _queue_questions(st: SessionState, questions: List[str]) -> bool:
-    """Return True if queue changed."""
-    changed = False
-    for q in questions:
-        qn = _s(q)
-        # Strip context for key generation (deduplication)
-        clean_q = re.sub(r"\[CALL_CONTEXT:.*?\]\s*", "", qn).strip()
-        q = _norm_text(clean_q)
-        if st.questions_queue.get(q, None) is None:
-            st.questions_queue[q] = Question(question=q)
-            if len(st.questions_queue) > 12:
-                st.questions_queue.popitem(last=False)
-        changed = True
-    return changed
-
-
-
-def _extract_phone_candidates(text: str) -> List[str]:
-    t = _s(text)
-    if not t:
-        return []
-    out: List[str] = []
-    for m in _PHONE_RE.finditer(t):
-        digits = "".join(m.groups())
-        if len(digits) == 10:
-            out.append(digits)
-            out.append("+1" + digits)
-    raw_digits = re.sub(r"\D+", "", t)
-    if len(raw_digits) == 10:
-        out.append(raw_digits)
-        out.append("+1" + raw_digits)
-    if len(raw_digits) == 11 and raw_digits.startswith("1"):
-        out.append(raw_digits[1:])
-        out.append("+1" + raw_digits[1:])
-    # de-dupe preserving order
-    seen = set()
-    deduped = []
-    for x in out:
-        if x in seen:
-            continue
-        seen.add(x)
-        deduped.append(x)
-    return deduped[:4]
-
 
 
 
@@ -213,6 +137,8 @@ def fetch_user_by_phone(phone: str):
                 flush=True
             )
     return user
+
+
 
 
 @lru_cache(maxsize=30)
@@ -284,70 +210,70 @@ def _lookup_user_by_phone(phone_candidates: tuple) -> Optional[User]:
 
 handler = CallbackHandler()
 
+from core.schemas import CopilotSessionData
+from typing import Literal
+from queue import Queue
+from collections import deque
+
+text_buffer = deque(maxlen=3)
+copilotQueue = Queue()
 
 
-processed_evidences = set()
-def handle_transcript_event(payload: Dict[str, Any], parent_context=None) :
-    session_id = _s(payload.get("sessionId"))
-    speaker = _s(payload.get("speaker")).lower()
-    text = _s(payload.get("text"))
 
-    is_partial = bool(payload.get("isPartial", False))
+
+
+
+def process_transcript_event_loop(socketio,parent_context=None):
+    global copilotQueue
+    print('[LIVE COPILOT][PROCESSING TRANSCRIPT] Working ...')
+    while True:
+        transcriptChunk = copilotQueue.get()
+        if transcriptChunk == None:
+            break
+        try:
+            result = process_transcript_event(transcriptChunk, parent_context)
+            socketio.emit("suggestion_update", result, room=transcriptChunk.sessionId)
+        except Exception as e:
+            print('[LIVE COPILOT][PROCESSING], An Error Occured ', e)
+        
+
+
+questions = []
+def process_transcript_event(payload: CopilotSessionData, parent_context=None):
+    global questions
+    global deque
+
+    session_id = payload.sessionId
+    speaker = payload.speaker
+    deque.append(payload.text)
+    text = "\n".join(deque)
+    customer_ctx = None
+
+    is_partial = payload.isPartial
 
     if not session_id or not text:
         return None
-    if is_partial:
-        return None
-
-    if is_trivial_utterance(text):
-        return None
-
-    # Update buffer and session context (always needed for conversation history)
-    st = _get_state(session_id)
-    _append_buffer(st, speaker=speaker, text=text)
 
 
-    # Skip AI processing for CSR text - only process customer prompts for suggestions
+    payload_phone = payload.phoneNumber
+    phone_clean = re.sub(r"\D+", "", payload_phone)
+    phone_candidates = (phone_clean, "+1" + phone_clean, phone_clean[1:], "+1" + phone_clean[1:])
+    print(f"[LIVE_COPILOT] Searching MongoDB with phone candidates: {phone_candidates}", flush=True)
+    user_data = _lookup_user_by_phone(phone_candidates)
+    if user_data:
+        customer_ctx = _effective_customer_context(user_data)
+        # Normalize MongoDB document
+        print(f"[LIVE COPILOT]: {user_data=}") 
 
-    # Check for phoneNumber in payload and lookup user in MongoDB
-    # Always perform MongoDB lookup when phoneNumber is present for cross-verification
-    payload_phone = _s(payload.get("phoneNumber"))
-    if payload_phone:
-        # Extract payload data for comparison
-        payload_contract_type = _s(payload.get("contractType"))
-        payload_plan = _s(payload.get("plan"))
-        payload_state = _s(payload.get("state"))
-        ''' 
-        print(f"[LIVE_COPILOT] Received phoneNumber from payload: {payload_phone}", flush=True)
-        if payload_contract_type or payload_plan or payload_state:
-            print(
-                f"[LIVE_COPILOT] Payload data: contractType={payload_contract_type}, "
-                f"plan={payload_plan}, state={payload_state}",
-                flush=True
-            )
-        '''
-        # Normalize phone number - remove non-digits and handle +1 prefix
-        phone_clean = re.sub(r"\D+", "", payload_phone)
-        phone_candidates = (phone_clean, "+1" + phone_clean, phone_clean[1:], "+1" + phone_clean[1:])
-        print(f"[LIVE_COPILOT] Searching MongoDB with phone candidates: {phone_candidates}", flush=True)
-        user_data = _lookup_user_by_phone(phone_candidates)
-        if user_data:
-            # Normalize MongoDB document
-            st.customer = user_data
-            print(f"[LIVE COPILOT]: {st.customer=}") 
-            
-            # Cross-verification: Compare payload data with MongoDB data (for debugging only)
-            # NOTE: MongoDB values are the source of truth and will be used for inference
-            # Set UI-ready user details so frontend Customer Details card receives userDetails
-        else:
-            print(f"[LIVE_COPILOT] ❌ No user found in MongoDB for phone candidates: {phone_candidates}", flush=True)
-            print(f"[LIVE_COPILOT] ⚠️  contractType, plan, and state will NOT be set (MongoDB lookup failed)", flush=True)
+    else:
+        print(f"[LIVE_COPILOT] ❌ No user found in MongoDB for phone candidates: {phone_candidates}", flush=True)
+        print(f"[LIVE_COPILOT] ⚠️  contractType, plan, and state will NOT be set (MongoDB lookup failed)", flush=True)
 
     if speaker == "agent":
         # No AI suggestions needed for CSR text
         # But if user details were just fetched, send them for display
-        if st.customer:
-            return Response(sessionId=session_id, userDetails=st.customer).dict()
+        if user_data:
+            return Response(sessionId=session_id, userDetails=user_data).model_dump()
         return None
     
 
@@ -360,46 +286,16 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) :
             if _trace_include_payloads():
                 root.set_attribute("live.transcript.preview", _preview(text))
 
-            transcript = _buffer_text(st)
+            transcript = text#_buffer_text(st)
             important_change = False
 
             # ---------------- phase: intent_detection ----------------
             with tracer.start_as_current_span("live_copilot.intent_detection") as sp_intent:
                 _set_session_attr(sp_intent)
                 
-                # Prioritize phoneNumber from payload, fallback to regex extraction from text
-                
-                if not phone_candidates: #pylance reporting unbound # type: ignore
-                    phone_candidates = _extract_phone_candidates(text)
-                
-                # Only force CUSTOMER_IDENTIFICATION when we don't have customer yet (first-time lookup).
-                # Once customer is known, use LLM for intent so coverage/inquiry questions get INQUIRY
-                # and we extract questions + run RAG/Infer (VectorDB).
                 intent_obj: Dict[str, Any]
-                if phone_candidates and not st.customer:
-                    intent_obj = {
-                        "intent": "CUSTOMER_IDENTIFICATION",
-                        "confidence": 0.95,
-                        "entities": {
-                            "phone": phone_candidates[0],
-                            "appliance": "",
-                            "symptom": "",
-                            "money_amount": "",
-                            "timeline": "",
-                            "claimId": "",
-                            "question": "",
-                        },
-                        "requiresVerification": True,
-                        "evidenceQuote": text[:200],
-                    }
-                else:
-                    intent_obj = _call_intent_llm(transcript=transcript, handler=handler, span=sp_intent)
-                    # If LLM didn't return phone but we have payload phone, attach for context_retrieval
-                    if phone_candidates and (not intent_obj.get("entities") or not intent_obj.get("entities", {}).get("phone")):
-                        intent_obj = dict(intent_obj)
-                        intent_obj.setdefault("entities", {})
-                        intent_obj["entities"]["phone"] = intent_obj["entities"].get("phone") or phone_candidates[0]
-
+                intent_obj = _call_intent_llm(transcript=transcript, handler=handler, span=sp_intent)
+                # If LLM didn't return phone but we have payload phone, attach for context_retrieval
                 intent = _s(intent_obj.get("intent")) or "OTHER"
                 confidence = float(intent_obj.get("confidence") or 0.0)
                 evidence = _s(intent_obj.get("evidenceQuote")) or text[:200]
@@ -411,38 +307,17 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) :
                 _set_session_attr(sp_ctx)
                 
                 tool_result: Dict[str, Any] = {}
-                customer = st.customer
-
-                if (phone_candidates or phone_entity) and not customer:
-                    candidates = phone_candidates or [phone_entity]
-                    user_data = _lookup_user_by_phone(tuple([c for c in candidates if c]))
-                    if user_data:
-                        st.customer = user_data
-                        customer = st.customer
-                        important_change = True
-
-                customer_ctx = _effective_customer_context(st)
+                customer = user_data
                 customer_ctx["sessionId"] = session_id
                 verified = bool(customer_ctx.get("verified"))
 
-                should_extract = (
-                    speaker == "customer" 
-                    and _should_extract_questions(text) 
-                    and intent not in ("CUSTOMER_IDENTIFICATION", "SMALL_TALK", "OTHER")
-                )
+                should_extract = (_should_extract_questions(text) and intent not in ("CUSTOMER_IDENTIFICATION", "SMALL_TALK", "OTHER"))
                 if should_extract:
-                    extracted = _extract_questions_llm(transcript=transcript, handler=handler, span=sp_ctx, customer_ctx=customer_ctx)
-                    if not extracted:
-                        q1 = _s(entities.get("question"))
-                        if q1:
-                            extracted = [q1]
-                    if extracted:
-                        if _queue_questions(st, extracted):
-                            important_change = True
+                    extracted = _extract_questions_llm(transcript=transcript, handler=handler, span=sp_ctx,previous_questions=[x.question for x in questions], customer_ctx=customer_ctx)
+                    for ques in extracted: questions.append(QA(question=ques))
 
                 # Build tool_result snapshot (always present so the prompt has state + conversation context)
                 # Include previousAnswers so LLM doesn't contradict itself
-                previous_answers = [ q.__dict__ for _, q in st.answered.items() ]
 
                 # Helper to strip context for display
                 def _strip_ctx(s: str) -> str:
@@ -455,9 +330,9 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) :
                         "plan": customer_ctx.get("plan"),
                         "state": customer_ctx.get("state"),
                     },
-                    "pendingQuestions": [_strip_ctx(x.question) for _,x in st.questions_queue.items() if _s(x.question)],
-                    "answeredCount": len(st.answered),
-                    "previousAnswers": previous_answers,  # Include all previously answered questions for consistency
+                    "pendingQuestions": [_strip_ctx(x.question) for x in questions if not x.answer],
+                    "answeredCount": len([x.answer for x in questions if x.answer]),
+                    "previousAnswers": [ x.answer for x in questions if x.answer],  # Include all previously answered questions for consistency
                     "newAnswers": [],
                     "verification": {
                         "needsPhone": False,
@@ -465,109 +340,58 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) :
                     },
                 }
 
-                requires_verification = bool(intent_obj.get("requiresVerification"))
-                if (requires_verification or st.questions_queue) and not verified:
-                    tool_result["verification"]["needsPhone"] = True
-                    if st.verification_asks < COPILOT_MAX_VERIFICATION_ASKS:
-                        st.verification_asks += 1
-                        tool_result["verification"]["askForPhone"] = True
-
                 can_rag = bool(
                     customer_ctx.get("contractType") and customer_ctx.get("plan") and customer_ctx.get("state")
                 )
 
             # ---------------- phase: rag_answer (where applicable) ----------------
-            if can_rag and st.questions_queue:
+            if can_rag and questions:
                 with tracer.start_as_current_span("live_copilot.rag_answer") as sp_rag:
                     _set_session_attr(sp_rag)
                     
-                    answered_now = []
-                    question_str, question = st.questions_queue.popitem(last=False)
-                    res = _rag_answer(question=question_str, customer=customer_ctx, handler=handler, span=sp_rag)
-                    question.answer = res.get("answer", "")
-                    question.citedChunks = res.get("chunks", "")
-                    question.ts = _now_epoch()
-                    st.answered[question_str] = question
-                    answered_now.append({"question": _strip_ctx(question_str), "result": res})
-                    if answered_now:
-                        tool_result["newAnswers"] = answered_now
-                        important_change = True
+                    answers = []
+                    answers = list(qna_executor.map(lambda q: _rag_answer(question=q, customer=customer_ctx, handler=handler, span=sp_rag), [_.question for _  in questions if not _.answer] ))
+                    
+                    for index, answer in enumerate(answers):
+                        questions[index].answer = answer
+                    answers = [x["answer"] for x in answers]
+                    if answers:
+                        tool_result["newAnswers"] = answers
 
             if intent == "PROBLEM":
-                cards = None
                 # Generate diagnostics steps
                 with tracer.start_as_current_span("live_copilot.diagnostics") as sp_diag:
                     _set_session_attr(sp_diag)
                     tool_result["diagnostics"] = _diagnostics_steps(transcript=transcript, handler=handler, span=sp_diag)
+                    print("[DIAGNOSTICS]: ", tool_result["diagnostics"])
 
             # ---------------- phase: suggestion_generation ----------------
             with tracer.start_as_current_span("live_copilot.suggestion_generation") as sp_llm:
                 _set_session_attr(sp_llm)
-                
-                # Always generate cards for first suggestion in call (never emitted yet)
-                if not st.last_suggested_at:
-                    important_change = True
-                if not _cooldown_ok(st) and not important_change:
-                    cards = None
-                else:
-                    if evidence in processed_evidences:
-                        print(f"[LIVE_COPILOT] Evidence already processed, skipping suggest LLM call", evidence, flush=True)
-                    else:
-                        print(f"[LIVE_COPILOT] Calling suggest LLM with intent: {intent}, customer_verified: {verified}", flush=True)
-                        cards = _call_suggest_llm_traced(
-                            intent=intent,
-                            customer_verified=verified,
-                            customer_context=customer_ctx,
-                            tool_result=tool_result,
-                            transcript=transcript,
-                            evidence=evidence,
-                            handler=handler,
-                            span=sp_llm,
-                        )
-                        processed_evidences.add(evidence)
+                print(f"[LIVE_COPILOT] Calling suggest LLM with intent: {intent}, customer_verified: {verified}", flush=True)
+                cards = _call_suggest_llm_traced(
+                    intent=intent,
+                    customer_verified=verified,
+                    customer_context=customer_ctx,
+                    tool_result=tool_result,
+                    transcript=transcript,
+                    evidence=evidence,
+                    handler=handler,
+                    span=sp_llm,
+                )
             # ---------------- phase: response_postprocessing ----------------
             # In-memory deduplication and token aggregation - no span needed
-            if cards is None:
-                # Even if no cards, send user details if available (for sticky header)
-                if st.customer:
-                    output = {
-                        "sessionId": session_id,
-                        "intent": intent or "OTHER",
-                        "userDetails": st.customer.dict(),
-                        "createdAt": str(_now_epoch()),
-                    }
-                else:
-                    output = None
-            else:
-                fp = _fingerprint({"intent": intent, "customer": customer_ctx, "cards": cards})
-                if fp == st.last_emit_fingerprint and not important_change:
-                    # Even if deduplicated, send user details if available (for sticky header)
-                    if st.customer:
-                        output = {
-                            "sessionId": session_id,
-                            "intent": intent,
-                            "userDetails": st.customer.dict(),
-                            "createdAt": str(_now_epoch()),
-                        }
-                    else:
-                        output = None
-                else:
-                    st.last_emit_fingerprint = fp
-                    st.last_suggested_at = time()
-                    st.last_intent = intent
-                    output = {
-                        "sessionId": session_id,
-                        "intent": intent,
-                        "confidence": confidence,
-                        "customer": customer_ctx,
-                        "cards": cards,
-                        "createdAt": str(_now_epoch()),
-                    }
-                    # Add MongoDB user details as sticky header for UI display
-                    if st.customer:
-                        output["userDetails"] = st.customer.model_dump() if st.customer else ""
-                    if _trace_include_payloads():
-                        root.set_attribute("live.response.preview", _preview(output))
+            output = {
+                "sessionId": session_id,
+                "intent": intent or "OTHER",
+                "userDetails": user_data.model_dump(),
+                "confidence": confidence,
+                "customer": customer_ctx,
+                "createdAt": str(_now_epoch()),
+                "cards": cards or []
+            }
+            if _trace_include_payloads():
+                root.set_attribute("live.response.preview", _preview(output))
 
             # Handler aggregation EXACTLY ONCE at end; attach totals ONLY to this Live Copilot branch span.
             try:
@@ -597,6 +421,21 @@ def handle_transcript_event(payload: Dict[str, Any], parent_context=None) :
             _live_session_id_var.reset(tok)
         except Exception:
             pass
+
+
+
+def handle_transcript_event(payload: CopilotSessionData):
+    global copilotQueue
+    copilotQueue.put(payload)
+
+
+
+
+
+
+
+
+
 
 
 def handle_copilot_enable_event(session_id: str, phone_number: Optional[str] = None) -> Optional[Dict[str, Any]]:

@@ -22,9 +22,13 @@ from utils.helpers import _log, _trace_include_payloads, _preview, _s
 from openai import APITimeoutError  # type: ignore
 
 from langchain_core.output_parsers import StrOutputParser
+from pydantic import BaseModel, Field
+class Questions(BaseModel):
+    questions: List[str] = Field(default_factory=list, description='list of questions')
 
-def _extract_questions_llm(*, transcript: str, handler: CallbackHandler, span, customer_ctx: Optional[Dict[str, Any]] = None) -> List[str]:
-    llm = SUGGEST_LLM
+def _extract_questions_llm(*, transcript: str, handler: CallbackHandler, span, customer_ctx: Optional[Dict[str, Any]] = None, previous_questions: List[str]) -> List[str]:
+    llm = SUGGEST_LLM.with_structured_output(Questions)
+    pq = "\n".join(previous_questions)
     
     # 1. LOGGING (Verification)
     if VERBOSE_DEBUG:
@@ -32,38 +36,16 @@ def _extract_questions_llm(*, transcript: str, handler: CallbackHandler, span, c
         _log("debug", "🔍", f"Transcript start: {transcript[:200]}")
         _log("debug", "🔍", f"Transcript end: {transcript[-200:]}")
 
-    chain = _question_extract_prompt | llm | StrOutputParser()
-    raw = (chain.invoke({"transcript": transcript}, config={"callbacks": [handler]}) or "").strip()
+    chain = _question_extract_prompt | llm 
+    raw = chain.invoke({"transcript": transcript, "questions": pq}, config={"callbacks": [handler]})
     if _trace_include_payloads():
         span.set_attribute("llm.prompt.preview", _preview(transcript))
         span.set_attribute("llm.response.preview", _preview(raw))
     
-    # Clean markdown code blocks if present
-    cleaned = raw
-    if "```json" in cleaned:
-        cleaned = re.sub(r"```json\n?", "", cleaned)
-    if "```" in cleaned:
-        cleaned = re.sub(r"```\n?", "", cleaned)
-    cleaned = cleaned.strip()
     
-    # Also try to find JSON object in the response
-    if not cleaned.startswith("{"):
-        match = re.search(r"\{[\s\S]*\}", cleaned)
-        if match:
-            cleaned = match.group(0)
     
-    extracted_qs = []
-    try:
-        obj = json.loads(cleaned)
-        qs = obj.get("questions") if isinstance(obj, dict) else []
-        if isinstance(qs, list):
-            for q in qs:
-                q_str = _s(q)
-                if q_str:
-                    extracted_qs.append(q_str)
-    except Exception as e:
-        pass
-
+    extracted_qs = raw.questions
+    print(extracted_qs)
     if VERBOSE_DEBUG:
         _log("debug", "🔍", f"Raw extracted questions: {extracted_qs}")
 
@@ -362,16 +344,22 @@ def _rag_answer(*, question: str, customer: Dict[str, Any], handler: CallbackHan
     return {}
 
 
+
+class Diagnostics(BaseModel):
+    steps: List[str] = Field(default_factory=list)
+    questions: List[str] = Field(default_factory=list)
+
+
 def _diagnostics_steps(*, transcript: str, handler: CallbackHandler, span) -> Dict[str, Any]:
     # Generic troubleshooting guidance without coverage promises
-    llm = DIAGNOSTIC_LLM # Use cached instance
-    chain = _diagnostics_prompt | llm | StrOutputParser()
-    raw = (chain.invoke({"transcript": transcript}, config={"callbacks": [handler]}) or "").strip()
+    llm = DIAGNOSTIC_LLM.with_structured_output(Diagnostics) # Use cached instance
+    chain = _diagnostics_prompt | llm 
+    raw = chain.invoke({"transcript": transcript}, config={"callbacks": [handler]})
     if _trace_include_payloads():
         span.set_attribute("llm.prompt.preview", _preview(transcript))
         span.set_attribute("llm.response.preview", _preview(raw))
     try:
-        return json.loads(raw)
+        return raw
     except Exception:
         return {"steps": [], "questions": []}
 
